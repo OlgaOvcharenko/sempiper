@@ -19,13 +19,13 @@ describe("CodeGenDemo", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
-  it("renders title and generate button", () => {
+  it("renders title and compile button", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    expect(screen.getByText("VLDB Code Gen Demo")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /generate/i })).toBeInTheDocument();
+    expect(screen.getByText("Sempipes pipeline demo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /compile/i })).toBeInTheDocument();
   });
 
-  it("calls API when Generate is clicked", async () => {
+  it("calls API when Compile is clicked", async () => {
     const mockFetch = vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: () =>
@@ -42,7 +42,7 @@ describe("CodeGenDemo", () => {
     } as Response);
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
 
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalledWith(
