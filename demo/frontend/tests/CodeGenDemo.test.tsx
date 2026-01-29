@@ -81,6 +81,39 @@ describe("CodeGenDemo", () => {
     expect(body.options).toEqual({ optimization_level: 2, target: "cpp" });
   });
 
+  it("calls execute API when Play is clicked", async () => {
+    const mockFetch = vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      body: null,
+      headers: new Headers({ "content-type": "text/event-stream" }),
+    } as Response);
+    (mockFetch as unknown as { body: ReadableStream | null }).body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode('data: {"type":"terminal","line":"Starting..."}\n\n')
+        );
+        controller.enqueue(
+          new TextEncoder().encode('data: {"type":"node_code","node_id":"n1","generated_code":"# code"}\n\n')
+        );
+        controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+        controller.close();
+      },
+    });
+
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    fireEvent.click(screen.getByRole("button", { name: /play/i }));
+
+    await waitFor(() => {
+      const calls = mockFetch.mock.calls.filter(
+        (c) => String(c[0]).includes("/api/execute")
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse((calls[0][1] as RequestInit)?.body as string);
+      expect(body.input_code).toBeDefined();
+      expect(typeof body.input_code).toBe("string");
+    });
+  });
+
   it("calls compile API on load and shows graph nodes when compile returns nodes", async () => {
     const compileResponse = {
       nodes: [
