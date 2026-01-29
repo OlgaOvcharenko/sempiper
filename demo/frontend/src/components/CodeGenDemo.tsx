@@ -1,88 +1,93 @@
 import { useState, useCallback } from "react";
 import { useCodeGen } from "../hooks/useCodeGen";
 import { InputEditor } from "./InputEditor";
-import { CodeOutput } from "./CodeOutput";
-import { MetadataPanel } from "./MetadataPanel";
+import { GraphPanel, type GraphNode } from "./GraphPanel";
+import { NodeDetailsPanel } from "./NodeDetailsPanel";
 
-const defaultInput = "SELECT * FROM table WHERE id > 0;";
+const defaultPipelineCode = `# Declarative pipeline using sempipes
+# Edit and click Compile to update the graph
+
+from sempipes import pipeline, source, op
+
+p = pipeline(
+  source("input"),
+  op("transform"),
+)
+`;
 
 export function CodeGenDemo() {
-  const [inputCode, setInputCode] = useState(defaultInput);
+  const [pipelineCode, setPipelineCode] = useState(defaultPipelineCode);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
   const { mutateAsync: generate, isPending, data, error } = useCodeGen();
 
-  const handleGenerate = useCallback(() => {
+  // TODO: Replace with dedicated compile endpoint that returns graph; for now we still call generate
+  const handleCompile = useCallback(() => {
     generate({
-      input_code: inputCode,
+      input_code: pipelineCode,
       options: { optimization_level: 2, target: "cpp" },
     });
-  }, [inputCode, generate]);
+  }, [pipelineCode, generate]);
 
-  const handleCopy = useCallback(() => {
-    if (!data?.generated_code) return;
-    navigator.clipboard.writeText(data.generated_code);
-  }, [data?.generated_code]);
+  const nodes: GraphNode[] = [
+    { id: "input", type: "input", label: "Input" },
+    { id: "op1", type: "operator", label: "Op" },
+  ];
+  const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100 font-sans min-w-[1280px]">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800 shrink-0">
-        <h1 className="text-lg font-medium text-slate-200">VLDB Code Gen Demo</h1>
+    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100 font-sans min-w-[1280px]">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-900/80 shrink-0">
+        <h1 className="text-lg font-medium text-zinc-200">Sempipes pipeline demo</h1>
         <button
           type="button"
-          onClick={handleGenerate}
+          onClick={handleCompile}
           disabled={isPending}
           className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors"
         >
-          {isPending ? "Generating…" : "Generate"}
+          {isPending ? "Compiling…" : "Compile"}
         </button>
       </header>
 
-      <div className="flex flex-1 min-h-0 px-6 py-4 gap-6">
-        <div className="w-[40%] flex flex-col min-w-0 gap-2">
-          <label className="text-sm text-slate-400">Input (DSL / SQL)</label>
-          <div className="flex-1 min-h-[320px]">
+      <div className="flex flex-1 min-h-0 gap-4 p-4">
+        {/* Left: Pipeline editor */}
+        <div className="w-[33%] min-w-[280px] flex flex-col min-h-0 gap-2">
+          <label className="text-sm text-zinc-400">Pipeline (Python / sempipes)</label>
+          <div className="flex-1 min-h-0">
             <InputEditor
-              value={inputCode}
-              onChange={setInputCode}
+              value={pipelineCode}
+              onChange={setPipelineCode}
               disabled={isPending}
             />
           </div>
         </div>
 
-        <div className="w-[60%] flex flex-col min-w-0 gap-2">
-          <div className="flex items-center justify-between">
-            <label className="text-sm text-slate-400">Generated code</label>
-            {data?.generated_code && (
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="text-xs px-2 py-1 rounded border border-slate-600 hover:border-slate-500 text-slate-400 hover:text-slate-300 transition-colors"
-              >
-                Copy
-              </button>
-            )}
-          </div>
-          <div className="flex-1 min-h-[320px]">
-            <CodeOutput
-              code={data?.generated_code ?? ""}
-              language={data?.language ?? "cpp"}
-              isLoading={isPending}
-            />
-          </div>
+        {/* Middle: Interactive graph */}
+        <div className="w-[34%] min-w-[200px] flex flex-col min-h-0">
+          <GraphPanel
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            nodes={nodes}
+            isLoading={isPending}
+          />
+        </div>
+
+        {/* Right: Node details / results */}
+        <div className="w-[33%] min-w-[280px] flex flex-col min-h-0">
+          <NodeDetailsPanel
+            selectedNodeId={selectedNodeId}
+            selectedNode={selectedNode}
+            generatedCode={selectedNode?.type === "operator" ? data?.generated_code ?? null : null}
+            nodeMetadata={data?.metadata ?? null}
+          />
         </div>
       </div>
 
       {error && (
-        <div className="mx-6 mb-2 px-4 py-2 rounded-lg bg-red-900/30 border border-red-800 text-red-300 text-sm">
+        <div className="mx-4 mb-4 px-4 py-2 rounded-lg bg-red-950/50 border border-red-800 text-red-300 text-sm shrink-0">
           {error.message}
         </div>
       )}
-
-      <aside className="px-6 pb-6 shrink-0">
-        <MetadataPanel
-          compilationTimeMs={data?.compilation_time_ms ?? null}
-          metadata={data?.metadata ?? null}
-        />
-      </aside>
     </div>
   );
 }
