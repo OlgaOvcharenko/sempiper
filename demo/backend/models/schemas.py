@@ -20,6 +20,8 @@ class GenerateMetadata(BaseModel):
     optimizations_applied: list[str] = Field(default_factory=list)
     ir_size_bytes: int = 0
     stages: list[StageTiming] = Field(default_factory=list)
+    sempipes_available: bool = False
+    sempipes_llm: str | None = None
 
 
 class GenerateResponse(BaseModel):

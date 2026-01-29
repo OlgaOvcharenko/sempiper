@@ -1,9 +1,18 @@
 from fastapi import APIRouter
 from models.schemas import GenerateRequest, GenerateResponse, GenerateMetadata, StageTiming
-from services.engine import CodeGenerator
+from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 
 router = APIRouter(prefix="/api", tags=["codegen"])
 generator = CodeGenerator()
+
+
+@router.get("/sempipes-info")
+def sempipes_info() -> dict:
+    """Return whether sempipes is available in this environment and its config (if any)."""
+    return {
+        "available": is_sempipes_available(),
+        "config": get_sempipes_config(),
+    }
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -19,5 +28,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
             optimizations_applied=meta["optimizations_applied"],
             ir_size_bytes=meta["ir_size_bytes"],
             stages=[StageTiming(**s) for s in meta["stages"]],
+            sempipes_available=meta.get("sempipes_available", False),
+            sempipes_llm=meta.get("sempipes_llm"),
         ),
     )

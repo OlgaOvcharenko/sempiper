@@ -12,6 +12,14 @@ def test_health():
     assert resp.json() == {"status": "ok"}
 
 
+def test_sempipes_info():
+    resp = client.get("/api/sempipes-info")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "available" in data
+    assert "config" in data
+
+
 def test_generate_returns_200_and_shape():
     resp = client.post(
         "/api/generate",
@@ -29,6 +37,7 @@ def test_generate_returns_200_and_shape():
     assert "metadata" in data
     assert "optimizations_applied" in data["metadata"]
     assert "stages" in data["metadata"]
+    assert "sempipes_available" in data["metadata"]
 
 
 def test_generate_default_options():
