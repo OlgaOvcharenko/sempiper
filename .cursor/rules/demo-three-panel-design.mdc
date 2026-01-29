@@ -1,0 +1,36 @@
+---
+description: Overarching design for the demo — 3-panel layout (editor, graph, node details)
+alwaysApply: true
+---
+
+# Demo: Three-Panel Design
+
+The demo UI is composed of **three panels** side by side.
+
+## 1. Left panel — Pipeline editor
+
+- **Purpose**: Write Python code as **declarative pipelines** using sempipes.
+- **Behaviour**: Code editor (e.g. Monaco) for editing pipeline source. Content is the single source of truth; changes drive compilation and graph updates.
+
+## 2. Middle panel — Interactive graph
+
+- **Purpose**: Visualise the **scrub-compiled graph** (pipeline DAG).
+- **Behaviour**:
+  - Renders the compiled graph (nodes and edges).
+  - **Clickable nodes**: selecting a node drives the content of the right panel.
+  - Graph should update when the left-panel pipeline code is recompiled.
+
+## 3. Right panel — Node details / results
+
+- **Purpose**: Show **contextual content** for the **selected graph node**.
+- **Behaviour** (depends on node type):
+  - **Input nodes**: show a **data summary** of the input (e.g. schema, sample, stats).
+  - **Sempipes / operator nodes**: show **generated code**, **LLM prompt statistics**, or other node-specific metadata (e.g. timings, options).
+
+If no node is selected, the right panel can show a placeholder or global summary.
+
+## Implementation notes
+
+- Layout: three columns (e.g. resizable); left = editor, centre = graph, right = details.
+- State: selected node ID (or null) must be shared between graph and details panel.
+- Backend: endpoints should support “compile pipeline” and “get node details” (by node id/type) so the graph and right panel can be populated from the scrub-compiled result.
