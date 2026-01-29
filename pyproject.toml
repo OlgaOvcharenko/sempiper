@@ -19,6 +19,37 @@ sempipes = { path = "sempipes", develop = true }
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.4.0"
 pytest-asyncio = ">=0.23.0"
+ruff = "^0.7.2"
+mypy = "^1.17.1"
+pre-commit = "^4.0.1"
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py312"
+exclude = ["sempipes/"]
+
+[tool.ruff.lint]
+select = ["F", "E", "I"]
+ignore = ["E501", "F401"]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+docstring-code-format = false
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["ALL"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+strict_optional = true
+show_error_codes = true
+exclude = "^sempipes/"
+explicit_package_bases = true
 
 [build-system]
 requires = ["poetry-core"]
