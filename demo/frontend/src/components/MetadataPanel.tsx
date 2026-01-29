@@ -13,7 +13,8 @@ export function MetadataPanel({ compilationTimeMs, metadata }: MetadataPanelProp
       <h3 className="text-sm font-medium text-slate-300">Generation info</h3>
       {compilationTimeMs != null && (
         <p className="text-sm text-slate-400">
-          <span className="text-emerald-500 font-medium">{compilationTimeMs.toFixed(1)}</span> ms total
+          <span className="text-emerald-500 font-medium">{compilationTimeMs.toFixed(1)}</span> ms
+          total
         </p>
       )}
       {metadata?.optimizations_applied && metadata.optimizations_applied.length > 0 && (
@@ -21,10 +22,7 @@ export function MetadataPanel({ compilationTimeMs, metadata }: MetadataPanelProp
           <p className="text-xs text-slate-500 uppercase tracking-wider mb-1">Optimizations</p>
           <ul className="text-sm text-slate-400 flex flex-wrap gap-2">
             {metadata.optimizations_applied.map((o) => (
-              <li
-                key={o}
-                className="px-2 py-0.5 rounded bg-slate-700/80 text-slate-300"
-              >
+              <li key={o} className="px-2 py-0.5 rounded bg-slate-700/80 text-slate-300">
                 {o}
               </li>
             ))}

@@ -31,7 +31,7 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
       setLineCount(0);
       return;
     }
-      codeToHtml(code, {
+    codeToHtml(code, {
       lang,
       theme: "github-light",
     })
@@ -98,10 +98,7 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
       ref={parentRef}
       className="h-full w-full rounded-lg border border-slate-200 bg-white overflow-auto"
     >
-      <div
-        style={{ height: totalHeight, position: "relative" }}
-        className="w-full"
-      >
+      <div style={{ height: totalHeight, position: "relative" }} className="w-full">
         {virtualItems.map((item) => (
           <div
             key={item.key}
