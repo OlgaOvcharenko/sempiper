@@ -226,3 +226,49 @@ def test_execute_stream_includes_node_code_per_runnable_node():
         if e.get("node_id", "").startswith("sem_")
     ), "operator node_code should contain mocked code when LLM is patched"
     assert any(e["type"] == "done" for e in events)
+
+
+def test_compile_exact_nodes_and_edge_chain_for_snippet():
+    """Functionality: compile returns exact node count and edges form a linear chain for known code."""
+    code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
+    resp = client.post("/api/compile", json={"input_code": code})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data["nodes"]
+    edges = data["edges"]
+    assert len(nodes) == 2, "expect exactly 2 nodes for as_X + sem_fillna"
+    assert len(edges) == 1, "expect exactly 1 edge for 2 nodes"
+    assert edges[0]["source"] == nodes[0]["id"]
+    assert edges[0]["target"] == nodes[1]["id"]
+    assert nodes[0]["label"] == "as_X"
+    assert nodes[1]["label"] == "sem_fillna"
+
+
+def test_execute_node_code_ids_match_compile_runnable_nodes():
+    """Functionality: execute stream emits node_code for the same node ids that compile returns."""
+    import json
+    from unittest.mock import patch
+
+    code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
+    compile_resp = client.post("/api/compile", json={"input_code": code})
+    assert compile_resp.status_code == 200
+    compile_nodes = compile_resp.json()["nodes"]
+    runnable_ids = {n["id"] for n in compile_nodes if n["type"] in ("input", "operator")}
+
+    mock_code = "# mock"
+    with patch(
+        "services.execute_stream._generate_code_via_sempipes",
+        return_value=mock_code,
+    ):
+        exec_resp = client.post("/api/execute", json={"input_code": code})
+    assert exec_resp.status_code == 200
+    events = []
+    for line in exec_resp.text.split("\n"):
+        line = line.strip()
+        if line.startswith("data: "):
+            try:
+                events.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                pass
+    node_code_ids = {e["node_id"] for e in events if e.get("type") == "node_code"}
+    assert node_code_ids == runnable_ids, "execute node_code node_ids should match compile runnable nodes"
