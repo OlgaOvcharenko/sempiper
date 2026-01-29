@@ -1,6 +1,23 @@
 # sempipes-demo
 
-Repository for the sempipes demo (VLDB-style web demo: DSL/SQL input → generated code). Dependencies are managed with **Poetry**; there is no `requirements.txt` — use **`pyproject.toml`** only. Sempipes is loaded as a local path dependency.
+Repository for the sempipes demo (VLDB-style web demo: declarative Python pipelines → compiled graph → generated code and insights). Dependencies are managed with **Poetry**; there is no `requirements.txt` — use **`pyproject.toml`** only. Sempipes is loaded as a local path dependency.
+
+## Demo design (high level)
+
+The demo UI is a **three-panel layout**:
+
+1. **Left — Pipeline editor**  
+   Editor for writing Python code as declarative pipelines using sempipes. The code is the source of truth; changes drive compilation and graph updates.
+
+2. **Middle — Interactive graph**  
+   Visualisation of the **scrub-compiled graph** (pipeline DAG). Nodes are clickable; selecting a node drives the content shown in the right panel.
+
+3. **Right — Node details / results**  
+   Contextual content for the **selected graph node**:
+   - **Input nodes**: data summary (schema, sample, stats).
+   - **Sempipes / operator nodes**: generated code, LLM prompt statistics, or other node-specific metadata (e.g. timings, options).
+
+The design is also documented in **`.cursor/rules/demo-three-panel-design.mdc`** for consistent implementation and AI-assisted development.
 
 ## Setup
 
@@ -42,7 +59,7 @@ cd demo/backend
 uvicorn main:app --reload
 ```
 
-Use the Poetry environment (e.g. `poetry shell` from repo root first, or run `poetry run uvicorn main:app --reload` with `--app-dir demo/backend` from repo root).
+Use the Poetry environment (e.g. `poetry shell` from repo root first, or run `poetry run uvicorn main:app --reload` with `--app-dir demo/backend` from repo root). The backend calls sempipes when it is importable (e.g. after `poetry install`); if sempipes or its dependencies fail to load, the demo still runs with mock-only behaviour and reports `sempipes_available: false` in responses.
 
 **Frontend** (React + Vite, port 5173):
 
