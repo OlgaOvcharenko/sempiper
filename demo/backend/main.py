@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from routers import codegen_router
 
 app = FastAPI(title="VLDB Code Gen Demo", version="0.1.0")

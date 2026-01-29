@@ -1,11 +1,12 @@
 """
 Mock code generator. Uses sempipes when available (Poetry env); falls back to mock-only otherwise.
 """
-import time
+
 import random
+import time
 
 try:
-    from sempipes import get_config as _sempipes_get_config
+    from sempipes import get_config as _sempipes_get_config  # type: ignore[attr-defined]
 
     _sempipes_available = True
 except ImportError:
@@ -48,17 +49,14 @@ class CodeGenerator:
             try:
                 cfg = _sempipes_get_config()
                 metadata["sempipes_available"] = True
-                metadata["sempipes_llm"] = getattr(
-                    getattr(cfg, "llm_for_code_generation", None), "name", None
-                )
+                metadata["sempipes_llm"] = getattr(getattr(cfg, "llm_for_code_generation", None), "name", None)
             except Exception:
                 metadata["sempipes_available"] = False
         else:
             metadata["sempipes_available"] = False
         return {
             "generated_code": (
-                "// Generated from input\n"
-                f"int main() {{\n  // {len(input_code)} chars processed\n  return 0;\n}}"
+                "// Generated from input\n" f"int main() {{\n  // {len(input_code)} chars processed\n  return 0;\n}}"
             ),
             "language": target,
             "compilation_time_ms": total_ms,
