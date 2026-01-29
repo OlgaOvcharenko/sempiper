@@ -1,9 +1,22 @@
 from fastapi import APIRouter
-from models.schemas import GenerateRequest, GenerateResponse, GenerateMetadata, StageTiming
+from pydantic import BaseModel
+
+from models.schemas import (
+    GenerateRequest,
+    GenerateResponse,
+    GenerateMetadata,
+    StageTiming,
+    CompileResponse,
+)
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
+from services.compile_parse import extract_nodes_with_ranges
 
 router = APIRouter(prefix="/api", tags=["codegen"])
 generator = CodeGenerator()
+
+
+class CompileRequest(BaseModel):
+    input_code: str
 
 
 @router.get("/sempipes-info")
@@ -13,6 +26,13 @@ def sempipes_info() -> dict:
         "available": is_sempipes_available(),
         "config": get_sempipes_config(),
     }
+
+
+@router.post("/compile", response_model=CompileResponse)
+def compile_pipeline(req: CompileRequest) -> CompileResponse:
+    """Return graph nodes with source ranges for editor decorations and code–graph sync."""
+    nodes = extract_nodes_with_ranges(req.input_code)
+    return CompileResponse(nodes=nodes)
 
 
 @router.post("/generate", response_model=GenerateResponse)

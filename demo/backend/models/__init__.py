@@ -4,6 +4,9 @@ from .schemas import (
     GenerateOptions,
     GenerateMetadata,
     StageTiming,
+    CompileNode,
+    CompileResponse,
+    SourceRange,
 )
 
 __all__ = [
@@ -12,4 +15,7 @@ __all__ = [
     "GenerateOptions",
     "GenerateMetadata",
     "StageTiming",
+    "CompileNode",
+    "CompileResponse",
+    "SourceRange",
 ]

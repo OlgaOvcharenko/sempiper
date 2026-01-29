@@ -29,3 +29,23 @@ class GenerateResponse(BaseModel):
     language: str
     compilation_time_ms: float
     metadata: GenerateMetadata
+
+
+class SourceRange(BaseModel):
+    """1-based line and column for editor decorations and code–graph mapping."""
+
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+
+
+class CompileNode(BaseModel):
+    id: str
+    type: str  # "input" | "operator" | "pipeline"
+    label: str
+    source_range: SourceRange | None = None
+
+
+class CompileResponse(BaseModel):
+    nodes: list[CompileNode]
