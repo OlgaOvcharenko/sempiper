@@ -2,6 +2,8 @@
 
 Repository for the sempipes demo (VLDB-style web demo: declarative Python pipelines → compiled graph → generated code and insights). Dependencies are managed with **Poetry**; there is no `requirements.txt` — use **`pyproject.toml`** only. Sempipes is loaded as a local path dependency.
 
+**Inspiration:** The web demo is inspired by the **sempipes notebook demos** (e.g. `sempipes/demo.ipynb`, `demo__sem_fillna.ipynb`), which run real pipelines with `as_X`/`as_y`, `sem_fillna`, `sem_gen_features`, `apply_with_sem_choose`, `sem_choose`, and show a computation graph and result on a subsample. The web UI mirrors that flow: pipeline code → compiled graph → node details.
+
 ## Demo design (high level)
 
 The demo UI is a **three-panel layout**:
@@ -52,29 +54,43 @@ This installs all dependencies (including sempipes from the `sempipes/` path) fr
 
 ### 3. Run the demo
 
-**Backend** (FastAPI, port 8000):
+**One command** (from repo root; starts backend and frontend in the background):
 
 ```bash
-cd demo/backend
-uvicorn main:app --reload
+make run-demo
 ```
 
-Use the Poetry environment (e.g. `poetry shell` from repo root first, or run `poetry run uvicorn main:app --reload` with `--app-dir demo/backend` from repo root). The backend calls sempipes when it is importable (e.g. after `poetry install`); if sempipes or its dependencies fail to load, the demo still runs with mock-only behaviour and reports `sempipes_available: false` in responses.
-
-**Frontend** (React + Vite, port 5173):
+Then open **http://localhost:5173**. To stop the demo:
 
 ```bash
-cd demo/frontend
-npm install
-npm run dev
+make stop-demo
 ```
 
-The frontend proxies `/api` to the backend. Open **http://localhost:5173** once both are running.
+**Or run backend and frontend manually** in two terminals:
+
+- **Backend** (FastAPI, port 8000): `cd demo/backend` then `uvicorn main:app --reload` (or from root: `poetry run uvicorn main:app --reload --app-dir demo/backend`). The backend calls sempipes when it is importable; if sempipes or its dependencies fail to load, the demo still runs with mock-only behaviour and reports `sempipes_available: false` in responses.
+- **Frontend** (React + Vite, port 5173): `cd demo/frontend`, `npm install`, then `npm run dev`. The frontend proxies `/api` to the backend.
 
 **Tests**
 
 - Backend: from repo root or `demo/backend` run `pytest` (after `poetry install` at root).
 - Frontend: from `demo/frontend` run `npm test`.
+
+**Code style**
+
+- **Python** (like sempipes): Ruff (lint + format) and mypy. From repo root after `poetry install`:  
+  `poetry run ruff check demo/`  
+  `poetry run ruff format --check demo/`  
+  `poetry run mypy demo/backend`  
+  Or install pre-commit and run on staged files:  
+  `poetry run pre-commit install`  
+  then `poetry run pre-commit run --all-files` to check everything.  
+  Only `demo/` is checked; `sempipes/` is excluded (read-only symlink).
+- **Frontend** (TypeScript/React): ESLint and Prettier. From `demo/frontend`:  
+  `npm run lint`  
+  `npm run lint:fix`  
+  `npm run format`  
+  `npm run format:check`
 
 **Docker (optional)**
 
