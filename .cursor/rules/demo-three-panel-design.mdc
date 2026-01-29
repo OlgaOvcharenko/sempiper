@@ -11,6 +11,9 @@ The demo UI is composed of **three panels** side by side.
 
 - **Purpose**: Write Python code as **declarative pipelines** using sempipes.
 - **Behaviour**: Code editor (e.g. Monaco) for editing pipeline source. Content is the single source of truth; changes drive compilation and graph updates.
+- **Code–graph link**:
+  - **Sempipe code elements** (e.g. `source(...)`, `op(...)`, `pipeline(...)`) must be **visually highlighted** in the editor with **background rectangles** (decorations). Each such element maps to exactly one node in the middle graph.
+  - **Click or cursor** on (or inside) a sempipe element in the code must **highlight the corresponding node(s)** in the middle panel so the user sees the connection between code and graph. Highlighting can be driven by current cursor position or by click in the editor.
 
 ## 2. Middle panel — Interactive graph
 
@@ -18,6 +21,7 @@ The demo UI is composed of **three panels** side by side.
 - **Behaviour**:
   - Renders the compiled graph (nodes and edges).
   - **Clickable nodes**: selecting a node drives the content of the right panel.
+  - **Highlighted nodes**: when the user clicks or moves the cursor in the left-panel code, the graph node(s) that correspond to the code under cursor/click must be **visually highlighted** (e.g. border/background) so the connection between code and graph is clear.
   - Graph should update when the left-panel pipeline code is recompiled.
 
 ## 3. Right panel — Node details / results
@@ -29,8 +33,13 @@ The demo UI is composed of **three panels** side by side.
 
 If no node is selected, the right panel can show a placeholder or global summary.
 
+## UI theme
+
+- **Bright / light theme**: The demo uses a **light, bright** UI (not dark). Use light backgrounds (e.g. white/slate-50/zinc-50), dark text, and light borders so the interface feels bright and readable. The editor can use a light Monaco theme; panels use light Tailwind classes.
+
 ## Implementation notes
 
 - Layout: three columns (e.g. resizable); left = editor, centre = graph, right = details.
-- State: selected node ID (or null) must be shared between graph and details panel.
-- Backend: endpoints should support “compile pipeline” and “get node details” (by node id/type) so the graph and right panel can be populated from the scrub-compiled result.
+- State: selected node ID (or null) must be shared between graph and details panel; **highlighted node IDs** (from code cursor/click) drive graph highlighting.
+- **Code–graph mapping**: Backend compile (or equivalent) must return **graph nodes** and, for each node, a **source range** (e.g. start/end line and column) so the frontend can (1) draw background decorations for sempipe elements in the editor and (2) map cursor/click position to node(s) and highlight them in the graph.
+- Backend: endpoints should support “compile pipeline” (returning graph + node source ranges) and “get node details” (by node id/type) so the graph, decorations, and right panel can be populated from the scrub-compiled result.
