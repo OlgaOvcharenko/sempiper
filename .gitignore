@@ -1,2 +1,36 @@
 # Symbolic link folder
 sempipes
+
+# Python
+venv/
+.venv/
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+*.egg
+dist/
+
+# Node / frontend
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE / editor
+.idea/
+.vscode/
+.history
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+
+# Build / artifacts
+target/
+build/
+*.log
