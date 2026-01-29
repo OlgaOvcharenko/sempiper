@@ -1,5 +1,37 @@
 const API_BASE = "/api";
 
+/** Source range for editor decorations and code–graph mapping (1-based). */
+export interface SourceRange {
+  start_line: number;
+  start_column: number;
+  end_line: number;
+  end_column: number;
+}
+
+export interface CompileNode {
+  id: string;
+  type: string;
+  label: string;
+  source_range: SourceRange | null;
+}
+
+export interface CompileResponse {
+  nodes: CompileNode[];
+}
+
+export async function compilePipeline(inputCode: string): Promise<CompileResponse> {
+  const res = await fetch(`${API_BASE}/compile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input_code: inputCode }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export interface GenerateOptions {
   optimization_level?: number;
   target?: "cpp" | "rust" | "llvm";
