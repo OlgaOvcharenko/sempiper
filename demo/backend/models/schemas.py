@@ -47,5 +47,13 @@ class CompileNode(BaseModel):
     source_range: SourceRange | None = None
 
 
+class CompileEdge(BaseModel):
+    """Edge for graph: source -> target (node ids)."""
+
+    source: str
+    target: str
+
+
 class CompileResponse(BaseModel):
     nodes: list[CompileNode]
+    edges: list[CompileEdge] = Field(default_factory=list)

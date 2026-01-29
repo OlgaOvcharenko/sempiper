@@ -1,21 +1,26 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
-
+from fastapi.responses import StreamingResponse
 from models.schemas import (
+    CompileResponse,
+    GenerateMetadata,
     GenerateRequest,
     GenerateResponse,
-    GenerateMetadata,
     StageTiming,
-    CompileResponse,
 )
-from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
+from pydantic import BaseModel
 from services.compile_parse import extract_nodes_with_ranges
+from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
+from services.execute_stream import stream_execute_events
 
 router = APIRouter(prefix="/api", tags=["codegen"])
 generator = CodeGenerator()
 
 
 class CompileRequest(BaseModel):
+    input_code: str
+
+
+class ExecuteRequest(BaseModel):
     input_code: str
 
 
@@ -30,9 +35,22 @@ def sempipes_info() -> dict:
 
 @router.post("/compile", response_model=CompileResponse)
 def compile_pipeline(req: CompileRequest) -> CompileResponse:
-    """Return graph nodes with source ranges for editor decorations and code–graph sync."""
-    nodes = extract_nodes_with_ranges(req.input_code)
-    return CompileResponse(nodes=nodes)
+    """Return graph nodes and edges with source ranges for editor decorations and code–graph sync."""
+    nodes, edges = extract_nodes_with_ranges(req.input_code)
+    return CompileResponse(nodes=nodes, edges=edges)
+
+
+@router.post("/execute")
+def execute_pipeline(req: ExecuteRequest):
+    """
+    Execute the pipeline and stream SSE events: terminal (line) and node_code (node_id, generated_code).
+    Frontend shows live terminal output and live-updating code blocks per node.
+    """
+    return StreamingResponse(
+        stream_execute_events(req.input_code),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/generate", response_model=GenerateResponse)
