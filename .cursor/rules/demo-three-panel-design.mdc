@@ -30,8 +30,15 @@ The demo UI is composed of **three panels** side by side.
 - **Behaviour** (depends on node type):
   - **Input nodes**: show a **data summary** of the input (e.g. schema, sample, stats).
   - **Sempipes / operator nodes**: show **generated code**, **LLM prompt statistics**, or other node-specific metadata (e.g. timings, options).
+- **Live updates during execution**: While the pipeline is **executing** (Play), the **code blocks** shown for each node must **dynamically update** as execution progresses. When the user selects a node in the graph, the right panel shows that node’s generated code (or data summary) and it **live-updates** as soon as that node’s output is produced by the runner. So the node-details content is driven by the execution stream, not only by a single post-run snapshot.
 
 If no node is selected, the right panel can show a placeholder or global summary.
+
+## Execute (Play) and terminal output
+
+- **Play button**: The demo has a **Play** (or **Run**) button to **execute** the pipeline code (in addition to **Compile**, which only updates the graph). Clicking Play starts execution.
+- **Terminal output**: While the pipeline is executing, the user must be able to see **terminal output** (stdout/stderr) in real time. This is shown in a dedicated **terminal / console** area (e.g. a collapsible panel below the three panels, or a fourth region). The terminal scrolls as new lines arrive and reflects the live execution log.
+- **Live node code**: As each node is executed, the backend streams **per-node outputs** (e.g. generated code for that node). The right panel uses this stream so that when observing a node, its **Generated code** (and related blocks) **live-update** as execution progresses.
 
 ## UI theme
 
@@ -39,7 +46,8 @@ If no node is selected, the right panel can show a placeholder or global summary
 
 ## Implementation notes
 
-- Layout: three columns (e.g. resizable); left = editor, centre = graph, right = details.
-- State: selected node ID (or null) must be shared between graph and details panel; **highlighted node IDs** (from code cursor/click) drive graph highlighting.
+- Layout: three columns (e.g. resizable); left = editor, centre = graph, right = details. A **terminal/console** area for execution output can sit below the three panels or in a collapsible section.
+- State: selected node ID (or null) must be shared between graph and details panel; **highlighted node IDs** (from code cursor/click) drive graph highlighting. During execution: **terminal lines** (list of stdout/stderr) and **per-node generated code** (map node_id → latest code) drive the terminal panel and the right panel’s live-updating code blocks.
 - **Code–graph mapping**: Backend compile (or equivalent) must return **graph nodes** and, for each node, a **source range** (e.g. start/end line and column) so the frontend can (1) draw background decorations for sempipe elements in the editor and (2) map cursor/click position to node(s) and highlight them in the graph.
-- Backend: endpoints should support “compile pipeline” (returning graph + node source ranges) and “get node details” (by node id/type) so the graph, decorations, and right panel can be populated from the scrub-compiled result.
+- **Execute/Play**: Backend should provide an **execute** (or **run**) endpoint that runs the pipeline and streams (e.g. SSE) **terminal output** and **per-node code updates** so the frontend can show (1) live terminal output and (2) live-updating code in the node-details panel for the selected node.
+- Backend: endpoints should support “compile pipeline” (returning graph + node source ranges), “get node details” (by node id/type), and “execute pipeline” (streaming terminal + node outputs) so the graph, decorations, right panel, and terminal can be populated.
