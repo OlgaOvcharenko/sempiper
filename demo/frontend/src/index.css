@@ -2,15 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dark editor theme — IDE-style baseline */
+/* Bright / light theme — readable, bright UI */
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  background-color: #09090b; /* zinc-950 */
-  color: #f4f4f5; /* zinc-100 */
+  background-color: #fafafa; /* zinc-50 */
+  color: #18181b; /* zinc-900 */
 }
 
 ::selection {
-  background-color: rgba(16, 185, 129, 0.25); /* emerald-500 */
+  background-color: rgba(16, 185, 129, 0.3); /* emerald-500 */
 }
