@@ -7,12 +7,17 @@ venv/
 *.pyc
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 *.egg-info/
 *.egg
 dist/
 
 # Node / frontend
 node_modules/
+*.tsbuildinfo
+coverage/
 
 # Environment
 .env
@@ -34,3 +39,4 @@ node_modules/
 target/
 build/
 *.log
+.demo.pids
