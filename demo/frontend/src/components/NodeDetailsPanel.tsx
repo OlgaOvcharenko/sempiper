@@ -10,6 +10,10 @@ interface NodeDetailsPanelProps {
   selectedNode: GraphNode | null;
   /** When we have backend: generated code for operator nodes. */
   generatedCode?: string | null;
+  /** Live-updating generated code per node during execution (node_id → code). */
+  liveGeneratedCodeByNode?: Record<string, string> | null;
+  /** Whether pipeline is currently executing (so we show "Generating..." until code arrives). */
+  isExecuting?: boolean;
   /** When we have backend: metadata / LLM stats for the node. */
   nodeMetadata?: Record<string, unknown> | null;
 }
@@ -18,8 +22,16 @@ export function NodeDetailsPanel({
   selectedNodeId,
   selectedNode,
   generatedCode = null,
+  liveGeneratedCodeByNode = null,
+  isExecuting = false,
   nodeMetadata = null,
 }: NodeDetailsPanelProps) {
+  const liveCodeForNode =
+    selectedNodeId && liveGeneratedCodeByNode ? liveGeneratedCodeByNode[selectedNodeId] : undefined;
+  const effectiveCode =
+    liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode : null);
+  const isLive = liveCodeForNode !== undefined;
+  const waitingForCode = isExecuting && selectedNode?.type === "operator" && liveCodeForNode === undefined;
   if (!selectedNodeId || !selectedNode) {
     return (
       <div className="h-full flex flex-col rounded-lg border border-slate-200 bg-white overflow-hidden">
@@ -56,16 +68,26 @@ export function NodeDetailsPanel({
           </>
         ) : (
           <>
-            {generatedCode && (
+            {(effectiveCode != null && effectiveCode !== "") || waitingForCode ? (
               <section>
                 <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
                   Generated code
+                  {isLive && <span className="ml-2 text-emerald-600 font-normal">(live)</span>}
                 </h3>
-                <pre className="text-xs bg-slate-100 rounded p-3 overflow-x-auto text-zinc-700 font-mono whitespace-pre-wrap border border-slate-200">
-                  {generatedCode}
-                </pre>
+                {waitingForCode ? (
+                  <p className="text-sm text-zinc-500 italic py-3">
+                    Generating code for this node…
+                  </p>
+                ) : (
+                  <pre
+                    key={`code-${selectedNodeId}-${isLive ? "live" : "static"}`}
+                    className="text-xs bg-slate-100 rounded p-3 overflow-x-auto text-zinc-700 font-mono whitespace-pre-wrap border border-slate-200"
+                  >
+                    {effectiveCode}
+                  </pre>
+                )}
               </section>
-            )}
+            ) : null}
             <section>
               <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
                 LLM / prompt stats
