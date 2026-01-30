@@ -4,6 +4,11 @@ Inspired by sempipes/demo.ipynb: as_X, as_y, sem_fillna, sem_gen_features,
 skb.apply, apply_with_sem_choose, sem_choose. Also supports legacy source/op/pipeline.
 Uses simple regex/line scan; does not depend on sempipes. For production,
 the scrub compiler could provide precise ranges.
+
+Graph structure aligns with skrub's DAG: document order reflects data flow
+(same as skrub DataOp pipeline: variables and operators in execution order).
+See skrub DataOps docs (describe_steps, draw_graph) and sempipes use of
+skrub (e.g. choice_graph, find_node_by_name in sempipes optimisers).
 """
 
 import re
