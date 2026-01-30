@@ -2,6 +2,15 @@
 
 Web demo for a VLDB paper: input DSL/SQL in a code editor, backend generates code (e.g. C++, Rust, LLVM IR), frontend shows result with syntax highlighting and metadata.
 
+## Pipeline code and data
+
+The pipeline code in the editor is **real, runnable Python**. You can copy it and run it as a script (e.g. `python pipeline.py`) or in a Jupyter notebook, as long as you have `skrub`, `sempipes`, and `sklearn` installed.
+
+- **Data**: When run as a script, the data comes from **`skrub.datasets.fetch_credit_fraud()`** (credit fraud demo dataset). The scripts then use `skrub.var("products", ...)` and `skrub.var("baskets", ...)` and optionally subsample.
+- **In the web demo**: The app does **not** execute the Python; it parses the code to build the graph and simulates execution (mock generated code and input summaries). To actually run the pipeline with real data and LLMs, run the code in a notebook or script.
+
+The three loadable scripts (Simple, Medium, Full) are self-contained and runnable: they all load the same skrub dataset and differ only in how many pipeline steps they include.
+
 ## Tech stack
 
 - **Backend**: FastAPI + Pydantic + Python 3.11+

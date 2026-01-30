@@ -23,6 +23,7 @@ The demo UI is composed of **three panels** side by side.
   - **Clickable nodes**: selecting a node drives the content of the right panel.
   - **Highlighted nodes**: when the user clicks or moves the cursor in the left-panel code, the graph node(s) that correspond to the code under cursor/click must be **visually highlighted** (e.g. border/background) so the connection between code and graph is clear.
   - Graph should update when the left-panel pipeline code is recompiled.
+- **Node sizes must not scale**: Graph nodes use **fixed pixel dimensions** (e.g. fixed width/height per node). The graph SVG must not scale with the container (use explicit SVG `width`/`height` in pixels, or a 1:1 viewBox-to-pixel mapping, so the SVG does not stretch to fill the panel). The panel may scroll if the graph is larger than the viewport. This keeps node size consistent regardless of panel or viewport size.
 
 ## 3. Right panel — Node details / results
 
