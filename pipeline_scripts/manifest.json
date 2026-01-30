@@ -1,0 +1,5 @@
+[
+  { "id": "simple", "label": "Simple", "file": "simple.py" },
+  { "id": "medium", "label": "Medium", "file": "medium.py" },
+  { "id": "full", "label": "Full (notebook)", "file": "full.py" }
+]
