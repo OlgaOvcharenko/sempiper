@@ -15,7 +15,7 @@ describe("GraphPanel", () => {
         edges={[{ source: "n1", target: "n2" }]}
       />
     );
-    expect(screen.getByText("Compiled graph")).toBeInTheDocument();
+    expect(screen.getByText("Computation graph")).toBeInTheDocument();
     expect(screen.getByText(/click a node or in code to select/i)).toBeInTheDocument();
   });
 
@@ -54,7 +54,7 @@ describe("GraphPanel", () => {
     expect(onSelectNode).toHaveBeenCalledWith("n2");
   });
 
-  it("shows Compiling… when isLoading", () => {
+  it("shows Loading… when isLoading", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -63,6 +63,6 @@ describe("GraphPanel", () => {
         isLoading={true}
       />
     );
-    expect(screen.getByText("Compiling…")).toBeInTheDocument();
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
   });
 });

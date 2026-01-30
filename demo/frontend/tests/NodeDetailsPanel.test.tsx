@@ -11,7 +11,7 @@ describe("NodeDetailsPanel", () => {
     expect(screen.getByText(/select a node in the graph/i)).toBeInTheDocument();
   });
 
-  it("shows Data summary for input node", () => {
+  it("shows Data summary for input node (placeholder when no run)", () => {
     render(
       <NodeDetailsPanel
         selectedNodeId="as_X_1"
@@ -20,7 +20,36 @@ describe("NodeDetailsPanel", () => {
     );
     expect(screen.getByText("Node details")).toBeInTheDocument();
     expect(screen.getByText("Data summary")).toBeInTheDocument();
-    expect(screen.getByText(/schema, sample rows/i)).toBeInTheDocument();
+    expect(screen.getByText(/run the pipeline to see schema/i)).toBeInTheDocument();
+  });
+
+  it("shows schema, sample and row count when input node has inputSummaryByNode", () => {
+    const inputSummaryByNode = {
+      as_X_1: {
+        node_id: "as_X_1",
+        schema: [{ name: "ID", dtype: "int64" }],
+        sample: [{ ID: 1 }, { ID: 2 }, { ID: 3 }],
+        row_count: 5000,
+      },
+    };
+    render(
+      <NodeDetailsPanel
+        selectedNodeId="as_X_1"
+        selectedNode={{ id: "as_X_1", type: "input", label: "as_X" }}
+        inputSummaryByNode={inputSummaryByNode}
+      />
+    );
+    expect(screen.getByText("Data summary")).toBeInTheDocument();
+    expect(screen.getByText(/Rows: 5,000/)).toBeInTheDocument();
+    expect(screen.getByText("Schema")).toBeInTheDocument();
+    expect(screen.getByText("Column")).toBeInTheDocument();
+    expect(screen.getByText("dtype")).toBeInTheDocument();
+    expect(screen.getByText("int64")).toBeInTheDocument();
+    expect(screen.getByText(/Sample \(first 3 rows\)/)).toBeInTheDocument();
+    expect(screen.getAllByText("ID").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
   });
 
   it("shows Generated code for operator node when code provided", () => {
@@ -59,5 +88,19 @@ describe("NodeDetailsPanel", () => {
     );
     expect(screen.getByText("Generated code")).toBeInTheDocument();
     expect(screen.getByText(/generating code for this node/i)).toBeInTheDocument();
+  });
+
+  it("shows Retries and Cost for operator when live retries/cost provided", () => {
+    render(
+      <NodeDetailsPanel
+        selectedNodeId="sem_fillna_2"
+        selectedNode={{ id: "sem_fillna_2", type: "operator", label: "sem_fillna" }}
+        liveGeneratedCodeByNode={{ sem_fillna_2: "# code" }}
+        liveRetriesByNode={{ sem_fillna_2: 2 }}
+        liveCostUsdByNode={{ sem_fillna_2: 0.001234 }}
+      />
+    );
+    expect(screen.getByText("Retries: 2")).toBeInTheDocument();
+    expect(screen.getByText(/Cost: \$0\.001234/)).toBeInTheDocument();
   });
 });
