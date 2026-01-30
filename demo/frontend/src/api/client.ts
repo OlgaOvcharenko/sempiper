@@ -1,5 +1,35 @@
 const API_BASE = "/api";
 
+/** Pipeline script entry from GET /api/scripts. */
+export interface PipelineScriptEntry {
+  id: string;
+  label: string;
+}
+
+/** Response from GET /api/scripts. */
+export interface ListScriptsResponse {
+  scripts: PipelineScriptEntry[];
+}
+
+/** Response from GET /api/scripts/{name}. */
+export interface ScriptContentResponse {
+  id: string;
+  label: string;
+  content: string;
+}
+
+export async function listPipelineScripts(): Promise<ListScriptsResponse> {
+  const res = await fetch(`${API_BASE}/scripts`);
+  if (!res.ok) throw new Error(res.statusText || "Failed to list scripts");
+  return res.json();
+}
+
+export async function getPipelineScriptContent(name: string): Promise<ScriptContentResponse> {
+  const res = await fetch(`${API_BASE}/scripts/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(res.statusText || "Failed to load script");
+  return res.json();
+}
+
 /** Source range for editor decorations and code–graph mapping (1-based). */
 export interface SourceRange {
   start_line: number;
@@ -25,11 +55,19 @@ export interface CompileResponse {
   edges?: CompileEdge[];
 }
 
-export async function compilePipeline(inputCode: string): Promise<CompileResponse> {
+export interface CompileOptions {
+  signal?: AbortSignal;
+}
+
+export async function compilePipeline(
+  inputCode: string,
+  options?: CompileOptions
+): Promise<CompileResponse> {
   const res = await fetch(`${API_BASE}/compile`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ input_code: inputCode }),
+    signal: options?.signal,
   });
   if (!res.ok) {
     const err = await res.text();
@@ -79,11 +117,27 @@ export async function generateCode(req: GenerateRequest): Promise<GenerateRespon
   return res.json();
 }
 
-/** SSE event from execute stream: terminal line or node_code update. */
+/** Input node data summary (schema, sample, row count) from execute stream. */
+export interface InputSummary {
+  node_id: string;
+  schema: Array<{ name: string; dtype: string }>;
+  sample: Record<string, unknown>[];
+  row_count: number;
+}
+
+/** SSE event from execute stream: terminal, node_code, input_summary, cost, or done. */
 export type ExecuteEvent =
   | { type: "terminal"; line: string }
-  | { type: "node_code"; node_id: string; generated_code: string }
-  | { type: "done" };
+  | {
+      type: "node_code";
+      node_id: string;
+      generated_code: string;
+      retries?: number;
+      cost_usd?: number;
+    }
+  | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
+  | { type: "cost"; total_usd: number }
+  | { type: "done"; total_cost_usd?: number };
 
 /**
  * Execute pipeline and stream events. Calls onEvent for each SSE event (terminal, node_code, done).
