@@ -19,10 +19,12 @@ interface GraphPanelProps {
   onSelectNode: (nodeId: string | null) => void;
   nodes?: GraphNode[];
   edges?: GraphEdge[];
+  /** When set (after Run), show skrub's DataOp.skb.draw_graph() SVG instead of static DAG. */
+  skrubGraphSvg?: string | null;
   isLoading?: boolean;
   highlightedNodeIds?: string[];
-  /** When set, show a "Fork/Join demo" link that loads a fork/join graph. */
-  onLoadForkJoinDemo?: () => void;
+  /** Optional expand button element to render in the header. */
+  expandButton?: React.ReactNode;
 }
 
 const MOCK_NODES: GraphNode[] = [
@@ -73,11 +75,13 @@ export function GraphPanel({
   onSelectNode,
   nodes = MOCK_NODES,
   edges = [],
+  skrubGraphSvg = null,
   isLoading = false,
   highlightedNodeIds = [],
-  onLoadForkJoinDemo,
+  expandButton = null,
 }: GraphPanelProps) {
   const highlightedSet = new Set(highlightedNodeIds);
+  const showSkrubSvg = Boolean(skrubGraphSvg?.trim());
 
   // DAG layout: group by level, distribute nodes per level horizontally
   const levels = computeLevels(nodes.map((n) => n.id), edges);
@@ -124,27 +128,27 @@ export function GraphPanel({
   const isTargetLabel = (node: GraphNode) => node.type === "input" && node.label === "as_y";
 
   return (
-    <div className="h-full flex flex-col rounded-lg border border-slate-200 bg-white overflow-hidden">
-      <div className="shrink-0 px-3 py-2 border-b border-slate-200">
+    <div className="h-full flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md">
+      <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
-          {onLoadForkJoinDemo && (
-            <button
-              type="button"
-              onClick={onLoadForkJoinDemo}
-              className="text-xs text-emerald-600 hover:text-emerald-700 hover:underline"
-            >
-              Fork/Join demo
-            </button>
-          )}
+          <div className="flex-1">
+            <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
+            <p className="text-xs text-zinc-500 mt-0.5" title="Input nodes (as_X, as_y) and operator nodes (sem_*, skb.*). Solid = data/conventional, dashed = synthesized.">
+              Inputs (as_X, as_y) + operators · Solid = data/conventional · Dashed = synthesized
+            </p>
+          </div>
+          {expandButton}
         </div>
-        <p className="text-xs text-zinc-500 mt-0.5" title="Solid = data/conventional ops, dashed = synthesized (sem_*) operators">
-          Solid = data/conventional · Dashed = synthesized · Click a node or in code to select
-        </p>
       </div>
       <div className="flex-1 min-h-0 overflow-auto p-2 flex justify-center">
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-zinc-500 text-sm">Loading…</div>
+        ) : showSkrubSvg ? (
+          <div
+            className="min-w-0 w-full h-full flex items-start justify-center"
+            aria-label="Computation graph (skrub)"
+            dangerouslySetInnerHTML={{ __html: skrubGraphSvg ?? "" }}
+          />
         ) : (
           <svg
             width={svgWidth}
