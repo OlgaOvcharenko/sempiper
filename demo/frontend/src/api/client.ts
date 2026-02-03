@@ -21,13 +21,21 @@ export interface ScriptContentResponse {
 export async function listPipelineScripts(): Promise<ListScriptsResponse> {
   const res = await fetch(`${API_BASE}/scripts`);
   if (!res.ok) throw new Error(res.statusText || "Failed to list scripts");
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (list scripts)");
+  }
 }
 
 export async function getPipelineScriptContent(name: string): Promise<ScriptContentResponse> {
   const res = await fetch(`${API_BASE}/scripts/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error(res.statusText || "Failed to load script");
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (script content)");
+  }
 }
 
 /** Source range for editor decorations and code–graph mapping (1-based). */
@@ -73,7 +81,11 @@ export async function compilePipeline(
     const err = await res.text();
     throw new Error(err || `HTTP ${res.status}`);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (compile)");
+  }
 }
 
 export interface GenerateOptions {
@@ -114,7 +126,11 @@ export async function generateCode(req: GenerateRequest): Promise<GenerateRespon
     const err = await res.text();
     throw new Error(err || `HTTP ${res.status}`);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (generate)");
+  }
 }
 
 /** Input node data summary (schema, sample, row count) from execute stream. */
@@ -125,29 +141,84 @@ export interface InputSummary {
   row_count: number;
 }
 
-/** SSE event from execute stream: terminal, node_code, input_summary, cost, or done. */
+/** SSE event from execute stream: terminal, node_code, input_summary, cost, done, error, or skrub_graph. */
 export type ExecuteEvent =
   | { type: "terminal"; line: string }
+  | { type: "error"; message: string }
   | {
       type: "node_code";
       node_id: string;
       generated_code: string;
       retries?: number;
       cost_usd?: number;
+      /** True when backend used placeholder (LLM unavailable or failed). */
+      is_fallback?: boolean;
     }
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
   | { type: "cost"; total_usd: number }
-  | { type: "done"; total_cost_usd?: number };
+  | { type: "done"; total_cost_usd?: number }
+  | { type: "skrub_graph"; svg: string };
+
+/** Request to update sempipes config (LLM name and temperature). */
+export interface UpdateConfigRequest {
+  llm_name: string;
+  temperature: number;
+}
+
+/** Response from POST /api/update-config. */
+export interface UpdateConfigResponse {
+  status: string;
+  llm_name: string;
+  temperature: number;
+}
+
+export async function updateSempipesConfig(req: UpdateConfigRequest): Promise<UpdateConfigResponse> {
+  const res = await fetch(`${API_BASE}/update-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `HTTP ${res.status}`);
+  }
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (update-config)");
+  }
+}
 
 /**
  * Execute pipeline and stream events. Calls onEvent for each SSE event (terminal, node_code, done).
  * Returns an AbortController so the caller can abort the request.
+ * All onEvent calls are wrapped in try/catch so exceptions from the callback do not crash the app;
+ * on exception we emit error + done and stop.
  */
 export function executePipelineStream(
   inputCode: string,
   onEvent: (event: ExecuteEvent) => void
 ): AbortController {
   const controller = new AbortController();
+
+  function safeOnEvent(event: ExecuteEvent): boolean {
+    try {
+      onEvent(event);
+      return true;
+    } catch (e) {
+      try {
+        onEvent({
+          type: "error",
+          message: e instanceof Error ? e.message : String(e),
+        });
+        onEvent({ type: "done" });
+      } catch {
+        // ignore if callback throws again
+      }
+      return false;
+    }
+  }
+
   const res = fetch(`${API_BASE}/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -163,25 +234,39 @@ export function executePipelineStream(
       let buffer = "";
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        if (value) buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
+        buffer = done ? "" : (lines.pop() ?? "");
         for (const chunk of lines) {
           if (chunk.startsWith("data: ")) {
             try {
               const data = JSON.parse(chunk.slice(6)) as ExecuteEvent;
-              onEvent(data);
+              if (!safeOnEvent(data)) return;
             } catch {
               // ignore parse errors
             }
           }
         }
+        if (done) break;
+      }
+      if (buffer.trim() && buffer.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(buffer.slice(6)) as ExecuteEvent;
+          safeOnEvent(data);
+        } catch {
+          // ignore
+        }
       }
     })
     .catch((err) => {
-      if (err.name !== "AbortError") onEvent({ type: "terminal", line: `Error: ${err.message}` });
-      onEvent({ type: "done" });
+      try {
+        if (err.name !== "AbortError") {
+          safeOnEvent({ type: "terminal", line: `Error: ${err.message}` });
+        }
+        safeOnEvent({ type: "done" });
+      } catch {
+        // prevent unhandled rejection
+      }
     });
   return controller;
 }
