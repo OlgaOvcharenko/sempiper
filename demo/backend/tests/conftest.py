@@ -61,3 +61,38 @@ def mock_litellm_if_available(monkeypatch):
     except ImportError:
         pass
     yield
+
+
+def _default_runner_stdout_with_captured_codes(*, num_operator_codes: int = 2) -> list[bytes]:
+    """Stdout lines that include ##SEMPIPES_NODE_CODE## blocks so execute_stream gets operator code from run."""
+    import json
+
+    lines = []
+    for i in range(num_operator_codes):
+        code = "# Simulated sempipes code (no real LLM call)\nresult = process(data)" if i == 0 else "# mock op\npass"
+        lines.append(b"##SEMPIPES_NODE_CODE##\n")
+        lines.append((json.dumps({"index": i, "code": code}) + "\n").encode("utf-8"))
+        lines.append(b"##END##\n")
+    lines.append(b"")  # readline returns b"" and reader thread stops
+    return lines
+
+
+@pytest.fixture(autouse=True)
+def mock_skrub_graph_runner(monkeypatch):
+    """
+    Patch subprocess.Popen in execute_stream so we never run the real
+    skrub_graph_runner subprocess. Default stdout includes ##SEMPIPES_NODE_CODE##
+    blocks so operator nodes get mock code from "pipeline run" (no direct LLM call).
+    """
+    from unittest.mock import MagicMock
+
+    def _fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout.readline.side_effect = _default_runner_stdout_with_captured_codes()
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    monkeypatch.setattr("services.execute_stream.subprocess.Popen", _fake_popen)
+    yield
