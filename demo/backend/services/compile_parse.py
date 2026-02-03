@@ -1,19 +1,19 @@
 """
-Extract sempipe-like elements from pipeline source for code–graph mapping.
+Extract sempipe-like elements from pipeline source for code–graph mapping (static preview).
 Inspired by sempipes/demo.ipynb: as_X, as_y, sem_fillna, sem_gen_features,
 skb.apply, apply_with_sem_choose, sem_choose, skb.eval. Also supports legacy source/op/pipeline.
-Uses simple regex/line scan; does not depend on sempipes. For production,
-the scrub compiler could provide precise ranges.
+Uses simple regex/line scan; does not depend on sempipes.
 
-The graph is a DAG that reflects data flow: edges go from the node that
-produces a variable to the node that consumes it (not document order).
-When a sink DataOp is available (e.g. after executing the script), skrub
-provides the authoritative graph:
+This module provides a STATIC PREVIEW graph before execution. After running the pipeline,
+the demo displays skrub's NATIVE GRAPH (authoritative):
   - DataOp.skb.draw_graph() → SVG/PNG (GraphDrawing with .svg, .png, .open())
     https://skrub-data.org/stable/reference/generated/skrub.DataOp.skb.draw_graph.html
   - DataOp.skb.describe_steps() → text representation (one step per line)
     https://skrub-data.org/stable/reference/generated/skrub.DataOp.skb.describe_steps.html
-This module is a best-effort static approximation when no sink DataOp exists.
+
+The static graph is a DAG that reflects data flow: edges go from the node that
+produces a variable to the node that consumes it (not document order).
+Skrub's native graph is always more accurate and complete.
 """
 
 import re

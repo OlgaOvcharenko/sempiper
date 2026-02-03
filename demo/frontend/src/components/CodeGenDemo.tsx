@@ -380,15 +380,15 @@ export function CodeGenDemo() {
           </div>
         </div>
 
-        {/* Middle: Interactive graph — always our static DAG (input + operator nodes) so inputs are visible */}
+        {/* Middle: Interactive graph — show skrub's native graph after execution, static DAG before */}
         <div className="min-w-[200px] flex flex-col min-h-0 transition-all duration-300" style={{ width: middleWidth }}>
           <GraphPanel
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
             nodes={nodes}
             edges={graphEdges}
-            skrubGraphSvg={null}
-            isLoading={false}
+            skrubGraphSvg={skrubGraphSvg}
+            isLoading={isExecuting && !skrubGraphSvg}
             highlightedNodeIds={highlightedNodeIds}
             expandButton={
               <button

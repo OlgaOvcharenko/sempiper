@@ -16,7 +16,7 @@ describe("GraphPanel", () => {
       />
     );
     expect(screen.getByText("Computation graph")).toBeInTheDocument();
-    expect(screen.getByText(/Inputs \(as_X, as_y\) \+ operators/)).toBeInTheDocument();
+    expect(screen.getByText(/Static preview.*Run to see full skrub graph/)).toBeInTheDocument();
   });
 
   it("renders node labels from nodes prop", () => {
@@ -79,6 +79,8 @@ describe("GraphPanel", () => {
     );
     expect(screen.getByText("skrub graph")).toBeInTheDocument();
     expect(container.querySelector("svg text")).toHaveTextContent("skrub graph");
+    expect(screen.getByText(/Computation graph \(skrub native\)/)).toBeInTheDocument();
+    expect(screen.getByText(/DataOp graph from execution/)).toBeInTheDocument();
   });
 
   it("shows static DAG when skrubGraphSvg is empty or whitespace", () => {

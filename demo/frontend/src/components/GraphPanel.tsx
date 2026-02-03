@@ -132,9 +132,13 @@ export function GraphPanel({
       <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100">
         <div className="flex items-center justify-between gap-2">
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
-            <p className="text-xs text-zinc-500 mt-0.5" title="Input nodes (as_X, as_y) and operator nodes (sem_*, skb.*). Solid = data/conventional, dashed = synthesized.">
-              Inputs (as_X, as_y) + operators · Solid = data/conventional · Dashed = synthesized
+            <h2 className="text-sm font-medium text-zinc-700">
+              Computation graph{showSkrubSvg ? " (skrub native)" : ""}
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5" title={showSkrubSvg ? "Skrub's native DataOp graph from execution" : "Static graph from code parsing. Run to see skrub's native graph."}>
+              {showSkrubSvg
+                ? "DataOp graph from execution · Shows all operations and data flow"
+                : "Static preview · Run to see full skrub graph with all operations"}
             </p>
           </div>
           {expandButton}
@@ -145,7 +149,7 @@ export function GraphPanel({
           <div className="flex items-center justify-center h-full text-zinc-500 text-sm">Loading…</div>
         ) : showSkrubSvg ? (
           <div
-            className="min-w-0 w-full h-full flex items-start justify-center"
+            className="min-w-0 w-full h-full flex items-start justify-center skrub-graph-container"
             aria-label="Computation graph (skrub)"
             dangerouslySetInnerHTML={{ __html: skrubGraphSvg ?? "" }}
           />
