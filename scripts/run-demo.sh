@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the demo: backend (uvicorn) and frontend (Vite). PIDs are saved so
-# you can stop them with scripts/stop-demo.sh or: make stop-demo
+# you can stop them with scripts/stop-demo.sh or: make stop
 
 set -e
 
@@ -11,7 +11,7 @@ PIDS_FILE="$REPO_ROOT/.demo.pids"
 cd "$REPO_ROOT"
 
 if [ -f "$PIDS_FILE" ]; then
-  echo "Demo may already be running (.demo.pids exists). Run 'make stop-demo' or 'scripts/stop-demo.sh' first."
+  echo "Demo may already be running (.demo.pids exists). Run 'make stop' or 'scripts/stop-demo.sh' first."
   exit 1
 fi
 
@@ -32,4 +32,7 @@ FRONTEND_PID=$!
 echo "$BACKEND_PID" >> "$PIDS_FILE"
 echo "$FRONTEND_PID" >> "$PIDS_FILE"
 echo "Demo started. Backend PID $BACKEND_PID, frontend PID $FRONTEND_PID"
-echo "Open http://localhost:5173 — stop with: make stop-demo"
+echo ""
+echo "  >>> Open in your browser: http://localhost:5173  <<<"
+echo "  (Use 5173 for the UI; 8000 is the API only. Stop with: make stop)"
+echo ""

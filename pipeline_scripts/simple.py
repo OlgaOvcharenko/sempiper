@@ -1,4 +1,4 @@
-# Simple full pipeline: X/y from baskets → fill product gaps → features on basket products
+# Simple full pipeline: X/y from baskets → fill product gaps → features → eval
 # Run with: python this_script.py (requires skrub, sempipes)
 
 import os
@@ -20,11 +20,15 @@ fraud_flags = sempipes.as_y(baskets["fraud_flag"], "Binary flag for fraudulent b
 products = products.sem_fillna(
     target_column="make",
     nl_prompt="Infer the manufacturer from product attributes.",
+    impute_with_existing_values_only=True,
 )
 
-# 3) Use filled products in basket context and add a few features (closes the pipeline)
+# 3) Use filled products in basket context and add a few features
 kept_products = products[products["basket_ID"].isin(basket_ids["ID"])]
 kept_products = kept_products.sem_gen_features(
     nl_prompt="Add one or two useful product features for prediction.",
     how_many=2,
 )
+
+# 4) Evaluate the pipeline (materialize result)
+result = kept_products.skb.eval()

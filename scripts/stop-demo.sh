@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Stop the demo processes started by scripts/run-demo.sh (or make run-demo).
+# Stop the demo processes started by scripts/run-demo.sh (or make run).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PIDS_FILE="$REPO_ROOT/.demo.pids"
 
 if [ ! -f "$PIDS_FILE" ]; then
-  echo "No .demo.pids found; demo was not started via run-demo."
+  echo "No .demo.pids found; demo was not started via make run."
   exit 0
 fi
 
