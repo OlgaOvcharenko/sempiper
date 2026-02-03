@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { GraphPanel } from "../src/components/GraphPanel";
 
 describe("GraphPanel", () => {
-  it("renders compiled graph heading and hint", () => {
+  it("renders graph heading and placeholder before execution", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -13,13 +13,15 @@ describe("GraphPanel", () => {
           { id: "n2", type: "operator", label: "sem_fillna" },
         ]}
         edges={[{ source: "n1", target: "n2" }]}
+        showGraph={false}
       />
     );
     expect(screen.getByText("Computation graph")).toBeInTheDocument();
-    expect(screen.getByText(/Static preview.*Run to see full skrub graph/)).toBeInTheDocument();
+    expect(screen.getByText(/Run pipeline to visualize graph/)).toBeInTheDocument();
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
   });
 
-  it("renders node labels from nodes prop", () => {
+  it("shows placeholder when showGraph is false", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -29,29 +31,29 @@ describe("GraphPanel", () => {
           { id: "sem_fillna_2", type: "operator", label: "sem_fillna" },
         ]}
         edges={[]}
+        showGraph={false}
+      />
+    );
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText("Run")).toBeInTheDocument();
+    expect(screen.getByText(/to execute the pipeline/)).toBeInTheDocument();
+  });
+
+  it("shows graph nodes when showGraph is true", () => {
+    render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[
+          { id: "as_X_1", type: "input", label: "as_X" },
+          { id: "sem_fillna_2", type: "operator", label: "sem_fillna" },
+        ]}
+        edges={[]}
+        showGraph={true}
       />
     );
     expect(screen.getByText("as_X")).toBeInTheDocument();
     expect(screen.getByText("sem_fillna")).toBeInTheDocument();
-  });
-
-  it("calls onSelectNode when a node is clicked", () => {
-    const onSelectNode = vi.fn();
-    const { container } = render(
-      <GraphPanel
-        selectedNodeId={null}
-        onSelectNode={onSelectNode}
-        nodes={[
-          { id: "n1", type: "input", label: "as_X" },
-          { id: "n2", type: "operator", label: "sem_fillna" },
-        ]}
-        edges={[]}
-      />
-    );
-    const rects = container.querySelectorAll("svg rect.cursor-pointer");
-    expect(rects.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(rects[1]);
-    expect(onSelectNode).toHaveBeenCalledWith("n2");
   });
 
   it("shows Loading… when isLoading", () => {
@@ -75,16 +77,17 @@ describe("GraphPanel", () => {
         nodes={[{ id: "n1", type: "input", label: "as_X" }]}
         edges={[]}
         skrubGraphSvg={skrubSvg}
+        showGraph={true}
       />
     );
     expect(screen.getByText("skrub graph")).toBeInTheDocument();
     expect(container.querySelector("svg text")).toHaveTextContent("skrub graph");
-    expect(screen.getByText(/Computation graph \(skrub native\)/)).toBeInTheDocument();
-    expect(screen.getByText(/DataOp graph from execution/)).toBeInTheDocument();
+    expect(screen.getByText("Computation graph")).toBeInTheDocument();
+    expect(screen.getByText(/Skrub native DataOp graph/)).toBeInTheDocument();
   });
 
-  it("shows static DAG when skrubGraphSvg is empty or whitespace", () => {
-    const { container } = render(
+  it("shows placeholder when skrubGraphSvg is empty and showGraph is false", () => {
+    render(
       <GraphPanel
         selectedNodeId={null}
         onSelectNode={vi.fn()}
@@ -94,10 +97,9 @@ describe("GraphPanel", () => {
         ]}
         edges={[{ source: "n1", target: "n2" }]}
         skrubGraphSvg=""
+        showGraph={false}
       />
     );
-    expect(screen.getByText("as_X")).toBeInTheDocument();
-    expect(screen.getByText("sem_fillna")).toBeInTheDocument();
-    expect(container.querySelector("svg rect.cursor-pointer")).toBeInTheDocument();
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
   });
 });

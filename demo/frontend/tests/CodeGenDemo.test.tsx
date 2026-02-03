@@ -250,7 +250,7 @@ describe("CodeGenDemo", () => {
     });
   });
 
-  it("calls compile API on load and shows graph nodes when compile returns nodes", async () => {
+  it("calls compile API on load and shows placeholder before execution", async () => {
     const compileResponse = {
       nodes: [
         {
@@ -285,8 +285,7 @@ describe("CodeGenDemo", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     await waitFor(
       () => {
-        expect(screen.getByText("as_X")).toBeInTheDocument();
-        expect(screen.getByText("sem_fillna")).toBeInTheDocument();
+        expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
       },
       { timeout: 2000 }
     );
@@ -344,13 +343,10 @@ describe("CodeGenDemo", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText("as_X")).toBeInTheDocument();
-        expect(screen.getByText("as_y")).toBeInTheDocument();
-        expect(screen.getByText("sem_fillna")).toBeInTheDocument();
+        expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
       },
       { timeout: 2000 }
     );
-    expect(screen.queryByText(/sem_gen_fe/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Medium" }));
 
@@ -395,9 +391,6 @@ describe("CodeGenDemo", () => {
       },
       { timeout: 2000 }
     );
-    expect(screen.getByText("as_X")).toBeInTheDocument();
-    expect(screen.getByText("as_y")).toBeInTheDocument();
-    expect(screen.getByText("sem_fillna")).toBeInTheDocument();
   });
 
   it("after Run, selecting a node shows that node's generated code in right panel (design: live updates)", async () => {
@@ -457,9 +450,13 @@ describe("CodeGenDemo", () => {
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    await waitFor(() => expect(screen.getByText("as_X")).toBeInTheDocument(), { timeout: 2000 });
+    // Before execution, placeholder is shown
+    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: /run/i }));
+    
+    // After execution starts, graph nodes appear
+    await waitFor(() => expect(screen.getByText("as_X")).toBeInTheDocument(), { timeout: 3000 });
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
 
     fireEvent.click(screen.getByTestId("graph-node-sem_fillna_2"));

@@ -23,6 +23,8 @@ interface GraphPanelProps {
   skrubGraphSvg?: string | null;
   isLoading?: boolean;
   highlightedNodeIds?: string[];
+  /** Show graph (true after execution starts) or placeholder (false before execution). */
+  showGraph?: boolean;
   /** Optional expand button element to render in the header. */
   expandButton?: React.ReactNode;
 }
@@ -32,7 +34,7 @@ const MOCK_NODES: GraphNode[] = [
   { id: "op1", type: "operator", label: "Op" },
 ];
 
-// Skrub-style DAG: cascade downwards. Fixed sizes — nodes must not scale (see .cursor/rules).
+// Graph layout constants
 const EDITOR_FONT_SIZE = 12;
 const NODE_WIDTH = 100;
 const NODE_HEIGHT = 36;
@@ -78,12 +80,13 @@ export function GraphPanel({
   skrubGraphSvg = null,
   isLoading = false,
   highlightedNodeIds = [],
+  showGraph = false,
   expandButton = null,
 }: GraphPanelProps) {
-  const highlightedSet = new Set(highlightedNodeIds);
   const showSkrubSvg = Boolean(skrubGraphSvg?.trim());
+  const highlightedSet = new Set(highlightedNodeIds);
 
-  // DAG layout: group by level, distribute nodes per level horizontally
+  // DAG layout
   const levels = computeLevels(nodes.map((n) => n.id), edges);
   const levelToNodes = new Map<number, GraphNode[]>();
   nodes.forEach((n) => {
@@ -111,7 +114,7 @@ export function GraphPanel({
       : PADDING * 2 + NODE_HEIGHT
   );
 
-  // Reference style: white nodes, solid black = data/conventional ops, dashed black = synthesized (sem_*) operators.
+  // Node styling
   const isSynthesizedOperator = (node: GraphNode) =>
     node.type === "operator" &&
     (node.label.startsWith("sem_") || node.label === "apply_with_sem_choose" || node.label === "sem_choose");
@@ -132,13 +135,13 @@ export function GraphPanel({
       <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100">
         <div className="flex items-center justify-between gap-2">
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-zinc-700">
-              Computation graph{showSkrubSvg ? " (skrub native)" : ""}
-            </h2>
-            <p className="text-xs text-zinc-500 mt-0.5" title={showSkrubSvg ? "Skrub's native DataOp graph from execution" : "Static graph from code parsing. Run to see skrub's native graph."}>
+            <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
+            <p className="text-xs text-zinc-500 mt-0.5" title={showSkrubSvg ? "Skrub's native DataOp graph from execution" : showGraph ? "Interactive graph from execution" : "Run pipeline to visualize computation graph"}>
               {showSkrubSvg
-                ? "DataOp graph from execution · Shows all operations and data flow"
-                : "Static preview · Run to see full skrub graph with all operations"}
+                ? "Skrub native DataOp graph · All operations and data flow"
+                : showGraph
+                ? "Interactive graph · Click nodes to inspect"
+                : "Run pipeline to visualize graph"}
             </p>
           </div>
           {expandButton}
@@ -153,7 +156,7 @@ export function GraphPanel({
             aria-label="Computation graph (skrub)"
             dangerouslySetInnerHTML={{ __html: skrubGraphSvg ?? "" }}
           />
-        ) : (
+        ) : showGraph ? (
           <svg
             width={svgWidth}
             height={svgHeight}
@@ -174,7 +177,7 @@ export function GraphPanel({
                 <path d="M0,0 L8,4 L0,8 Z" fill="black" />
               </marker>
             </defs>
-            {/* Edges: from bottom-center of source to top-center of target (black arrows) */}
+            {/* Edges */}
             {edges.map((e, i) => {
               const srcPos = nodePositions.get(e.source);
               const tgtPos = nodePositions.get(e.target);
@@ -233,6 +236,14 @@ export function GraphPanel({
               );
             })}
           </svg>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-center px-8 gap-3">
+            <div className="text-6xl text-zinc-300">📊</div>
+            <div className="text-sm text-zinc-500 font-medium">No computation graph yet</div>
+            <div className="text-xs text-zinc-400 max-w-xs">
+              Click <span className="font-semibold text-emerald-600">Run</span> to execute the pipeline and visualize the full computation graph with all DataOp operations
+            </div>
+          </div>
         )}
       </div>
     </div>
