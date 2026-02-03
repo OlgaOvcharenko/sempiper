@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   listPipelineScripts,
   getPipelineScriptContent,
+  executePipelineStream,
 } from "../../src/api/client";
 
 describe("api/client (pipeline scripts)", () => {
@@ -84,6 +85,45 @@ describe("api/client (pipeline scripts)", () => {
       await expect(getPipelineScriptContent("missing")).rejects.toThrow(
         /Failed to load script|Not Found/
       );
+    });
+  });
+
+  describe("executePipelineStream", () => {
+    it("parses skrub_graph event and calls onEvent with type and svg", async () => {
+      const skrubSvg = "<svg><text>graph</text></svg>";
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ type: "skrub_graph", svg: skrubSvg })}\n\n`
+              )
+            );
+            controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+            controller.close();
+          },
+        }),
+        headers: new Headers({ "content-type": "text/event-stream" }),
+      } as Response);
+
+      const events: Array<{ type: string; svg?: string }> = [];
+      executePipelineStream("x = 1", (e) => events.push(e));
+
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (events.some((e) => e.type === "done") || events.some((e) => e.type === "skrub_graph")) {
+            resolve();
+            return;
+          }
+          setTimeout(check, 20);
+        };
+        setTimeout(check, 20);
+      });
+
+      const skrubEvent = events.find((e) => e.type === "skrub_graph");
+      expect(skrubEvent).toBeDefined();
+      expect((skrubEvent as { type: "skrub_graph"; svg: string }).svg).toBe(skrubSvg);
     });
   });
 });

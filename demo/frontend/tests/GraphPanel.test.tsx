@@ -16,7 +16,7 @@ describe("GraphPanel", () => {
       />
     );
     expect(screen.getByText("Computation graph")).toBeInTheDocument();
-    expect(screen.getByText(/click a node or in code to select/i)).toBeInTheDocument();
+    expect(screen.getByText(/Inputs \(as_X, as_y\) \+ operators/)).toBeInTheDocument();
   });
 
   it("renders node labels from nodes prop", () => {
@@ -64,5 +64,38 @@ describe("GraphPanel", () => {
       />
     );
     expect(screen.getByText("Loading…")).toBeInTheDocument();
+  });
+
+  it("renders skrub SVG when skrubGraphSvg is provided", () => {
+    const skrubSvg = "<svg xmlns='http://www.w3.org/2000/svg'><text>skrub graph</text></svg>";
+    const { container } = render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[{ id: "n1", type: "input", label: "as_X" }]}
+        edges={[]}
+        skrubGraphSvg={skrubSvg}
+      />
+    );
+    expect(screen.getByText("skrub graph")).toBeInTheDocument();
+    expect(container.querySelector("svg text")).toHaveTextContent("skrub graph");
+  });
+
+  it("shows static DAG when skrubGraphSvg is empty or whitespace", () => {
+    const { container } = render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[
+          { id: "n1", type: "input", label: "as_X" },
+          { id: "n2", type: "operator", label: "sem_fillna" },
+        ]}
+        edges={[{ source: "n1", target: "n2" }]}
+        skrubGraphSvg=""
+      />
+    );
+    expect(screen.getByText("as_X")).toBeInTheDocument();
+    expect(screen.getByText("sem_fillna")).toBeInTheDocument();
+    expect(container.querySelector("svg rect.cursor-pointer")).toBeInTheDocument();
   });
 });
