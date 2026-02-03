@@ -7,6 +7,12 @@ description: Runs all demo test skills (backend + frontend) and fixes failures. 
 
 This skill runs **all** demo test skills: backend (pytest) and frontend (Vitest). Use it when the user wants to run every test or verify the full demo.
 
+## Parts (what gets run)
+
+1. **Backend** — `poetry run pytest tests/ -v` from `demo/backend`: health, scripts API, compile (graph + source ranges), execute stream (terminal, node_code, cost, input_summary).
+2. **Graph JSON validation** — backend test `test_validate_graph_json_for_testing_only` (validates `validate_graph_json`; used internally by compile; no public validate endpoint).
+3. **Frontend** — `npm test` from `demo/frontend`: Vitest + React Testing Library.
+
 ## When to use
 
 - User says "run all tests", "test the demo", "run every test", "full test suite", or similar.
@@ -36,3 +42,4 @@ Or in one shell: `(cd demo/backend && poetry run pytest tests/ -v) & (cd demo/fr
 
 - [ ] Delegate to **test-demo-components** subagent, or run backend and frontend test commands in parallel.
 - [ ] Report both backend and frontend results.
+- [ ] Backend run includes graph validation test (`test_validate_graph_json_for_testing_only`).

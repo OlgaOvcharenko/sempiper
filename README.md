@@ -57,13 +57,13 @@ This installs all dependencies (including sempipes from the `sempipes/` path) fr
 **One command** (from repo root; starts backend and frontend in the background):
 
 ```bash
-make run-demo
+make run
 ```
 
 Then open **http://localhost:5173**. To stop the demo:
 
 ```bash
-make stop-demo
+make stop
 ```
 
 **Or run backend and frontend manually** in two terminals:

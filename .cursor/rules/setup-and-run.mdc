@@ -14,7 +14,7 @@ alwaysApply: true
 ## Running the demo
 
 1. **Install once** (from repo root): `poetry install`
-2. **Start**: From repo root run `make run-demo` (starts backend and frontend in background; open http://localhost:5173). **Stop**: `make stop-demo`.
+2. **Start**: From repo root run `make run` (starts backend and frontend in background; open http://localhost:5173). **Stop**: `make stop`.
 3. **Or manually**: Backend: `cd demo/backend` then `uvicorn main:app --reload` (backend on :8000). Frontend: `cd demo/frontend`, `npm install`, then `npm run dev` (frontend on :5173, proxies `/api` to backend).
 
 ## Tests

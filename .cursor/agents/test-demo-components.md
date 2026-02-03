@@ -21,6 +21,8 @@ When the user asks to test the demo or run tests:
 | Frontend tests | `npm test` | `demo/frontend` |
 | Both (parallel) | See Parallel execution | — |
 
+Backend suite includes the **graph JSON validation** test (`test_validate_graph_json_for_testing_only`): validates nodes/edges (DAG, no cycles); validator is for testing only (used internally by compile, no public validate endpoint).
+
 Backend uses Poetry env (run from `demo/backend` so `pytest.ini` pythonpath applies). Frontend uses npm/Vitest.
 
 ## Parallel execution
