@@ -15,6 +15,11 @@ pydantic = ">=2.5.0"
 httpx = ">=0.26.0"
 # Load sempipes from the local symlink (sempipes/ must point to the sempipes repo)
 sempipes = { path = "sempipes", develop = true }
+autogluon = "^1.5.0"
+soundfile = "^0.13.1"
+torchaudio = ">=2.9,<2.10"
+tensorflow = "^2.20.0"
+unidecode = "^1.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.4.0"
