@@ -7,12 +7,13 @@ interface CodeOutputProps {
   code: string;
   language: string;
   isLoading?: boolean;
+  isExpanded?: boolean;
 }
 
 const LINE_HEIGHT = 20;
 const ESTIMATE_LINES = 100;
 
-export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
+export function CodeOutput({ code, language, isLoading, isExpanded = false }: CodeOutputProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string>("");
   const [lineCount, setLineCount] = useState(0);
@@ -43,7 +44,7 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
       })
       .catch(() => {
         if (!cancelled) {
-          setHtml(`<pre class="p-4 text-slate-700 font-mono text-sm">${escapeHtml(code)}</pre>`);
+          setHtml(`<pre class="p-4 text-slate-700 font-mono" style="font-size: 13px">${escapeHtml(code)}</pre>`);
           setLineCount((code.match(/\n/g) ?? []).length + 1);
         }
       });
@@ -83,9 +84,10 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
 
   if (!useVirtual) {
     return (
-      <div className="h-full w-full rounded-lg border border-slate-200 bg-white overflow-auto">
+      <div className={`h-full w-full rounded-lg border border-slate-200 bg-white ${isExpanded ? 'overflow-auto' : 'overflow-x-hidden overflow-y-auto'}`}>
         <div
-          className="p-4 text-sm font-mono min-h-full [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!m-0 [&_.line]:leading-5"
+          className={`p-2 font-mono min-h-full [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!m-0 [&_.line]:leading-5 ${!isExpanded ? '[&_pre]:whitespace-pre-wrap [&_.line]:whitespace-pre-wrap [&_pre]:break-words [&_.line]:break-words' : ''}`}
+          style={{ fontSize: '13px' }}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       </div>
@@ -96,7 +98,7 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
   return (
     <div
       ref={parentRef}
-      className="h-full w-full rounded-lg border border-slate-200 bg-white overflow-auto"
+      className={`h-full w-full rounded-lg border border-slate-200 bg-white ${isExpanded ? 'overflow-auto' : 'overflow-x-hidden overflow-y-auto'}`}
     >
       <div style={{ height: totalHeight, position: "relative" }} className="w-full">
         {virtualItems.map((item) => (
@@ -109,8 +111,9 @@ export function CodeOutput({ code, language, isLoading }: CodeOutputProps) {
               width: "100%",
               height: `${item.size}px`,
               transform: `translateY(${item.start}px)`,
+              fontSize: '13px',
             }}
-            className="flex items-center px-4 text-slate-700 font-mono text-sm"
+            className={`flex items-center px-2 text-slate-700 font-mono ${!isExpanded ? 'whitespace-pre-wrap break-words' : ''}`}
           >
             {code.split("\n")[item.index]}
           </div>
