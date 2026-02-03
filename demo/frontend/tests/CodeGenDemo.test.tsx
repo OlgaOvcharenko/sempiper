@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CodeGenDemo } from "../src/components/CodeGenDemo";
 
@@ -47,7 +47,14 @@ function mockFetchDefault(
         json: () => Promise.resolve(content),
       } as Response);
     }
-    return Promise.resolve({ ok: false } as Response);
+    if (u.includes("/api/update-config")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-2.5-flash-lite", temperature: 0.0 }),
+        text: () => Promise.resolve(""),
+      } as Response);
+    }
+    return Promise.resolve({ ok: false, text: () => Promise.resolve("Not found") } as Response);
   });
 }
 
@@ -57,9 +64,8 @@ describe("CodeGenDemo", () => {
     mockFetchDefault();
   });
 
-  it("renders title and Run button only (in first pane)", () => {
+  it("renders Run button and no Compile button (in first pane)", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    expect(screen.getByText("Sempipes pipeline demo")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /run/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /compile/i })).not.toBeInTheDocument();
   });
@@ -80,22 +86,33 @@ describe("CodeGenDemo", () => {
   });
 
   it("calls execute API when Run is clicked", async () => {
-    const mockFetch = vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      body: null,
-      headers: new Headers({ "content-type": "text/event-stream" }),
-    } as Response);
-    (mockFetch as unknown as { body: ReadableStream | null }).body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(
-          new TextEncoder().encode('data: {"type":"terminal","line":"Starting..."}\n\n')
-        );
-        controller.enqueue(
-          new TextEncoder().encode('data: {"type":"node_code","node_id":"n1","generated_code":"# code"}\n\n')
-        );
-        controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
-        controller.close();
-      },
+    const mockFetch = vi.mocked(fetch).mockImplementation((url: string | URL) => {
+      const u = String(url);
+    if (u.includes("/api/update-config")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
+      } as Response);
+    }
+      if (u.includes("/api/execute")) {
+        return Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"terminal","line":"Starting..."}\n\n')
+              );
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"node_code","node_id":"n1","generated_code":"# code"}\n\n')
+              );
+              controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+              controller.close();
+            },
+          }),
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false } as Response);
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
@@ -110,6 +127,61 @@ describe("CodeGenDemo", () => {
       expect(body.input_code).toBeDefined();
       expect(typeof body.input_code).toBe("string");
     });
+  });
+
+  it("when execute stream emits terminal and done, run completes without showing terminal (no terminal panel)", async () => {
+    vi.mocked(fetch).mockImplementation((url: string | URL) => {
+      const u = String(url);
+    if (u.includes("/api/update-config")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
+      } as Response);
+    }
+      if (u.includes("/api/execute")) {
+        return Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"terminal","line":"Starting pipeline execution..."}\n\n')
+              );
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"node_code","node_id":"as_X_1","generated_code":"# mock"}\n\n')
+              );
+              controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+              controller.close();
+            },
+          }),
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        } as Response);
+      }
+      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
+      }
+      if (u.match(/\/api\/scripts\//)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
+      }
+      if (u.includes("/api/compile")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              nodes: [{ id: "as_X_1", type: "input", label: "as_X", source_range: null }],
+              edges: [],
+            }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false } as Response);
+    });
+
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 2000 });
+    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
+    expect(screen.queryByText("Starting pipeline execution...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Terminal")).not.toBeInTheDocument();
   });
 
   it("when GET /api/scripts fails, no script buttons are shown", async () => {
@@ -328,6 +400,79 @@ describe("CodeGenDemo", () => {
     expect(screen.getByText("sem_fillna")).toBeInTheDocument();
   });
 
+  it("after Run, selecting a node shows that node's generated code in right panel (design: live updates)", async () => {
+    const compileResponse = {
+      nodes: [
+        { id: "as_X_1", type: "input", label: "as_X", source_range: null },
+        { id: "sem_fillna_2", type: "operator", label: "sem_fillna", source_range: null },
+      ],
+      edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
+    };
+    const generatedCodeForNode = "# Generated for sem_fillna\ndef fill_missing(df):\n    return df.fillna(0)";
+    vi.mocked(fetch).mockImplementation((url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
+      }
+      if (u.match(/\/api\/scripts\//)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
+      }
+      if (u.includes("/api/update-config")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-2.5-flash-lite", temperature: 0.0 }),
+          text: () => Promise.resolve(""),
+        } as Response);
+      }
+      if (u.includes("/api/compile")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(compileResponse), text: () => Promise.resolve("") } as Response);
+      }
+      if (u.includes("/api/execute")) {
+        return Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"terminal","line":"Starting..."}\n\n')
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({ type: "node_code", node_id: "as_X_1", generated_code: "# input" })}\n\n`
+                )
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({ type: "node_code", node_id: "sem_fillna_2", generated_code: generatedCodeForNode })}\n\n`
+                )
+              );
+              controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+              controller.close();
+            },
+          }),
+          headers: new Headers({ "content-type": "text/event-stream" }),
+          text: () => Promise.resolve(""),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, text: () => Promise.resolve("Not found") } as Response);
+    });
+
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByText("as_X")).toBeInTheDocument(), { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
+
+    fireEvent.click(screen.getByTestId("graph-node-sem_fillna_2"));
+    await waitFor(
+      () => {
+        expect(screen.getByText("Generated code")).toBeInTheDocument();
+        expect(screen.getByText(/Generated for sem_fillna/)).toBeInTheDocument();
+        expect(screen.getByText(/fill_missing\(df\)/)).toBeInTheDocument();
+      },
+      { timeout: 2000 }
+    );
+  });
+
   it("when switching script, selection is cleared and node details show placeholder", async () => {
     const compileResponse = {
       nodes: [
@@ -368,5 +513,200 @@ describe("CodeGenDemo", () => {
     await waitFor(() => {
       expect(screen.getByText(/select a node in the graph/i)).toBeInTheDocument();
     });
+  });
+
+  it("shows LLM selection dropdown and temperature input", async () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => {
+      expect(screen.getByText("LLM:")).toBeInTheDocument();
+      expect(screen.getByTitle("Select LLM model")).toBeInTheDocument();
+      expect(screen.getByText("Temperature:")).toBeInTheDocument();
+      expect(screen.getByTitle("LLM temperature (0-2)")).toBeInTheDocument();
+    });
+  });
+
+  it("LLM dropdown has expected options", async () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => {
+      const dropdown = screen.getByTitle("Select LLM model") as HTMLSelectElement;
+      expect(dropdown).toBeInTheDocument();
+      const options = Array.from(dropdown.options).map((o) => o.value);
+      expect(options).toContain("gpt-5-mini");
+      expect(options).toContain("gpt-4.1-mini");
+      expect(options).toContain("gemini/gemini-2.5-flash");
+      expect(options).toContain("gemini/gemini-2.5-flash-lite");
+      expect(options).toContain("gemini/gemini-2.5-pro");
+      expect(options).toContain("gemini/gemini-3-flash");
+      expect(options).toContain("gemini/gemini-3-flash-lite");
+      expect(options).toContain("gemini/gemini-3-pro");
+    });
+  });
+
+  it("validates temperature range (0-2) and shows error for invalid values", async () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByTitle("LLM temperature (0-2)")).toBeInTheDocument());
+
+    const tempInput = screen.getByTitle("LLM temperature (0-2)") as HTMLInputElement;
+
+    // Test invalid value: negative
+    fireEvent.change(tempInput, { target: { value: "-1" } });
+    await waitFor(() => {
+      expect(tempInput).toHaveClass("border-red-500");
+      expect(screen.getByText("Must be 0-2")).toBeInTheDocument();
+    });
+
+    // Wait longer than animation duration (820ms) and verify error persists
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    });
+    expect(tempInput).toHaveClass("border-red-500");
+    expect(screen.getByText("Must be 0-2")).toBeInTheDocument();
+
+    // Test invalid value: greater than 2
+    fireEvent.change(tempInput, { target: { value: "3" } });
+    await waitFor(() => {
+      expect(tempInput).toHaveClass("border-red-500");
+      expect(screen.getByText("Must be 0-2")).toBeInTheDocument();
+    });
+
+    // Test invalid value: not a number
+    fireEvent.change(tempInput, { target: { value: "abc" } });
+    await waitFor(() => {
+      expect(tempInput).toHaveClass("border-red-500");
+    });
+
+    // Test valid value clears error
+    fireEvent.change(tempInput, { target: { value: "0.7" } });
+    await waitFor(() => {
+      expect(tempInput).not.toHaveClass("border-red-500");
+      expect(screen.queryByText("Must be 0-2")).not.toBeInTheDocument();
+    });
+  });
+
+  it("calls update-config API with selected LLM and temperature before executing pipeline", async () => {
+    vi.mocked(fetch).mockImplementation((url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
+      }
+      if (u.match(/\/api\/scripts\//)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
+      }
+      if (u.includes("/api/update-config")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-3-flash", temperature: 0.7 }),
+        } as Response);
+      }
+      if (u.includes("/api/execute")) {
+        return Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
+              controller.close();
+            },
+          }),
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        } as Response);
+      }
+      if (u.includes("/api/compile")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ nodes: [{ id: "n1", type: "operator", label: "op" }], edges: [] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false } as Response);
+    });
+
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled());
+
+    // Change LLM to gemini/gemini-3-flash
+    const dropdown = screen.getByTitle("Select LLM model") as HTMLSelectElement;
+    fireEvent.change(dropdown, { target: { value: "gemini/gemini-3-flash" } });
+
+    // Change temperature to 0.7
+    const tempInput = screen.getByTitle("LLM temperature (0-2)") as HTMLInputElement;
+    fireEvent.change(tempInput, { target: { value: "0.7" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+
+    await waitFor(() => {
+      const updateConfigCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => String(c[0]).includes("/api/update-config")
+      );
+      expect(updateConfigCalls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse((updateConfigCalls[0][1] as RequestInit)?.body as string);
+      expect(body.llm_name).toBe("gemini/gemini-3-flash");
+      expect(body.temperature).toBe(0.7);
+    });
+  });
+
+  it("renders expand buttons for all three panels", () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    expect(screen.getByTestId("expand-left-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("expand-middle-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("expand-right-panel")).toBeInTheDocument();
+  });
+
+  it("expands left panel when expand button is clicked", () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    const expandBtn = screen.getByTestId("expand-left-panel");
+    
+    // Initially shows expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
+    
+    // Click to expand
+    fireEvent.click(expandBtn);
+    
+    // Now shows restore icon
+    expect(expandBtn).toHaveTextContent("⤡");
+    
+    // Click again to restore
+    fireEvent.click(expandBtn);
+    
+    // Back to expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
+  });
+
+  it("expands middle panel when expand button is clicked", () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    const expandBtn = screen.getByTestId("expand-middle-panel");
+    
+    // Initially shows expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
+    
+    // Click to expand
+    fireEvent.click(expandBtn);
+    
+    // Now shows restore icon
+    expect(expandBtn).toHaveTextContent("⤡");
+    
+    // Click again to restore
+    fireEvent.click(expandBtn);
+    
+    // Back to expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
+  });
+
+  it("expands right panel when expand button is clicked", () => {
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    const expandBtn = screen.getByTestId("expand-right-panel");
+    
+    // Initially shows expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
+    
+    // Click to expand
+    fireEvent.click(expandBtn);
+    
+    // Now shows restore icon
+    expect(expandBtn).toHaveTextContent("⤡");
+    
+    // Click again to restore
+    fireEvent.click(expandBtn);
+    
+    // Back to expand icon
+    expect(expandBtn).toHaveTextContent("⤢");
   });
 });
