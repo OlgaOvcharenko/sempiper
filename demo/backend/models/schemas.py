@@ -57,3 +57,6 @@ class CompileEdge(BaseModel):
 class CompileResponse(BaseModel):
     nodes: list[CompileNode]
     edges: list[CompileEdge] = Field(default_factory=list)
+    validation_errors: list[str] = Field(default_factory=list, description="Graph validation errors if any")
+
+

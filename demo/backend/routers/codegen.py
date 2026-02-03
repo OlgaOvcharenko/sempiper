@@ -4,16 +4,15 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from models.schemas import (
-    CompileEdge,
-    CompileNode,
     CompileResponse,
     GenerateMetadata,
     GenerateRequest,
     GenerateResponse,
     StageTiming,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from services.compile_parse import extract_nodes_with_ranges
+from services.graph_validate import validate_graph_json
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 from services.execute_stream import stream_execute_events
 
@@ -63,6 +62,29 @@ class ExecuteRequest(BaseModel):
     input_code: str
 
 
+class UpdateConfigRequest(BaseModel):
+    llm_name: str
+    temperature: float = Field(ge=0.0, le=2.0, description="Temperature for LLM (0-2)")
+
+
+@router.post("/update-config")
+def update_sempipes_config(req: UpdateConfigRequest) -> dict:
+    """Update sempipes config with LLM name and temperature."""
+    try:
+        import sempipes
+        sempipes.update_config(
+            llm_for_code_generation=sempipes.LLM(
+                name=req.llm_name,
+                parameters={"temperature": req.temperature}
+            )
+        )
+        return {"status": "ok", "llm_name": req.llm_name, "temperature": req.temperature}
+    except ImportError:
+        raise HTTPException(status_code=500, detail="sempipes not available")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/sempipes-info")
 def sempipes_info() -> dict:
     """Return whether sempipes is available in this environment and its config (if any)."""
@@ -72,30 +94,14 @@ def sempipes_info() -> dict:
     }
 
 
-def _fork_join_fixture() -> CompileResponse:
-    """Fixture graph: A (input) forks to B and C, which join at D."""
-    nodes = [
-        CompileNode(id="A", type="input", label="as_X", source_range=None),
-        CompileNode(id="B", type="operator", label="sem_fillna", source_range=None),
-        CompileNode(id="C", type="operator", label="sem_gen_features", source_range=None),
-        CompileNode(id="D", type="operator", label="skb.apply", source_range=None),
-    ]
-    edges = [
-        CompileEdge(source="A", target="B"),
-        CompileEdge(source="A", target="C"),
-        CompileEdge(source="B", target="D"),
-        CompileEdge(source="C", target="D"),
-    ]
-    return CompileResponse(nodes=nodes, edges=edges)
-
-
 @router.post("/compile", response_model=CompileResponse)
 def compile_pipeline(req: CompileRequest) -> CompileResponse:
-    """Return graph nodes and edges with source ranges for editor decorations and code–graph sync."""
-    if "fork-join" in req.input_code:
-        return _fork_join_fixture()
+    """Return graph nodes and edges with source ranges. Graph JSON is validated; errors are in validation_errors."""
     nodes, edges = extract_nodes_with_ranges(req.input_code)
-    return CompileResponse(nodes=nodes, edges=edges)
+    nodes_dict = [n.model_dump() for n in nodes]
+    edges_dict = [e.model_dump() for e in edges]
+    valid, errors = validate_graph_json(nodes_dict, edges_dict)
+    return CompileResponse(nodes=nodes, edges=edges, validation_errors=errors)
 
 
 @router.post("/execute")
