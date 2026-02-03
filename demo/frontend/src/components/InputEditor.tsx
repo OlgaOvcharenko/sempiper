@@ -25,6 +25,8 @@ interface InputEditorProps {
   onSelectNode?: (nodeId: string | null) => void;
   /** Currently selected graph node id — highlight its range in the code. */
   selectedNodeId?: string | null;
+  /** Whether the panel is expanded (controls word wrap). */
+  isExpanded?: boolean;
 }
 
 const EDITOR_BG = "#ffffff";
@@ -69,6 +71,7 @@ export function InputEditor({
   onHighlightNodes,
   onSelectNode,
   selectedNodeId = null,
+  isExpanded = false,
 }: InputEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -222,10 +225,14 @@ export function InputEditor({
         options={{
           readOnly: disabled,
           minimap: { enabled: false },
-          fontSize: 13,
+          fontSize: 11,
           fontFamily: "ui-monospace, monospace",
-          padding: { top: 12 },
+          padding: { top: 8, left: 8 },
           scrollBeyondLastLine: false,
+          wordWrap: isExpanded ? "off" : "on",
+          wrappingStrategy: "advanced",
+          lineNumbersMinChars: 3,
+          glyphMargin: false,
         }}
       />
     </div>
