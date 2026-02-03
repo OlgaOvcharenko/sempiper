@@ -6,7 +6,7 @@ vi.unmock("../src/components/CodeOutput");
 import { CodeOutput } from "../src/components/CodeOutput";
 
 describe("CodeOutput", () => {
-  it("uses 13px font size to match InputEditor", async () => {
+  it("uses 11px font size to match InputEditor", async () => {
     const code = "def hello():\n    print('Hello, world!')";
     const { container } = render(<CodeOutput code={code} language="python" />);
     
@@ -17,9 +17,9 @@ describe("CodeOutput", () => {
     });
     
     const codeElement = container.querySelector(".font-mono");
-    // Get computed style to verify font size is 13px (matching InputEditor)
+    // Get computed style to verify font size is 11px (matching InputEditor)
     const style = window.getComputedStyle(codeElement!);
-    expect(style.fontSize).toBe("13px");
+    expect(style.fontSize).toBe("11px");
   });
 
   it("renders loading state", () => {
