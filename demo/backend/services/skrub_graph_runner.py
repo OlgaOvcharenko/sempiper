@@ -1,12 +1,23 @@
 """
-Run user pipeline code in an isolated namespace and output skrub's computation graph as SVG.
-Used when the user clicks Run: we exec() the code, find any DataOp (object with .skb.draw_graph),
-call draw_graph(), and print the SVG to stdout. The main process runs this with a timeout.
+Run user pipeline code in an isolated namespace and output skrub's computation graph.
 
-Also captures generated code from sempipes operators (when they call the LLM) so the demo
-can show it without bypassing operators. Prints ##SEMPIPES_NODE_CODE##\\n{json}\\n##END## per capture.
+We extract the DAG as a dictionary using skrub's internal _Graph (not SVG):
+  from skrub._data_ops._evaluation import _Graph
+  graph = _Graph().run(dag)  # returns {"nodes", "parents", "children"}
+  https://skrub-data.org/stable/reference/generated/skrub.DataOp.skb.draw_graph.html
+
+The runner prints ##SKRUB_GRAPH##\\n{json}\\n##END## with a serializable graph dict so the
+frontend can render an interactive DAG. If _Graph is unavailable, we fall back to
+result.skb.draw_graph() SVG.
+
+Flow: exec() the user code, take the result of the whole pipeline (last-assigned DataOp),
+call _Graph().run(result), serialize to JSON, print ##SKRUB_GRAPH## block. Backend streams
+that to the frontend for interactive visualization.
+
+Also captures generated code from sempipes operators. Prints ##SEMPIPES_NODE_CODE##\\n{json}\\n##END##.
 """
 import json
+import re
 import sys
 import types
 import importlib.machinery
@@ -90,6 +101,22 @@ def _prepare_globals():
     try:
         import sempipes
         g["sempipes"] = sempipes
+        
+        # Initialize sempipes config from environment variables (set by parent process)
+        llm_name = os.environ.get("SEMPIPES_LLM_NAME")
+        llm_temp = os.environ.get("SEMPIPES_LLM_TEMP")
+        if llm_name and llm_temp:
+            try:
+                temp_value = float(llm_temp)
+                sempipes.update_config(
+                    llm_for_code_generation=sempipes.LLM(
+                        name=llm_name,
+                        parameters={"temperature": temp_value}
+                    )
+                )
+                print(f"SEMPIPES> Configured LLM: {llm_name} (temp={temp_value})", file=sys.stderr)
+            except (ValueError, Exception) as e:
+                print(f"Warning: Failed to configure sempipes from env: {e}", file=sys.stderr)
     except ImportError as e:
         print(f"Warning: Could not import sempipes: {e}", file=sys.stderr)
     try:
@@ -110,27 +137,253 @@ def _prepare_globals():
     return g
 
 
-def _find_dataop_and_draw(globals_dict):
-    """Return SVG string from first object in globals_dict that has .skb.draw_graph()."""
-    for _name, val in globals_dict.items():
-        if _name.startswith("_"):
+def _is_dataop(val):
+    """True if val has .skb.draw_graph() (skrub DataOp)."""
+    try:
+        skb = getattr(val, "skb", None)
+        if skb is None:
+            return False
+        draw = getattr(skb, "draw_graph", None)
+        return callable(draw)
+    except Exception:
+        return False
+
+
+def _assignments_in_order(code):
+    """
+    Yield variable names from assignment statements in source order.
+    Matches lines like '  result = ...' or 'x = ...'. Skips comments-only.
+    """
+    # Match line that has an assignment to a single identifier (no unpacking)
+    pat = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=")
+    for line in code.splitlines():
+        # Ignore lines that are only comments
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
             continue
-        try:
-            skb = getattr(val, "skb", None)
-            if skb is None:
-                continue
-            draw = getattr(skb, "draw_graph", None)
-            if not callable(draw):
-                continue
-            graph = draw()
-            if graph is None:
-                continue
-            svg = getattr(graph, "svg", None)
-            if svg is not None:
-                return svg.decode("utf-8") if isinstance(svg, bytes) else str(svg)
-        except Exception:
+        m = pat.match(line)
+        if m:
+            yield m.group(1)
+
+
+_SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
+_SKRUB_GRAPH_END = "##END##"
+
+
+def _get_pipeline_result_dataop(code, globals_dict):
+    """Return the pipeline result DataOp (last-assigned DataOp in source order), or None."""
+    dataop_names = set()
+    for name, val in globals_dict.items():
+        if name.startswith("_"):
             continue
+        if _is_dataop(val):
+            dataop_names.add(name)
+    if not dataop_names:
+        return None
+    assignments = list(_assignments_in_order(code))
+    for var_name in reversed(assignments):
+        if var_name in dataop_names:
+            return globals_dict[var_name]
     return None
+
+
+def _is_sempipes_semantic_label(label):
+    """True if this skrub node label corresponds to a sempipes semantic operator (LLM-generated code)."""
+    if not label or not isinstance(label, str):
+        return False
+    low = label.strip().lower()
+    if low.startswith("sem_"):
+        return True
+    if low in ("apply_with_sem_choose", "sem_choose", "apply"):
+        return True
+    # Skrub labels Apply nodes as "Apply <Estimator>" (e.g. Apply ImputedLearner, Apply LLMImputer).
+    if low.startswith("apply "):
+        return True
+    return False
+
+
+# Map skrub "Apply <X>" labels to sempipes operator display names.
+# Graph shows sempipes operators (sem_fillna, sem_gen_features, etc.) so user can click to see generated code.
+_APPLY_TO_SEMPIPES = {
+    "llmimputer": "sem_fillna",
+    "imputedlearner": "sem_fillna",
+    "semfillnawithllm": "sem_fillna",
+    "semfillnalllmplusmodel": "sem_fillna",
+    "codebasedfeatureextractor": "sem_gen_features",
+    "caafe": "sem_gen_features",
+    "codedataaugmentor": "sem_augment",
+    "codeaugmentor": "sem_augment",
+    "selectcols": "sem_select",
+}
+
+
+def _apply_label_to_sempipes_operator(label):
+    """
+    Replace skrub Apply node label with sempipes operator name for display.
+    E.g. "Apply ImputedLearner" -> "sem_fillna". Unknown Apply X is left as-is.
+    """
+    if not label or not isinstance(label, str):
+        return label
+    stripped = label.strip()
+    low = stripped.lower()
+    if not low.startswith("apply "):
+        return stripped
+    # "Apply ImputedLearner" -> key "imputedlearner"
+    suffix = low[6:].strip()  # after "apply "
+    if not suffix:
+        return stripped
+    # Normalize: remove spaces (e.g. "Apply ImputedLearner" -> "imputedlearner")
+    key = "".join(suffix.split()).lower()[:80]
+    if key in _APPLY_TO_SEMPIPES:
+        return _APPLY_TO_SEMPIPES[key]
+    for apply_key, sem_name in _APPLY_TO_SEMPIPES.items():
+        if apply_key in key or key in apply_key:
+            return sem_name
+    return stripped
+
+
+def _topological_order(node_ids, parents_map):
+    """Return node_ids in topological order (roots first, then nodes whose parents are done)."""
+    done = set()
+    result = []
+    pending = list(node_ids)
+    while pending:
+        made_progress = False
+        next_round = []
+        for nid in pending:
+            preds = parents_map.get(nid, [])
+            if all(p in done for p in preds):
+                done.add(nid)
+                result.append(nid)
+                made_progress = True
+            else:
+                next_round.append(nid)
+        if not made_progress:
+            # cycles or missing refs: add rest in order
+            result.extend(next_round)
+            break
+        pending = next_round
+    return result
+
+
+def _graph_to_serializable(raw):
+    """
+    Convert _Graph().run(dag) output to JSON-serializable dict.
+    raw has "nodes", "parents", "children". Nodes may be objects; we use index as id.
+    Replaces skrub Apply primitives (e.g. "Apply ImputedLearner") with sempipes operator names
+    (e.g. "sem_fillna") so the graph shows sempipes operators; user can click them to see generated code.
+    Tags sempipes semantic operators and emits sempipesNodeIds in execution (topo) order.
+    """
+    nodes_raw = raw.get("nodes") or []
+    parents_raw = raw.get("parents") or {}
+    children_raw = raw.get("children") or {}
+
+    node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+    obj_to_idx = {}
+    for i, n in enumerate(node_list):
+        try:
+            obj_to_idx[id(n)] = i
+        except TypeError:
+            obj_to_idx[i] = i
+
+    def label_for(node, i):
+        if node is None:
+            return f"node_{i}"
+        # Prefer skrub's short representation (matches DataOp.__skrub_short_repr__)
+        try:
+            short_repr = getattr(node, "__skrub_short_repr__", None)
+            if callable(short_repr):
+                lab = short_repr()
+                if lab is not None and isinstance(lab, str) and lab.strip():
+                    return lab[:80]
+        except Exception:
+            pass
+        for attr in ("description", "name", "label"):
+            try:
+                v = getattr(node, attr, None)
+                if v is not None and isinstance(v, str):
+                    return v[:80]
+            except Exception:
+                pass
+        try:
+            return str(node)[:80]
+        except Exception:
+            return f"node_{i}"
+
+    nodes = []
+    for i, n in enumerate(node_list):
+        lab = label_for(n, i)
+        is_sem = _is_sempipes_semantic_label(lab)
+        display_label = _apply_label_to_sempipes_operator(lab) if is_sem else lab
+        nodes.append({
+            "id": str(i),
+            "label": display_label,
+            "is_sempipes_semantic": is_sem,
+        })
+
+    def to_id_list(lst, n):
+        if not isinstance(lst, (list, tuple)):
+            return []
+        result = []
+        for x in lst:
+            if isinstance(x, int) and 0 <= x < n:
+                result.append(str(x))
+            else:
+                result.append(str(obj_to_idx.get(id(x), x)))
+        return result
+
+    n = len(node_list)
+    parents = {}
+    children = {}
+    for i in range(n):
+        si = str(i)
+        node_ref = node_list[i] if i < len(node_list) else i
+        p = parents_raw.get(i) or parents_raw.get(node_ref, [])
+        c = children_raw.get(i) or children_raw.get(node_ref, [])
+        parents[si] = to_id_list(p, n)
+        children[si] = to_id_list(c, n)
+
+    # Sempipes semantic nodes in topological (execution) order → index matches _captured_codes order
+    all_ids = [no["id"] for no in nodes]
+    topo = _topological_order(all_ids, parents)
+    sempipes_node_ids = [nid for nid in topo if next((no for no in nodes if no["id"] == nid), {}).get("is_sempipes_semantic")]
+
+    return {
+        "nodes": nodes,
+        "parents": parents,
+        "children": children,
+        "sempipesNodeIds": sempipes_node_ids,
+    }
+
+
+def _get_skrub_dag_dict(code, globals_dict):
+    """
+    Get skrub DAG as a serializable dict using _Graph().run(result).
+    Returns (graph_dict, None) on success, (None, svg_fallback) if _Graph fails but draw_graph works.
+    """
+    result = _get_pipeline_result_dataop(code, globals_dict)
+    if result is None:
+        return None, None
+
+    try:
+        from skrub._data_ops._evaluation import _Graph
+        raw = _Graph().run(result)
+        if raw and isinstance(raw, dict) and "nodes" in raw:
+            return _graph_to_serializable(raw), None
+    except Exception:
+        pass
+
+    # Fallback: SVG from draw_graph()
+    try:
+        graph = result.skb.draw_graph()
+        if graph:
+            svg = getattr(graph, "svg", None)
+            if svg:
+                svg_str = svg.decode("utf-8") if isinstance(svg, bytes) else str(svg)
+                return None, svg_str
+    except Exception:
+        pass
+    return None, None
 
 
 def main():
@@ -153,12 +406,17 @@ def main():
         print(json.dumps({"index": i, "code": code_str}))
         print("##END##")
 
+    # Extract skrub DAG as dict (_Graph().run) or fallback to SVG (draw_graph)
+    graph_dict, svg_fallback = _get_skrub_dag_dict(code, g)
+    if graph_dict:
+        print(_SKRUB_GRAPH_MARKER)
+        print(json.dumps(graph_dict))
+        print(_SKRUB_GRAPH_END)
+    elif svg_fallback:
+        print(svg_fallback, end="")
+
     if exec_failed:
         sys.exit(1)
-
-    svg = _find_dataop_and_draw(g)
-    if svg:
-        print(svg, end="")
 
 
 if __name__ == "__main__":
