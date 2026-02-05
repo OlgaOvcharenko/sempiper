@@ -9,12 +9,33 @@ import {
   type CompileEdge,
   type InputSummary,
   type PipelineScriptEntry,
+  type SkrubGraphDict,
 } from "../api/client";
 import { InputEditor } from "./InputEditor";
 import { GraphPanel, type GraphNode } from "./GraphPanel";
 import { NodeDetailsPanel } from "./NodeDetailsPanel";
 
 const DEFAULT_SCRIPT_ID = "simple";
+
+/** Initial pipeline code (credit fraud + sem_fillna); matches pipeline_scripts/simple.py. */
+const INITIAL_PIPELINE_CODE = `import os
+os.environ.setdefault("SCIPY_ARRAY_API", "1")
+
+import skrub
+import sempipes
+
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100, how="random")
+
+products = products.sem_fillna(
+    target_column="make",
+    nl_prompt="Infer the manufacturer from product attributes.",
+    impute_with_existing_values_only=True,
+)
+
+result = products.skb.eval()
+`;
 
 const AVAILABLE_LLMS = [
   "gpt-5-mini",
@@ -29,7 +50,7 @@ const AVAILABLE_LLMS = [
 
 export function CodeGenDemo() {
   const [pipelineScripts, setPipelineScripts] = useState<PipelineScriptEntry[]>([]);
-  const [pipelineCode, setPipelineCode] = useState("");
+  const [pipelineCode, setPipelineCode] = useState(INITIAL_PIPELINE_CODE);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const [compileNodes, setCompileNodes] = useState<CompileNode[]>([]);
@@ -39,12 +60,13 @@ export function CodeGenDemo() {
   const [liveNodeRetries, setLiveNodeRetries] = useState<Record<string, number>>({});
   const [liveFallbackByNode, setLiveFallbackByNode] = useState<Record<string, boolean>>({});
   const [liveNodeCostUsd, setLiveNodeCostUsd] = useState<Record<string, number>>({});
+  const [statusByNodeId, setStatusByNodeId] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
   const [inputSummaryByNode, setInputSummaryByNode] = useState<Record<string, InputSummary>>({});
   const [lastRunCostUsd, setLastRunCostUsd] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
-  const [skrubGraphSvg, setSkrubGraphSvg] = useState<string | null>(null);
+  const [skrubGraph, setSkrubGraph] = useState<SkrubGraphDict | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [llmName, setLlmName] = useState<string>(AVAILABLE_LLMS[0]); // Default: gpt-5-mini
+  const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
   const [temperature, setTemperature] = useState<string>("0.0");
   const [temperatureError, setTemperatureError] = useState(false);
   const [temperatureShake, setTemperatureShake] = useState(false);
@@ -125,10 +147,11 @@ export function CodeGenDemo() {
     setLiveNodeRetries({});
     setLiveFallbackByNode({});
     setLiveNodeCostUsd({});
+    setStatusByNodeId({});
     setInputSummaryByNode({});
     setLastRunCostUsd(null);
     setLastRunError(null);
-    setSkrubGraphSvg(null);
+    setSkrubGraph(null);
     setIsExecuting(true);
 
     // Update sempipes config before execution
@@ -157,21 +180,29 @@ export function CodeGenDemo() {
           }));
         } else if (event.type === "node_code") {
           setLiveNodeCode((prev) => ({ ...prev, [event.node_id]: event.generated_code }));
+          setStatusByNodeId((prev) => ({
+            ...prev,
+            [event.node_id]: event.is_fallback ? "error" : "done",
+          }));
           if (event.retries != null) {
-            setLiveNodeRetries((prev) => ({ ...prev, [event.node_id]: event.retries }));
+            const retries = event.retries;
+            setLiveNodeRetries((prev) => ({ ...prev, [event.node_id]: retries }));
           }
           if (event.is_fallback != null) {
-            setLiveFallbackByNode((prev) => ({ ...prev, [event.node_id]: event.is_fallback }));
+            const isFallback = event.is_fallback;
+            setLiveFallbackByNode((prev) => ({ ...prev, [event.node_id]: isFallback }));
           }
           if (event.cost_usd != null) {
-            setLiveNodeCostUsd((prev) => ({ ...prev, [event.node_id]: event.cost_usd }));
+            const cost = event.cost_usd;
+            setLiveNodeCostUsd((prev) => ({ ...prev, [event.node_id]: cost }));
           }
         } else if (event.type === "error") {
           setLastRunError(event.message);
         } else if (event.type === "cost") {
           setLastRunCostUsd(event.total_usd);
-        } else if (event.type === "skrub_graph" && event.svg) {
-          setSkrubGraphSvg(event.svg);
+        } else if (event.type === "skrub_graph") {
+          // Only show graph from dictionary (nodes, parents, children); no SVG.
+          if (event.graph) setSkrubGraph(event.graph);
         } else if (event.type === "done") {
           if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
           setIsExecuting(false);
@@ -220,9 +251,10 @@ export function CodeGenDemo() {
     setLiveNodeCode({});
     setLiveNodeRetries({});
     setLiveNodeCostUsd({});
+    setStatusByNodeId({});
     setInputSummaryByNode({});
     setLastRunCostUsd(null);
-    setSkrubGraphSvg(null);
+    setSkrubGraph(null);
     setCompileError(null);
   }, [pipelineCode]);
 
@@ -252,12 +284,55 @@ export function CodeGenDemo() {
           { id: "input", type: "input", label: "Input" },
           { id: "op1", type: "operator", label: "Op" },
         ];
-  const selectedNode = selectedNodeId ? (nodes.find((n) => n.id === selectedNodeId) ?? null) : null;
+  const selectedNode = (() => {
+    if (!selectedNodeId) return null;
+    if (selectedNodeId.startsWith("skrub_") && skrubGraph?.nodes) {
+      const skid = selectedNodeId.slice(7);
+      const skrubNode = skrubGraph.nodes.find((n) => n.id === skid);
+      if (skrubNode) {
+        const isOperator = Boolean(skrubGraph.sempipesNodeIds?.includes(skid));
+        return {
+          id: selectedNodeId,
+          type: (isOperator ? "operator" : "input") as "input" | "operator",
+          label: skrubNode.label,
+        };
+      }
+    }
+    return nodes.find((n) => n.id === selectedNodeId) ?? null;
+  })();
+
+  // Map compile node IDs (from editor) to skrub IDs for graph highlighting when skrub graph is shown
+  const highlightedSkrubIds = (() => {
+    if (!skrubGraph?.nodes?.length) return highlightedNodeIds;
+    if (highlightedNodeIds.length === 0) return [];
+    const result: string[] = [];
+    for (const cid of highlightedNodeIds) {
+      const compileNode = compileNodes.find((n) => n.id === cid);
+      if (!compileNode) continue;
+      for (const sn of skrubGraph.nodes) {
+        if (sn.label === compileNode.label) result.push(`skrub_${sn.id}`);
+      }
+    }
+    return [...new Set(result)];
+  })();
+
+  // Input summary for skrub-selected input node: map skrub_0 → compile node by label → inputSummaryByNode[compileNodeId]
+  const inputSummaryForSelectedNode = (() => {
+    if (!selectedNodeId?.startsWith("skrub_") || !skrubGraph?.nodes) return undefined;
+    const skid = selectedNodeId.slice(7);
+    const skrubNode = skrubGraph.nodes.find((n) => n.id === skid);
+    if (!skrubNode) return undefined;
+    const compileNode = compileNodes.find(
+      (n) => n.label === skrubNode.label && (n.type ?? "").toLowerCase() === "input"
+    );
+    return compileNode ? inputSummaryByNode[compileNode.id] : undefined;
+  })();
 
   const nodeIds = new Set(nodes.map((n) => n.id));
   const graphEdges = (compileEdges ?? []).filter(
     (e) => nodeIds.has(e.source) && nodeIds.has(e.target)
   );
+  const runnableNodeIds = nodes.map((n) => n.id);
 
   // Compute panel widths based on expanded state
   const leftWidth = expandedPanel === 'left' ? '80%' : expandedPanel === null ? '33%' : '10%';
@@ -311,6 +386,16 @@ export function CodeGenDemo() {
                   {lastRunCostUsd != null && lastRunCostUsd > 0 && (
                     <span className="text-xs text-zinc-500 ml-2" title="LLM cost from last run">
                       ${lastRunCostUsd.toFixed(6)}
+                    </span>
+                  )}
+                  {lastRunError && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 ml-2" title={lastRunError}>
+                      ⚠ Failed
+                    </span>
+                  )}
+                  {!isExecuting && !lastRunError && lastRunCostUsd != null && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 ml-2" title="Pipeline executed successfully">
+                      ✓ Success
                     </span>
                   )}
                 </div>
@@ -371,7 +456,7 @@ export function CodeGenDemo() {
               value={pipelineCode}
               onChange={setPipelineCode}
               disabled={isExecuting}
-              nodeRanges={compileNodes.filter((n) => n.source_range != null)}
+              nodeRanges={compileNodes.filter((n): n is CompileNode & { source_range: NonNullable<CompileNode["source_range"]> } => n.source_range != null)}
               onHighlightNodes={setHighlightedNodeIds}
               onSelectNode={setSelectedNodeId}
               selectedNodeId={selectedNodeId}
@@ -380,17 +465,19 @@ export function CodeGenDemo() {
           </div>
         </div>
 
-        {/* Middle: Interactive graph — placeholder on first load, clickable graph after compile */}
+        {/* Middle: Computation graph — placeholder before run, skrub native graph after */}
         <div className="min-w-[200px] flex flex-col min-h-0 transition-all duration-300" style={{ width: middleWidth }}>
           <GraphPanel
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
             nodes={nodes}
             edges={graphEdges}
-            skrubGraphSvg={null}
-            isLoading={false}
-            highlightedNodeIds={highlightedNodeIds}
-            showGraph={compileNodes.length > 0}
+            skrubGraph={skrubGraph}
+            runnableNodeIds={runnableNodeIds}
+            isLoading={isExecuting && !skrubGraph}
+            highlightedNodeIds={highlightedSkrubIds}
+            statusByNodeId={statusByNodeId}
+            showGraph={isExecuting || !!skrubGraph}
             expandButton={
               <button
                 type="button"
@@ -417,6 +504,7 @@ export function CodeGenDemo() {
             liveFallbackByNode={liveFallbackByNode}
             liveCostUsdByNode={liveNodeCostUsd}
             inputSummaryByNode={inputSummaryByNode}
+            inputSummaryForSelectedNode={inputSummaryForSelectedNode}
             isExecuting={isExecuting}
             nodeMetadata={null}
             isExpanded={expandedPanel === 'right'}
