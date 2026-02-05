@@ -25,6 +25,8 @@ _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Marker and format emitted by skrub_graph_runner for each operator-generated code block.
 _SEMPIPES_NODE_CODE_MARKER = "##SEMPIPES_NODE_CODE##"
 _SEMPIPES_NODE_CODE_END = "##END##"
+_SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
+_SKRUB_GRAPH_END = "##END##"
 
 
 def _parse_captured_codes_from_stdout(stdout_str: str) -> list[str]:
@@ -47,6 +49,29 @@ def _parse_captured_codes_from_stdout(stdout_str: str) -> list[str]:
     return [codes_by_index[i] for i in sorted(codes_by_index)]
 
 
+def _parse_skrub_graph_from_stdout(stdout_str: str) -> dict | None:
+    """
+    Parse ##SKRUB_GRAPH##\\n{json}\\n##END## block from runner stdout.
+    Returns graph dict with keys nodes, parents, children, or None.
+    """
+    # Use greedy (.*) so we capture the full JSON (single- or multi-line) up to \\n##END##
+    pattern = re.compile(
+        re.escape(_SKRUB_GRAPH_MARKER) + r"\s*\n(.*)\n" + re.escape(_SKRUB_GRAPH_END),
+        re.DOTALL,
+    )
+    m = pattern.search(stdout_str)
+    if not m:
+        return None
+    try:
+        blob = m.group(1).strip()
+        obj = json.loads(blob)
+        if isinstance(obj, dict) and "nodes" in obj:
+            return obj
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+
+
 def _mock_input_summary(node_id: str, label: str) -> dict:
     """Return mock schema, sample rows, and row count for an input node (demo; no real data)."""
     if label == "as_y":
@@ -61,6 +86,143 @@ def _mock_input_summary(node_id: str, label: str) -> dict:
         "schema": [{"name": "ID", "dtype": "int64"}],
         "sample": [{"ID": 1}, {"ID": 2}, {"ID": 3}, {"ID": 4}, {"ID": 5}],
         "row_count": 5000,
+    }
+
+
+def _merge_compile_inputs_into_skrub_graph(
+    skrub_graph: dict, compile_nodes: list, compile_edges: list
+) -> dict:
+    """
+    Prepend compile input nodes (and any missing upstream operators) to the skrub graph
+    so the displayed DAG is full (inputs -> operators -> outputs). Skrub may omit Var/subsample.
+    """
+    runnable = [n for n in compile_nodes if getattr(n, "type", "").lower() in ("input", "operator")]
+    if not runnable:
+        return skrub_graph
+    skrub_labels = {n.get("label", "") for n in (skrub_graph.get("nodes") or [])}
+    # Find compile nodes missing from skrub, in compile order
+    missing: list = []
+    for n in runnable:
+        label = getattr(n, "label", n.id) or str(n.id)
+        if label not in skrub_labels:
+            missing.append(n)
+    if not missing:
+        return skrub_graph
+    # Build id mapping for compile nodes: runnable index -> new id for missing nodes
+    existing_ids = {sn.get("id") for sn in (skrub_graph.get("nodes") or []) if sn.get("id")}
+    prefix = "in_"
+    next_idx = 0
+    def new_id():
+        nonlocal next_idx
+        while f"{prefix}{next_idx}" in existing_ids:
+            next_idx += 1
+        sid = f"{prefix}{next_idx}"
+        existing_ids.add(sid)
+        next_idx += 1
+        return sid
+    # Add missing nodes at the front; wire last missing -> first skrub root
+    skrub_nodes = list(skrub_graph.get("nodes") or [])
+    parents = dict(skrub_graph.get("parents") or {})
+    children = dict(skrub_graph.get("children") or {})
+    sempipes_node_ids = list(skrub_graph.get("sempipesNodeIds") or [])
+    id_to_idx = {getattr(n, "id", n): i for i, n in enumerate(runnable)}
+    # Edges: (src_id, tgt_id) from compile
+    compile_edge_pairs = set()
+    for e in compile_edges:
+        src, tgt = getattr(e, "source", None), getattr(e, "target", None)
+        if src and tgt and src in id_to_idx and tgt in id_to_idx:
+            compile_edge_pairs.add((src, tgt))
+    # Map compile node id -> new skrub id for missing nodes
+    missing_ids: dict[str, str] = {}
+    new_nodes: list[dict] = []
+    for n in missing:
+        nid = new_id()
+        missing_ids[n.id] = nid
+        label = getattr(n, "label", n.id) or str(n.id)
+        t = (getattr(n, "type", "") or "").lower()
+        is_sem = t == "operator"
+        new_nodes.append({"id": nid, "label": label, "is_sempipes_semantic": is_sem})
+        parents[nid] = []
+        children[nid] = []
+    # Wire edges among missing nodes
+    for src, tgt in compile_edge_pairs:
+        if src in missing_ids and tgt in missing_ids:
+            si, ti = missing_ids[src], missing_ids[tgt]
+            if ti not in children.get(si, []):
+                children.setdefault(si, []).append(ti)
+                parents.setdefault(ti, []).append(si)
+    # Find skrub roots (nodes with no parents)
+    skrub_root_ids = [sn["id"] for sn in skrub_nodes if not (parents.get(sn["id"]) or [])]
+    # Connect last missing node to first skrub root (by compile order)
+    if missing and skrub_root_ids:
+        last_missing = missing[-1]
+        # Find first skrub node that consumes last_missing's output (from compile edges)
+        last_id = last_missing.id
+        first_skrub_consumer = None
+        for src, tgt in compile_edge_pairs:
+            if src == last_id and tgt in id_to_idx:
+                tgt_node = runnable[id_to_idx[tgt]]
+                tgt_label = getattr(tgt_node, "label", tgt_node.id)
+                for sn in skrub_nodes:
+                    if sn.get("label") == tgt_label:
+                        first_skrub_consumer = sn["id"]
+                        break
+                break
+        if first_skrub_consumer is None:
+            first_skrub_consumer = skrub_root_ids[0]
+        if last_id in missing_ids:
+            si = missing_ids[last_id]
+            if first_skrub_consumer not in children.get(si, []):
+                children.setdefault(si, []).append(first_skrub_consumer)
+                parents.setdefault(first_skrub_consumer, []).append(si)
+    # Prepend new nodes
+    merged_nodes = new_nodes + skrub_nodes
+    return {
+        "nodes": merged_nodes,
+        "parents": parents,
+        "children": children,
+        "sempipesNodeIds": sempipes_node_ids,
+    }
+
+
+def _build_fallback_graph_from_compile(
+    nodes: list, edges: list
+) -> dict | None:
+    """
+    Build a SkrubGraphDict-shaped dict from compile nodes/edges when the runner
+    did not produce ##SKRUB_GRAPH## (e.g. _Graph().run failed, fell back to SVG).
+    Ensures the user always sees a graph after Run.
+    """
+    runnable = [n for n in nodes if getattr(n, "type", "").lower() in ("input", "operator")]
+    if not runnable:
+        return None
+    node_ids = [n.id for n in runnable]
+    id_to_idx = {nid: str(i) for i, nid in enumerate(node_ids)}
+    skrub_nodes = []
+    parents: dict[str, list[str]] = {str(i): [] for i in range(len(node_ids))}
+    children: dict[str, list[str]] = {str(i): [] for i in range(len(node_ids))}
+    sempipes_node_ids: list[str] = []
+    for i, n in enumerate(runnable):
+        nid = str(i)
+        t = (getattr(n, "type", "") or "").lower()
+        label = getattr(n, "label", n.id) or str(n.id)
+        is_sem = t == "operator"
+        skrub_nodes.append({"id": nid, "label": label, "is_sempipes_semantic": is_sem})
+        if is_sem:
+            sempipes_node_ids.append(nid)
+    for e in edges:
+        src = getattr(e, "source", None)
+        tgt = getattr(e, "target", None)
+        if src in id_to_idx and tgt in id_to_idx:
+            si, ti = id_to_idx[src], id_to_idx[tgt]
+            if si != ti and ti not in children.get(si, []):
+                children[si].append(ti)
+                parents[ti].append(si)
+    return {
+        "nodes": skrub_nodes,
+        "parents": parents,
+        "children": children,
+        "sempipesNodeIds": sempipes_node_ids,
     }
 
 
@@ -84,16 +246,33 @@ def stream_execute_events(input_code: str):
     ##SEMPIPES_NODE_CODE## blocks from stdout. We do not call the LLM directly.
     """
     total_cost_usd = 0.0
+    exec_failed = False
     try:
-        nodes, _ = extract_nodes_with_ranges(input_code)
+        nodes, compile_edges = extract_nodes_with_ranges(input_code)
         runnable = [n for n in nodes if n.type in ("input", "operator")]
         operator_nodes = [n for n in runnable if n.type == "operator"]
+        runnable_ids = {n.id for n in runnable}
 
-        # Run pipeline subprocess first so we get captured operator code and optional SVG.
+        # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##), or SVG.
         captured_codes: list[str] = []
+        graph_from_run: dict | None = None
         svg_from_run: str | None = None
-        _SKRUB_GRAPH_TIMEOUT = 120  # Allow time for LLM API calls
-        logger.info(f"Starting subprocess with timeout {_SKRUB_GRAPH_TIMEOUT}s, {len(operator_nodes)} operators")
+        logger.info(f"Starting subprocess for {len(operator_nodes)} operators (no timeout)")
+        
+        # Prepare environment: pass sempipes config to subprocess
+        subprocess_env = os.environ.copy()
+        try:
+            from services.engine import get_sempipes_config
+            cfg = get_sempipes_config()
+            if cfg and "llm_for_code_generation" in cfg:
+                llm_cfg = cfg["llm_for_code_generation"]
+                subprocess_env["SEMPIPES_LLM_NAME"] = llm_cfg.get("name", "")
+                temp = llm_cfg.get("parameters", {}).get("temperature", 0.0)
+                subprocess_env["SEMPIPES_LLM_TEMP"] = str(temp)
+                logger.info(f"Passing sempipes config to subprocess: {llm_cfg.get('name')} (temp={temp})")
+        except Exception as e:
+            logger.warning(f"Could not get sempipes config for subprocess: {e}")
+        
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-m", "services.skrub_graph_runner"],
@@ -101,7 +280,7 @@ def stream_execute_events(input_code: str):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=_BACKEND_ROOT,
-                env=os.environ.copy(),  # Pass environment variables (API keys) to subprocess
+                env=subprocess_env,  # Pass environment with sempipes config
                 text=False,
             )
             logger.info(f"Subprocess started, PID: {proc.pid}")
@@ -120,10 +299,7 @@ def stream_execute_events(input_code: str):
             try:
                 proc.stdin.write(input_code.encode("utf-8"))
                 proc.stdin.close()
-                proc.wait(timeout=_SKRUB_GRAPH_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+                proc.wait()  # No timeout - let operators run as long as needed
             finally:
                 reader.join(timeout=1.0)
             decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
@@ -131,13 +307,32 @@ def stream_execute_events(input_code: str):
             logger.info(f"Subprocess returncode: {proc.returncode}, stdout: {len(decoded)} chars, captured: {len(captured_codes)} blocks")
             if len(decoded) > 0:
                 logger.info(f"Stdout preview: {decoded[:200]}")
-            if proc.returncode == 0 and decoded:
-                idx = decoded.find("<svg")
-                if idx >= 0:
-                    svg_from_run = decoded[idx:].strip() or None
+            
+            # Check for subprocess failure
+            exec_failed = (proc.returncode != 0)
+            
+            # Extract skrub graph dict (##SKRUB_GRAPH##) or fallback to SVG
+            if decoded:
+                graph_from_run = _parse_skrub_graph_from_stdout(decoded)
+                if not graph_from_run:
+                    idx = decoded.find("<svg")
+                    if idx >= 0:
+                        svg_from_run = decoded[idx:].strip() or None
+                    # When runner returns SVG or nothing, build graph from compile so user sees a graph
+                    graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
         except (FileNotFoundError, Exception) as e:
             logger.error(f"Subprocess exception: {type(e).__name__}: {e}")
-            pass
+            exec_failed = True
+
+        # Ensure we have a graph to show when runner returns nothing or fails
+        if not graph_from_run and runnable:
+            graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
+
+        # Merge compile inputs into skrub graph so we always show a full DAG (inputs -> operators)
+        if graph_from_run and runnable:
+            graph_from_run = _merge_compile_inputs_into_skrub_graph(
+                graph_from_run, nodes, compile_edges
+            )
 
         yield f"data: {json.dumps({'type': 'terminal', 'line': 'Starting pipeline execution...'})}\n\n".encode()
         time.sleep(0.3)
@@ -171,10 +366,56 @@ def stream_execute_events(input_code: str):
             yield f"data: {json.dumps(payload)}\n\n".encode()
             time.sleep(0.2)
 
-        if svg_from_run:
-            yield f"data: {json.dumps({'type': 'skrub_graph', 'svg': svg_from_run})}\n\n".encode()
+        # Emit node_code for skrub semantic nodes so clicking them in the graph shows generated code
+        sempipes_node_ids = graph_from_run.get("sempipesNodeIds", []) if graph_from_run else []
+        for i, skid in enumerate(sempipes_node_ids):
+            if i < len(captured_codes):
+                code_str = captured_codes[i]
+                payload = {
+                    "type": "node_code",
+                    "node_id": f"skrub_{skid}",
+                    "generated_code": code_str,
+                    "retries": 0,
+                    "cost_usd": 0.0,
+                    "is_fallback": False,
+                }
+                yield f"data: {json.dumps(payload)}\n\n".encode()
+                time.sleep(0.1)
 
-        yield f"data: {json.dumps({'type': 'terminal', 'line': 'Done.'})}\n\n".encode()
+        # Emit node_code for skrub input/non-semantic nodes so they get "done" status in the graph
+        runner_nodes = (graph_from_run or {}).get("nodes") or []
+        for sn in runner_nodes:
+            skid = sn.get("id")
+            if not skid or skid in sempipes_node_ids:
+                continue
+            label = sn.get("label", "")
+            compile_node = next((n for n in runnable if (getattr(n, "label", n.id) or "") == label), None)
+            if compile_node:
+                node_type = (getattr(compile_node, "type", "") or "operator").lower()
+                code = _mock_generated_code_for_node(
+                    getattr(compile_node, "id", ""), label, node_type
+                )
+                payload = {
+                    "type": "node_code",
+                    "node_id": f"skrub_{skid}",
+                    "generated_code": code,
+                    "retries": 0,
+                    "cost_usd": 0.0,
+                    "is_fallback": True,
+                }
+                yield f"data: {json.dumps(payload)}\n\n".encode()
+                time.sleep(0.05)
+
+        # Emit graph when we have nodes (from runner ##SKRUB_GRAPH## or fallback from compile)
+        if graph_from_run and len(runner_nodes) > 0:
+            yield f"data: {json.dumps({'type': 'skrub_graph', 'graph': graph_from_run})}\n\n".encode()
+
+        # Emit error if subprocess failed
+        if exec_failed:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Pipeline execution failed. Check terminal for details.'})}\n\n".encode()
+            yield f"data: {json.dumps({'type': 'terminal', 'line': 'Pipeline execution failed.'})}\n\n".encode()
+        else:
+            yield f"data: {json.dumps({'type': 'terminal', 'line': 'Done.'})}\n\n".encode()
     except Exception as e:
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n".encode()
     yield f"data: {json.dumps({'type': 'cost', 'total_usd': total_cost_usd})}\n\n".encode()
