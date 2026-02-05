@@ -103,4 +103,25 @@ describe("NodeDetailsPanel", () => {
     expect(screen.getByText("Retries: 2")).toBeInTheDocument();
     expect(screen.getByText(/Cost: \$0\.001234/)).toBeInTheDocument();
   });
+
+  it("shows data summary for skrub-selected input node via inputSummaryForSelectedNode (label mapping)", () => {
+    const inputSummary = {
+      node_id: "as_X_12",
+      schema: [{ name: "ID", dtype: "int64" }],
+      sample: [{ ID: 1 }, { ID: 2 }],
+      row_count: 5000,
+    };
+    render(
+      <NodeDetailsPanel
+        selectedNodeId="skrub_0"
+        selectedNode={{ id: "skrub_0", type: "input", label: "as_X" }}
+        inputSummaryByNode={{ as_X_12: inputSummary }}
+        inputSummaryForSelectedNode={inputSummary}
+      />
+    );
+    expect(screen.getByText("Data summary")).toBeInTheDocument();
+    expect(screen.getByText(/Rows: 5,000/)).toBeInTheDocument();
+    expect(screen.getByText("Schema")).toBeInTheDocument();
+    expect(screen.getByText("int64")).toBeInTheDocument();
+  });
 });

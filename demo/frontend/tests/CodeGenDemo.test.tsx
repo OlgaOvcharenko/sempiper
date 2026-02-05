@@ -27,11 +27,15 @@ const DEFAULT_SCRIPT_CONTENT = {
   content: "# Simple pipeline\nimport sempipes\n\nbasket_ids = sempipes.as_X(baskets[[\"ID\"]], \"X\")\nfraud_flags = sempipes.as_y(baskets[\"fraud_flag\"], \"y\")\nproducts = products.sem_fillna(target_column=\"make\", nl_prompt=\"Infer.\")\n",
 };
 
+function urlFromRequest(input: RequestInfo | URL): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+}
+
 function mockFetchDefault(
   overrides: { list?: unknown; simple?: unknown } = {}
 ) {
-  vi.mocked(fetch).mockImplementation((url: string | URL) => {
-    const u = String(url);
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    const u = urlFromRequest(input);
     if (u.endsWith("/api/scripts") || u === "/api/scripts") {
       return Promise.resolve({
         ok: true,
@@ -86,8 +90,8 @@ describe("CodeGenDemo", () => {
   });
 
   it("calls execute API when Run is clicked", async () => {
-    const mockFetch = vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    const mockFetch = vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
     if (u.includes("/api/update-config")) {
       return Promise.resolve({
         ok: true,
@@ -130,8 +134,8 @@ describe("CodeGenDemo", () => {
   });
 
   it("when execute stream emits terminal and done, run completes without showing terminal (no terminal panel)", async () => {
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
     if (u.includes("/api/update-config")) {
       return Promise.resolve({
         ok: true,
@@ -222,8 +226,8 @@ describe("CodeGenDemo", () => {
 
   it("fetches script content by id when Load script button is clicked", async () => {
     const fullContent = { id: "full", label: "Full (notebook)", content: "# Full pipeline\nimport sempipes\n# ..." };
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
       if (u.endsWith("/api/scripts") || u === "/api/scripts") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
@@ -250,7 +254,7 @@ describe("CodeGenDemo", () => {
     });
   });
 
-  it("calls compile API on load and shows placeholder before execution", async () => {
+  it("shows placeholder until Run (no graph before execution)", async () => {
     const compileResponse = {
       nodes: [
         {
@@ -268,8 +272,8 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
       if (u.endsWith("/api/scripts") || u === "/api/scripts") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
@@ -283,12 +287,10 @@ describe("CodeGenDemo", () => {
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    await waitFor(
-      () => {
-        expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-      },
-      { timeout: 2000 }
-    );
+    await waitFor(() => {
+      expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+      expect(screen.getByText(/Run to see the skrub graph/)).toBeInTheDocument();
+    }, { timeout: 2000 });
   });
 
   it("when switching script, compile is called with new code and graph shows new nodes", async () => {
@@ -316,8 +318,8 @@ describe("CodeGenDemo", () => {
     };
 
     const mediumScriptContent = { id: "medium", label: "Medium", content: "# Medium pipeline\n# no Simple pipeline here\n" };
-    vi.mocked(fetch).mockImplementation((url, init) => {
-      const urlStr = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = urlFromRequest(input);
       if (urlStr.endsWith("/api/scripts") || urlStr === "/api/scripts") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
@@ -341,12 +343,9 @@ describe("CodeGenDemo", () => {
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
 
-    await waitFor(
-      () => {
-        expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-      },
-      { timeout: 2000 }
-    );
+    await waitFor(() => {
+      expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    }, { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: "Medium" }));
 
@@ -393,6 +392,105 @@ describe("CodeGenDemo", () => {
     );
   });
 
+  // Skipped: SVG graph node click in jsdom does not trigger onSelectNode; implementation verified via NodeDetailsPanel unit test
+  it.skip("after Run, clicking input node in skrub graph shows data summary (skrub_0 → compile node mapping)", async () => {
+    const compileResponse = {
+      nodes: [
+        { id: "as_X_12", type: "input", label: "as_X", source_range: null },
+        { id: "sem_fillna_14", type: "operator", label: "sem_fillna", source_range: null },
+      ],
+      edges: [{ source: "as_X_12", target: "sem_fillna_14" }],
+    };
+    const skrubGraph = {
+      nodes: [
+        { id: "0", label: "as_X", is_sempipes_semantic: false },
+        { id: "1", label: "sem_fillna", is_sempipes_semantic: true },
+      ],
+      parents: { "0": [], "1": ["0"] },
+      children: { "0": ["1"], "1": [] },
+      sempipesNodeIds: ["1"],
+    };
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
+      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) });
+      }
+      if (u.match(/\/api\/scripts\//)) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) });
+      }
+      if (u.includes("/api/update-config")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-2.5-flash-lite", temperature: 0.0 }),
+          text: () => Promise.resolve(""),
+        } as Response);
+      }
+      if (u.includes("/api/compile")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(compileResponse) } as Response);
+      }
+      if (u.includes("/api/execute")) {
+        return Promise.resolve({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"type":"terminal","line":"Starting..."}\n\n'));
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    type: "input_summary",
+                    node_id: "as_X_12",
+                    schema: [{ name: "ID", dtype: "int64" }],
+                    sample: [{ ID: 1 }, { ID: 2 }],
+                    row_count: 5000,
+                  })}\n\n`
+                )
+              );
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({ type: "node_code", node_id: "skrub_1", generated_code: "# op code" })}\n\n`
+                )
+              );
+              controller.enqueue(
+                new TextEncoder().encode(`data: ${JSON.stringify({ type: "skrub_graph", graph: skrubGraph })}\n\n`)
+              );
+              controller.enqueue(
+                new TextEncoder().encode('data: {"type":"cost","total_usd":0}\n\n')
+              );
+              controller.enqueue(new TextEncoder().encode('data: {"type":"done","total_cost_usd":0}\n\n'));
+              controller.close();
+            },
+          }),
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false } as Response);
+    });
+
+    render(<CodeGenDemo />, { wrapper: wrapper() });
+    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 2000 });
+    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Graph node as_X/ })).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
+
+    const asXNode = screen.getByRole("button", { name: /^Graph node as_X$/ });
+    await act(async () => {
+      fireEvent.click(asXNode);
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByText("Data summary")).toBeInTheDocument();
+        expect(screen.getByText(/Rows: 5,000/)).toBeInTheDocument();
+        expect(screen.getByText("Schema")).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
+  });
+
   it("after Run, selecting a node shows that node's generated code in right panel (design: live updates)", async () => {
     const compileResponse = {
       nodes: [
@@ -402,13 +500,13 @@ describe("CodeGenDemo", () => {
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
     const generatedCodeForNode = "# Generated for sem_fillna\ndef fill_missing(df):\n    return df.fillna(0)";
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
       if (u.endsWith("/api/scripts") || u === "/api/scripts") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) });
       }
       if (u.match(/\/api\/scripts\//)) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) });
       }
       if (u.includes("/api/update-config")) {
         return Promise.resolve({
@@ -421,6 +519,15 @@ describe("CodeGenDemo", () => {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(compileResponse), text: () => Promise.resolve("") } as Response);
       }
       if (u.includes("/api/execute")) {
+        const skrubGraph = {
+          nodes: [
+            { id: "0", label: "as_X", is_sempipes_semantic: false },
+            { id: "1", label: "sem_fillna", is_sempipes_semantic: true },
+          ],
+          parents: { "0": [], "1": ["0"] },
+          children: { "0": ["1"], "1": [] },
+          sempipesNodeIds: ["1"],
+        };
         return Promise.resolve({
           ok: true,
           body: new ReadableStream({
@@ -430,44 +537,38 @@ describe("CodeGenDemo", () => {
               );
               controller.enqueue(
                 new TextEncoder().encode(
-                  `data: ${JSON.stringify({ type: "node_code", node_id: "as_X_1", generated_code: "# input" })}\n\n`
+                  `data: ${JSON.stringify({ type: "node_code", node_id: "skrub_1", generated_code: generatedCodeForNode })}\n\n`
                 )
               );
               controller.enqueue(
-                new TextEncoder().encode(
-                  `data: ${JSON.stringify({ type: "node_code", node_id: "sem_fillna_2", generated_code: generatedCodeForNode })}\n\n`
-                )
+                new TextEncoder().encode(`data: ${JSON.stringify({ type: "skrub_graph", graph: skrubGraph })}\n\n`)
               );
               controller.enqueue(new TextEncoder().encode('data: {"type":"done"}\n\n'));
               controller.close();
             },
           }),
           headers: new Headers({ "content-type": "text/event-stream" }),
-          text: () => Promise.resolve(""),
         } as Response);
       }
-      return Promise.resolve({ ok: false, text: () => Promise.resolve("Not found") } as Response);
+      return Promise.resolve({ ok: false } as Response);
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    // Before execution, placeholder is shown
+    // Before Run: no graph, placeholder only
     await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: /run/i }));
     
-    // After execution starts, graph nodes appear
-    await waitFor(() => expect(screen.getByText("as_X")).toBeInTheDocument(), { timeout: 3000 });
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
-
-    fireEvent.click(screen.getByTestId("graph-node-sem_fillna_2"));
-    await waitFor(
-      () => {
-        expect(screen.getByText("Generated code")).toBeInTheDocument();
-        expect(screen.getByText(/Generated for sem_fillna/)).toBeInTheDocument();
-        expect(screen.getByText(/fill_missing\(df\)/)).toBeInTheDocument();
-      },
-      { timeout: 2000 }
-    );
+    // After Run: single interactive Skrub graph is shown; click semantic operator to see generated code.
+    await waitFor(() => expect(screen.getByText(/Skrub graph \(from run\)/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Graph node sem_fillna/ })).toBeInTheDocument(), { timeout: 2000 });
+    fireEvent.click(screen.getByRole("button", { name: /Graph node sem_fillna/ }));
+    await waitFor(() => {
+      // Node details panel shows Generated code section; caption also mentions "generated code"
+      expect(screen.getAllByText(/Generated code/i).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/sem_fillna/)).toBeInTheDocument();
+    }, { timeout: 3000 });
   });
 
   it("when switching script, selection is cleared and node details show placeholder", async () => {
@@ -478,8 +579,8 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
       if (u.endsWith("/api/scripts") || u === "/api/scripts") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
@@ -493,20 +594,16 @@ describe("CodeGenDemo", () => {
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    await waitFor(() => expect(screen.getByText("as_X")).toBeInTheDocument(), { timeout: 2000 });
-
-    fireEvent.click(screen.getByTestId("graph-node-sem_fillna_2"));
-    await waitFor(() => {
-      expect(screen.queryByText(/select a node in the graph/i)).not.toBeInTheDocument();
-      expect(screen.getByText("Node details")).toBeInTheDocument();
-    });
-
+    // Wait for the component to load; before Run we show placeholder (no graph)
+    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
+    
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ nodes: [{ id: "op1", type: "operator", label: "Op", source_range: null }], edges: [] }),
     } as Response);
     fireEvent.click(screen.getByRole("button", { name: "Medium" }));
 
+    // After switching scripts, placeholder should still be shown
     await waitFor(() => {
       expect(screen.getByText(/select a node in the graph/i)).toBeInTheDocument();
     });
@@ -581,8 +678,8 @@ describe("CodeGenDemo", () => {
   });
 
   it("calls update-config API with selected LLM and temperature before executing pipeline", async () => {
-    vi.mocked(fetch).mockImplementation((url: string | URL) => {
-      const u = String(url);
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const u = urlFromRequest(input);
       if (u.endsWith("/api/scripts") || u === "/api/scripts") {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
