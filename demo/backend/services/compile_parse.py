@@ -22,6 +22,8 @@ from models.schemas import CompileEdge, CompileNode, SourceRange
 
 # Patterns for "this line contains a pipeline node" (used to skip when building depends_on)
 _NODE_PATTERNS = (
+    r"skrub\.var\s*\(",
+    r"\.skb\.subsample\s*\(",
     r"sempipes\.as_X\s*\(",
     r"sempipes\.as_y\s*\(",
     r"\.sem_fillna\s*\(",
@@ -46,6 +48,8 @@ def _find_call_ranges(text: str) -> list[tuple[int, int, int, int, str, str, str
     results: list[tuple[int, int, int, int, str, str, str]] = []
     lines = text.split("\n")
 
+    skrub_var_pat = re.compile(r"skrub\.var\s*\(")
+    skb_subsample_pat = re.compile(r"\.skb\.subsample\s*\(")
     as_x_pat = re.compile(r"\bas_X\s*\(")
     as_y_pat = re.compile(r"\bas_y\s*\(")
     sem_fillna_pat = re.compile(r"\.sem_fillna\s*\(")
@@ -66,6 +70,16 @@ def _find_call_ranges(text: str) -> list[tuple[int, int, int, int, str, str, str
         # Only match in code; ignore content after first # (line comment)
         comment_start = line.find("#")
         search_line = line[:comment_start] if comment_start >= 0 else line
+        for m in skrub_var_pat.finditer(search_line):
+            # skrub.var("name", ...) or skrub.var('name', ...) -> capture name
+            name_match = re.search(r'skrub\.var\s*\(\s*["\']([^"\']*)["\']', search_line[m.start() :])
+            label = name_match.group(1) if name_match else "var"
+            add(one_indexed_line, m.start(), m.end(), f"var_{label}_{one_indexed_line}", "input", label)
+        for m in skb_subsample_pat.finditer(search_line):
+            # products.skb.subsample -> receiver is "products"
+            rec_match = re.search(r"(\w+)\.skb\.subsample", search_line[: m.end()])
+            label = rec_match.group(1) if rec_match else "subsample"
+            add(one_indexed_line, m.start(), m.end(), f"subsample_{one_indexed_line}", "operator", f"skb.subsample")
         for m in as_x_pat.finditer(search_line):
             add(one_indexed_line, m.start(), m.end(), f"as_X_{one_indexed_line}", "input", "as_X")
         for m in as_y_pat.finditer(search_line):
@@ -124,9 +138,9 @@ def _extract_produces_consumes(
     consumes: list[str] = []
     if node_label in ("as_X", "as_y"):
         return produces, consumes
-    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval)
+    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample)
     receiver_match = re.search(
-        r"(\w+)\.(?:sem_fillna|sem_gen_features|skb\.apply(?:_with_sem_choose)?|skb\.eval)\s*\(", line
+        r"(\w+)\.(?:sem_fillna|sem_gen_features|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample)\s*\(", line
     )
     if receiver_match:
         consumes.append(receiver_match.group(1))
