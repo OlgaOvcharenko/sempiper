@@ -81,6 +81,8 @@ interface NodeDetailsPanelProps {
   liveCostUsdByNode?: Record<string, number> | null;
   /** Per-node input summary (schema, sample, row_count) from last run (node_id → summary). */
   inputSummaryByNode?: Record<string, InputSummary> | null;
+  /** Resolved input summary for selected node (used when selected is skrub input; CodeGenDemo maps skrub_0 → compile node → summary). */
+  inputSummaryForSelectedNode?: InputSummary | null;
   /** Whether pipeline is currently executing (so we show "Generating..." until code arrives). */
   isExecuting?: boolean;
   /** When we have backend: metadata / LLM stats for the node. */
@@ -100,6 +102,7 @@ export function NodeDetailsPanel({
   liveFallbackByNode = null,
   liveCostUsdByNode,
   inputSummaryByNode,
+  inputSummaryForSelectedNode,
   isExecuting = false,
   nodeMetadata = null,
   expandButton = null,
@@ -147,8 +150,8 @@ export function NodeDetailsPanel({
           <>
             <section>
               <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Data summary</h3>
-              {selectedNodeId && inputSummaryByNode?.[selectedNodeId] ? (
-                <InputSummaryView summary={inputSummaryByNode[selectedNodeId]} />
+              {(inputSummaryForSelectedNode ?? (selectedNodeId && inputSummaryByNode?.[selectedNodeId])) ? (
+                <InputSummaryView summary={inputSummaryForSelectedNode ?? inputSummaryByNode![selectedNodeId!]} />
               ) : isExecuting ? (
                 <p className="text-sm text-zinc-500 italic py-3">
                   Running pipeline… data summary will appear when this input is processed.
@@ -173,7 +176,7 @@ export function NodeDetailsPanel({
                 <CodeOutput code={effectiveCode || ""} language="python" isLoading={false} isExpanded={isExpanded} />
               ) : (
                 <p className="text-sm text-zinc-500 italic py-3">
-                  No generated code for this node. Run the pipeline to generate.
+                  No generated code for this sempipes operator. Run the pipeline to generate code for each operator.
                 </p>
               )}
             </section>
