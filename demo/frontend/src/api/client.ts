@@ -157,7 +157,16 @@ export type ExecuteEvent =
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
   | { type: "cost"; total_usd: number }
   | { type: "done"; total_cost_usd?: number }
-  | { type: "skrub_graph"; svg: string };
+  | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string };
+
+/** Skrub DAG from _Graph().run(dag): nodes, parents, children (interactive viz). */
+export interface SkrubGraphDict {
+  nodes: Array<{ id: string; label: string; is_sempipes_semantic?: boolean }>;
+  parents: Record<string, string[]>;
+  children: Record<string, string[]>;
+  /** Sempipes semantic operator node ids in execution (topo) order; index matches captured code. */
+  sempipesNodeIds?: string[];
+}
 
 /** Request to update sempipes config (LLM name and temperature). */
 export interface UpdateConfigRequest {
