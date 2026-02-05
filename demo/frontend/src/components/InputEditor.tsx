@@ -227,7 +227,7 @@ export function InputEditor({
           minimap: { enabled: false },
           fontSize: 11,
           fontFamily: "ui-monospace, monospace",
-          padding: { top: 8, left: 8 },
+          padding: { top: 8 },
           scrollBeyondLastLine: false,
           wordWrap: isExpanded ? "off" : "on",
           wrappingStrategy: "advanced",
