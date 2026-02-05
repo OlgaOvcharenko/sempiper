@@ -57,7 +57,7 @@ def test_get_script_content_simple_returns_200_and_content():
     assert "content" in data
     assert isinstance(data["content"], str)
     assert len(data["content"]) > 0
-    assert "as_X" in data["content"]
+    assert "sem_fillna" in data["content"]
     assert "sempipes" in data["content"]
 
 
@@ -411,8 +411,8 @@ fraud_detector = augmented_baskets.skb.apply_with_sem_choose(hgb, y=fraud_flags,
     assert len(edge_from_y) >= 1, "apply_with_sem_choose should have incoming edge from as_y (y=)"
 
 
-def test_execute_stream_emits_skrub_graph_when_runner_returns_svg():
-    """When skrub graph runner returns SVG, stream includes skrub_graph event. Subprocess is mocked."""
+def test_execute_stream_emits_fallback_graph_when_runner_returns_only_svg():
+    """When runner returns only SVG (no ##SKRUB_GRAPH##), we emit fallback graph from compile so user sees a graph."""
     import json
     from unittest.mock import MagicMock, patch
 
@@ -440,13 +440,13 @@ def test_execute_stream_emits_skrub_graph_when_runner_returns_svg():
                 events.append(json.loads(line[6:]))
             except Exception:
                 pass
+    # When runner returns only SVG (no ##SKRUB_GRAPH##), we emit fallback graph from compile so user sees a graph
     skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
-    assert len(skrub_events) == 1
-    assert skrub_events[0].get("svg", "").strip().startswith("<svg")
+    assert len(skrub_events) >= 1, "emit fallback graph from compile when runner returns only SVG"
 
 
-def test_execute_stream_no_skrub_graph_when_runner_returns_empty_stdout():
-    """When skrub runner returns 0 but empty stdout, stream has no skrub_graph event."""
+def test_execute_stream_emits_fallback_graph_when_runner_returns_empty_stdout():
+    """When runner returns empty stdout, we emit fallback graph from compile so user sees a graph."""
     import json
     from unittest.mock import MagicMock, patch
 
@@ -469,11 +469,11 @@ def test_execute_stream_no_skrub_graph_when_runner_returns_empty_stdout():
             except json.JSONDecodeError:
                 pass
     skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
-    assert len(skrub_events) == 0
+    assert len(skrub_events) >= 1, "emit fallback graph when runner returns empty stdout"
 
 
-def test_execute_stream_no_skrub_graph_when_runner_returns_non_svg():
-    """When runner stdout does not look like SVG (no leading <), no skrub_graph event."""
+def test_execute_stream_emits_fallback_graph_when_runner_returns_non_svg():
+    """When runner stdout does not contain ##SKRUB_GRAPH##, we emit fallback graph from compile so user sees a graph."""
     import json
     from unittest.mock import MagicMock, patch
 
@@ -496,7 +496,132 @@ def test_execute_stream_no_skrub_graph_when_runner_returns_non_svg():
             except json.JSONDecodeError:
                 pass
     skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
-    assert len(skrub_events) == 0
+    assert len(skrub_events) >= 1, "emit fallback graph when runner does not return ##SKRUB_GRAPH##"
+
+
+def test_execute_stream_emits_full_dag_when_skrub_misses_inputs():
+    """When skrub graph has only sem_fillna+skb.eval, merge adds var+subsample so graph is full DAG."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    # Skrub returns graph without input nodes (common with sempipes Apply)
+    skrub_graph_json = json.dumps({
+        "nodes": [
+            {"id": "0", "label": "sem_fillna", "is_sempipes_semantic": True},
+            {"id": "1", "label": "skb.eval", "is_sempipes_semantic": False},
+        ],
+        "parents": {"0": [], "1": ["0"]},
+        "children": {"0": ["1"], "1": []},
+        "sempipesNodeIds": ["0"],
+    })
+
+    def _fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout.readline.side_effect = [
+            b"##SKRUB_GRAPH##\n",
+            (skrub_graph_json + "\n").encode("utf-8"),
+            b"##END##\n",
+            b"",
+        ]
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    code = """
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100)
+products = products.sem_fillna(target_column="make")
+result = products.skb.eval()
+"""
+    with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen):
+        resp = client.post("/api/execute", json={"input_code": code})
+    assert resp.status_code == 200
+    events = []
+    for line in resp.text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+    skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
+    assert len(skrub_events) >= 1, "must emit skrub_graph"
+    graph = skrub_events[0].get("graph", {})
+    nodes = graph.get("nodes", [])
+    labels = [n.get("label", "") for n in nodes]
+    assert "products" in labels, "merge must add var (products) for full DAG"
+    assert "skb.subsample" in labels, "merge must add subsample for full DAG"
+    assert "sem_fillna" in labels, "skrub sem_fillna must remain"
+    assert "skb.eval" in labels, "skrub skb.eval must remain"
+
+
+def test_execute_stream_emits_skrub_graph_only_when_runner_prints_marker():
+    """We emit skrub_graph only when runner prints ##SKRUB_GRAPH## with a valid graph dict (real skrub)."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    real_skrub_graph = {
+        "nodes": [{"id": "n1", "label": "as_X", "is_sempipes_semantic": False}, {"id": "n2", "label": "sem_fillna", "is_sempipes_semantic": True}],
+        "parents": {"n1": [], "n2": ["n1"]},
+        "children": {"n1": ["n2"], "n2": []},
+        "sempipesNodeIds": ["n2"],
+    }
+    # Runner prints marker, then json line, then end (readline returns one line at a time)
+    def _fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout.readline.side_effect = [
+            b"##SKRUB_GRAPH##\n",
+            (json.dumps(real_skrub_graph) + "\n").encode("utf-8"),
+            b"##END##\n",
+            b"",
+        ]
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen):
+        resp = client.post("/api/execute", json={"input_code": "x = sempipes.as_X(df)\ndf.sem_fillna()"})
+    assert resp.status_code == 200
+    events = []
+    for line in resp.text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+    skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
+    assert len(skrub_events) == 1
+    graph = skrub_events[0].get("graph")
+    assert graph is not None
+    assert graph.get("nodes") == real_skrub_graph["nodes"]
+    assert "n1" in (graph.get("parents") or {})
+
+    # Input nodes get node_code with skrub_<id> so graph shows "done" status
+    node_code_events = [e for e in events if e.get("type") == "node_code"]
+    skrub_input_codes = [e for e in node_code_events if e.get("node_id") == "skrub_n1"]
+    assert len(skrub_input_codes) >= 1, "input nodes should get node_code with skrub_<id> for status badges"
+
+
+def test_skrub_runner_treats_apply_nodes_as_semantic_and_maps_to_sempipes():
+    """Apply nodes (e.g. Apply ImputedLearner) are semantic and displayed as sempipes operators."""
+    from services.skrub_graph_runner import (
+        _is_sempipes_semantic_label,
+        _apply_label_to_sempipes_operator,
+    )
+
+    assert _is_sempipes_semantic_label("Apply ImputedLearner") is True
+    assert _is_sempipes_semantic_label("Apply LLMImputer") is True
+    assert _is_sempipes_semantic_label("Apply CodeBasedFeatureExtractor") is True
+    assert _is_sempipes_semantic_label("sem_fillna") is True
+    assert _is_sempipes_semantic_label("Subsample") is False
+
+    assert _apply_label_to_sempipes_operator("Apply ImputedLearner") == "sem_fillna"
+    assert _apply_label_to_sempipes_operator("Apply LLMImputer") == "sem_fillna"
+    assert _apply_label_to_sempipes_operator("Apply CodeBasedFeatureExtractor") == "sem_gen_features"
+    assert _apply_label_to_sempipes_operator("Apply CodeDataAugmentor") == "sem_augment"
+    assert _apply_label_to_sempipes_operator("Apply SelectCols") == "sem_select"
+    assert _apply_label_to_sempipes_operator("Subsample") == "Subsample"
 
 
 def test_execute_stream_includes_node_code_per_runnable_node():
@@ -632,6 +757,28 @@ def test_execute_stream_includes_cost_and_done_total_cost():
     assert "total_cost_usd" in done_events[-1], "done event must include total_cost_usd"
 
 
+def test_compile_simple_pipeline_full_dag_var_subsample_sem_fillna_eval():
+    """Compile returns full DAG for simple pipeline: skrub.var, skb.subsample, sem_fillna, skb.eval."""
+    code = """
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100, how="random")
+products = products.sem_fillna(target_column="make")
+result = products.skb.eval()
+"""
+    resp = client.post("/api/compile", json={"input_code": code})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data["nodes"]
+    edges = data["edges"]
+    labels = [n["label"] for n in nodes]
+    assert "products" in labels, "var node (products) should be in graph"
+    assert "skb.subsample" in labels, "subsample node should be in graph"
+    assert "sem_fillna" in labels, "sem_fillna node should be in graph"
+    assert "skb.eval" in labels, "skb.eval node should be in graph"
+    assert len(nodes) >= 4, "expect at least 4 nodes for full DAG"
+    assert len(edges) >= 3, "expect at least 3 edges (var->subsample->sem_fillna->eval)"
+
+
 def test_compile_exact_nodes_and_edge_chain_for_snippet():
     """Functionality: compile returns exact node count and edges form a linear chain for known code."""
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
@@ -649,7 +796,7 @@ def test_compile_exact_nodes_and_edge_chain_for_snippet():
 
 
 def test_execute_node_code_ids_match_compile_runnable_nodes():
-    """Functionality: execute stream emits node_code for the same node ids that compile returns."""
+    """Execute stream emits node_code for every compile runnable node (may also emit skrub_<id> for graph)."""
     import json
 
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
@@ -669,7 +816,7 @@ def test_execute_node_code_ids_match_compile_runnable_nodes():
             except json.JSONDecodeError:
                 pass
     node_code_ids = {e["node_id"] for e in events if e.get("type") == "node_code"}
-    assert node_code_ids == runnable_ids, "execute node_code node_ids should match compile runnable nodes"
+    assert runnable_ids <= node_code_ids, "execute must emit node_code for every compile runnable node"
 
 
 def test_execute_stream_does_not_call_sempipes_llm_directly():
