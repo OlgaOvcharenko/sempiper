@@ -4,21 +4,39 @@ Inspired by sempipes/demo.ipynb: as_X, as_y, sem_fillna, sem_gen_features,
 skb.apply, apply_with_sem_choose, sem_choose, skb.eval. Also supports legacy source/op/pipeline.
 Uses simple regex/line scan; does not depend on sempipes.
 
-This module provides a STATIC PREVIEW graph before execution. After running the pipeline,
-the demo displays skrub's NATIVE GRAPH (authoritative):
-  - DataOp.skb.draw_graph() → SVG/PNG (GraphDrawing with .svg, .png, .open())
-    https://skrub-data.org/stable/reference/generated/skrub.DataOp.skb.draw_graph.html
-  - DataOp.skb.describe_steps() → text representation (one step per line)
-    https://skrub-data.org/stable/reference/generated/skrub.DataOp.skb.describe_steps.html
-
 The static graph is a DAG that reflects data flow: edges go from the node that
 produces a variable to the node that consumes it (not document order).
-Skrub's native graph is always more accurate and complete.
 """
 
 import re
+from typing import NamedTuple
 
 from models.schemas import CompileEdge, CompileNode, SourceRange
+
+
+class _RawEntry(NamedTuple):
+    """Parsed pipeline call: (start_line, start_col, end_line, end_col, node_id, node_type, label)."""
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+    node_id: str
+    node_type: str
+    label: str
+
+
+def _line_at(lines: list[str], one_indexed_line: int) -> str:
+    """Return line at 1-based index, or empty string if out of range."""
+    return lines[one_indexed_line - 1] if 1 <= one_indexed_line <= len(lines) else ""
+
+
+def _line_context(lines: list[str], start_line: int, extra_lines: int = 4) -> str:
+    """Return lines from start_line (1-based) for multi-line context."""
+    if start_line < 1 or start_line > len(lines):
+        return ""
+    end = min(start_line + extra_lines, len(lines) + 1)
+    return "\n".join(lines[start_line - 1 : end])
 
 # Patterns for "this line contains a pipeline node" (used to skip when building depends_on)
 _NODE_PATTERNS = (
@@ -43,9 +61,9 @@ _PY_KEYWORDS = frozenset(
 )
 
 
-def _find_call_ranges(text: str) -> list[tuple[int, int, int, int, str, str, str]]:
-    """Find sempipe-style calls. Returns (start_line, start_col, end_line, end_col, node_id, type, label)."""
-    results: list[tuple[int, int, int, int, str, str, str]] = []
+def _find_call_ranges(text: str) -> list[_RawEntry]:
+    """Find sempipe-style calls. Returns list of _RawEntry."""
+    results: list[_RawEntry] = []
     lines = text.split("\n")
 
     skrub_var_pat = re.compile(r"skrub\.var\s*\(")
@@ -54,7 +72,6 @@ def _find_call_ranges(text: str) -> list[tuple[int, int, int, int, str, str, str
     as_y_pat = re.compile(r"\bas_y\s*\(")
     sem_fillna_pat = re.compile(r"\.sem_fillna\s*\(")
     sem_gen_features_pat = re.compile(r"\.sem_gen_features\s*\(")
-    # Match apply_with_sem_choose before skb.apply (longer pattern first)
     apply_with_sem_choose_pat = re.compile(r"\.skb\.apply_with_sem_choose\s*\(")
     skb_apply_pat = re.compile(r"\.skb\.apply\s*\(")
     skb_eval_pat = re.compile(r"\.skb\.eval\s*\(")
@@ -64,7 +81,7 @@ def _find_call_ranges(text: str) -> list[tuple[int, int, int, int, str, str, str
     pipeline_pat = re.compile(r"\bpipeline\s*\(")
 
     def add(line_no: int, start: int, end: int, node_id: str, node_type: str, label: str) -> None:
-        results.append((line_no, start + 1, line_no, end, node_id, node_type, label))
+        results.append(_RawEntry(line_no, start + 1, line_no, end, node_id, node_type, label))
 
     for one_indexed_line, line in enumerate(lines, start=1):
         # Only match in code; ignore content after first # (line comment)
@@ -129,7 +146,7 @@ def _extract_produces_consumes(
     From the line containing a pipeline call, extract (produces_var, consumes_vars).
     produces_var: LHS of assignment (e.g. basket_ids in "basket_ids = sempipes.as_X(...)").
     consumes_vars: receiver before the dot (e.g. products in "products.sem_fillna") and, for
-    apply_with_sem_choose, the y= argument.
+    apply_with_sem_choose, the y= argument. For as_X/as_y, the first argument (e.g. baskets).
     """
     left = line[: call_start + 1]
     lhs_match = re.search(r"(\w+)\s*=\s*[^=]*$", left)
@@ -137,6 +154,12 @@ def _extract_produces_consumes(
 
     consumes: list[str] = []
     if node_label in ("as_X", "as_y"):
+        # First argument: as_X(baskets[["ID"]], ...) or as_y(baskets["fraud_flag"], ...) -> consumes baskets
+        # Search line_context when multi-line (e.g. as_X(\n    baskets[...])
+        search_text = (line_context or line)
+        first_arg_match = re.search(r"(?:as_X|as_y)\s*\(\s*(\w+)", search_text)
+        if first_arg_match:
+            consumes.append(first_arg_match.group(1))
         return produces, consumes
     # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample)
     receiver_match = re.search(
@@ -205,33 +228,73 @@ def _resolve_producers(
     return []
 
 
-def _infer_edges_from_flow(
-    raw: list[tuple[int, int, int, int, str, str, str]],
-    lines: list[str],
-) -> list[CompileEdge]:
+def _add_edge(
+    edges: list[CompileEdge],
+    seen: set[tuple[str, str]],
+    source: str,
+    target: str,
+) -> None:
+    """Add edge if not already present."""
+    if source != target and (source, target) not in seen:
+        seen.add((source, target))
+        edges.append(CompileEdge(source=source, target=target))
+
+
+def _infer_edges_from_flow(raw: list[_RawEntry], lines: list[str]) -> list[CompileEdge]:
     """
     Infer DAG edges from data flow: who produces a var and who consumes it.
+    Build var_producer in document order; resolve consumes for each node; ensure
+    as_X/as_y get edges from subsample; add sem_choose -> apply_with_sem_choose.
     """
     depends_on = _build_depends_on(lines)
     var_producer: dict[str, str] = {}
     edges: list[CompileEdge] = []
-    seen_edges: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
 
-    for start_line, start_col, end_line, end_col, node_id, node_type, label in raw:
-        line = lines[start_line - 1] if start_line <= len(lines) else ""
-        # Multi-line context for y= in apply_with_sem_choose
-        line_context = "\n".join(lines[start_line - 1 : start_line + 4]) if start_line <= len(lines) else line
+    # Pass 1: data flow (produces/consumes)
+    for r in raw:
+        line = _line_at(lines, r.start_line)
+        ctx = _line_context(lines, r.start_line)
         produces, consumes_list = _extract_produces_consumes(
-            line, label, node_type, start_col - 1, line_context=line_context
+            line, r.label, r.node_type, r.start_col - 1, line_context=ctx
         )
-        # Resolve consumes before recording this node as producer (so we don't self-reference)
-        for c in consumes_list:
-            for src_id in _resolve_producers(c, var_producer, depends_on, set()):
-                if src_id != node_id and (src_id, node_id) not in seen_edges:
-                    seen_edges.add((src_id, node_id))
-                    edges.append(CompileEdge(source=src_id, target=node_id))
+        for var in consumes_list:
+            for src_id in _resolve_producers(var, var_producer, depends_on, set()):
+                _add_edge(edges, seen, src_id, r.node_id)
         if produces:
-            var_producer[produces] = node_id
+            var_producer[produces] = r.node_id
+
+    # Pass 2: ensure as_X/as_y have edges from subsample (explicit handling)
+    # Use _resolve_producers to follow full dependency chain; use line_context for multi-line calls
+    for r in raw:
+        if r.label not in ("as_X", "as_y"):
+            continue
+        line = _line_at(lines, r.start_line)
+        ctx = _line_context(lines, r.start_line)
+        _, consumes_list = _extract_produces_consumes(
+            line, r.label, r.node_type, r.start_col - 1, line_context=ctx
+        )
+        for var in consumes_list:
+            for src_id in _resolve_producers(var, var_producer, depends_on, set()):
+                if src_id == r.node_id:
+                    continue
+                src_entry = next((x for x in raw if x.node_id == src_id), None)
+                if src_entry and src_entry.label == "skb.subsample":
+                    _add_edge(edges, seen, src_id, r.node_id)
+                    break
+            else:
+                continue
+            break
+
+    # sem_choose -> apply_with_sem_choose (choices= parameter)
+    apply_nodes = [(r.start_line, r.node_id) for r in raw if r.label == "apply_with_sem_choose"]
+    for r in raw:
+        if r.label != "sem_choose" or not apply_nodes:
+            continue
+        containing = [(sl, nid) for sl, nid in apply_nodes if sl < r.start_line]
+        if containing:
+            _, apply_id = max(containing, key=lambda x: x[0])
+            _add_edge(edges, seen, r.node_id, apply_id)
 
     return edges
 
@@ -242,20 +305,20 @@ def extract_nodes_with_ranges(input_code: str) -> tuple[list[CompileNode], list[
     lines = input_code.split("\n")
     seen: set[str] = set()
     nodes: list[CompileNode] = []
-    for start_line, start_col, end_line, end_col, node_id, node_type, label in raw:
-        if node_id in seen:
+    for r in raw:
+        if r.node_id in seen:
             continue
-        seen.add(node_id)
+        seen.add(r.node_id)
         nodes.append(
             CompileNode(
-                id=node_id,
-                type=node_type,
-                label=label,
+                id=r.node_id,
+                type=r.node_type,
+                label=r.label,
                 source_range=SourceRange(
-                    start_line=start_line,
-                    start_column=start_col,
-                    end_line=end_line,
-                    end_column=end_col,
+                    start_line=r.start_line,
+                    start_column=r.start_col,
+                    end_line=r.end_line,
+                    end_column=r.end_col,
                 ),
             )
         )
