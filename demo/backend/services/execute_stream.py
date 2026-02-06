@@ -21,12 +21,15 @@ logger = logging.getLogger(__name__)
 
 # Backend root (demo/backend) so -m services.skrub_graph_runner resolves when cwd is set.
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Directory for saved skrub native SVG graphs (demo/graph_svgs/), keyed by script id.
+_GRAPH_SVGS_DIR = os.path.join(os.path.dirname(_BACKEND_ROOT), "graph_svgs")
 
 # Marker and format emitted by skrub_graph_runner for each operator-generated code block.
 _SEMPIPES_NODE_CODE_MARKER = "##SEMPIPES_NODE_CODE##"
 _SEMPIPES_NODE_CODE_END = "##END##"
 _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
+_SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 
 
 def _parse_captured_codes_from_stdout(stdout_str: str) -> list[str]:
@@ -69,6 +72,24 @@ def _parse_skrub_graph_from_stdout(stdout_str: str) -> dict | None:
             return obj
     except (json.JSONDecodeError, TypeError):
         pass
+    return None
+
+
+def _parse_skrub_svg_from_stdout(stdout_str: str) -> str | None:
+    """
+    Parse ##SKRUB_GRAPH_SVG##\\n{svg}\\n##END## block from runner stdout.
+    Returns the native skrub SVG string, or None.
+    """
+    pattern = re.compile(
+        re.escape(_SKRUB_GRAPH_SVG_MARKER) + r"\s*\n(.*?)\n" + re.escape(_SKRUB_GRAPH_END),
+        re.DOTALL,
+    )
+    m = pattern.search(stdout_str)
+    if not m:
+        return None
+    svg = m.group(1).strip()
+    if svg.startswith("<svg") and "</svg>" in svg:
+        return svg
     return None
 
 
@@ -226,6 +247,39 @@ def _build_fallback_graph_from_compile(
     }
 
 
+def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
+    """
+    Build mapping from skrub graph node id to compile node id.
+    Used by frontend to highlight code when user clicks a graph node.
+    """
+    if not graph or not runnable:
+        return {}
+    nodes = graph.get("nodes") or []
+    result: dict[str, str] = {}
+    # Fallback graph: node ids are "0","1","2" and count matches runnable
+    if (
+        len(nodes) == len(runnable)
+        and all(sn.get("id", "").isdigit() for sn in nodes if sn.get("id"))
+    ):
+        for sn in nodes:
+            skid = sn.get("id")
+            if skid and skid.isdigit():
+                idx = int(skid)
+                if 0 <= idx < len(runnable):
+                    result[skid] = getattr(runnable[idx], "id", str(runnable[idx]))
+    # Otherwise match by label
+    for sn in nodes:
+        skid = sn.get("id")
+        if not skid or skid in result:
+            continue
+        label = sn.get("label", "")
+        for n in runnable:
+            if (getattr(n, "label", n.id) or "") == label:
+                result[skid] = getattr(n, "id", str(n))
+                break
+    return result
+
+
 def _mock_generated_code_for_node(node_id: str, label: str, node_type: str) -> str:
     """Return placeholder code when no captured code from pipeline run (demo fallback)."""
     if node_type == "input":
@@ -239,7 +293,36 @@ def _mock_generated_code_for_node(node_id: str, label: str, node_type: str) -> s
     )
 
 
-def stream_execute_events(input_code: str):
+def _sanitize_svg_for_save(svg: str) -> str:
+    """Remove any trailing ##END## or runner markers that may have been captured."""
+    s = svg.strip()
+    if s.endswith("##END##"):
+        s = s[: -len("##END##")].strip()
+    if s.endswith("\n##END##"):
+        s = s[: -len("\n##END##")].strip()
+    return s
+
+
+def _save_skrub_svg_to_disk(svg: str, script_id: str) -> None:
+    """Save native skrub SVG to demo/graph_svgs/{script_id}.svg, replacing existing file."""
+    if not script_id or not svg:
+        return
+    svg = _sanitize_svg_for_save(svg)
+    if not svg.startswith("<svg") or "</svg>" not in svg:
+        return
+    # Sanitize script_id to avoid path traversal
+    safe_id = "".join(c for c in script_id if c.isalnum() or c in "-_") or "custom"
+    os.makedirs(_GRAPH_SVGS_DIR, exist_ok=True)
+    path = os.path.join(_GRAPH_SVGS_DIR, f"{safe_id}.svg")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(svg)
+        logger.info(f"Saved skrub native graph SVG to {path}")
+    except OSError as e:
+        logger.warning(f"Could not save SVG to {path}: {e}")
+
+
+def stream_execute_events(input_code: str, script_id: str | None = None):
     """
     Yield SSE-formatted events: terminal, node_code (from pipeline run), input_summary, skrub_graph, cost, done.
     Operator-generated code comes from running the pipeline in a subprocess; we parse
@@ -254,75 +337,84 @@ def stream_execute_events(input_code: str):
         runnable_ids = {n.id for n in runnable}
 
         # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##), or SVG.
+        # When DEMO_E2E=1, skip real subprocess (no sempipes/LLM) for full-stack E2E tests.
         captured_codes: list[str] = []
         graph_from_run: dict | None = None
         svg_from_run: str | None = None
-        logger.info(f"Starting subprocess for {len(operator_nodes)} operators (no timeout)")
-        
-        # Prepare environment: pass sempipes config to subprocess
+        e2e_mode = os.environ.get("DEMO_E2E") == "1"
+        if e2e_mode:
+            logger.info("E2E mode: skipping subprocess, using fallback graph and mock code")
+            graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
+        else:
+            logger.info(f"Starting subprocess for {len(operator_nodes)} operators (no timeout)")
         subprocess_env = os.environ.copy()
-        try:
-            from services.engine import get_sempipes_config
-            cfg = get_sempipes_config()
-            if cfg and "llm_for_code_generation" in cfg:
-                llm_cfg = cfg["llm_for_code_generation"]
-                subprocess_env["SEMPIPES_LLM_NAME"] = llm_cfg.get("name", "")
-                temp = llm_cfg.get("parameters", {}).get("temperature", 0.0)
-                subprocess_env["SEMPIPES_LLM_TEMP"] = str(temp)
-                logger.info(f"Passing sempipes config to subprocess: {llm_cfg.get('name')} (temp={temp})")
-        except Exception as e:
-            logger.warning(f"Could not get sempipes config for subprocess: {e}")
-        
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "services.skrub_graph_runner"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=_BACKEND_ROOT,
-                env=subprocess_env,  # Pass environment with sempipes config
-                text=False,
-            )
-            logger.info(f"Subprocess started, PID: {proc.pid}")
-            stdout_chunks: list[bytes] = []
-
-            def read_stdout():
-                for chunk in iter(proc.stdout.readline, b""):
-                    stdout_chunks.append(chunk)
-                    try:
-                        print(chunk.decode("utf-8", errors="replace"), end="", file=sys.stdout, flush=True)
-                    except Exception:
-                        pass
-
-            reader = threading.Thread(target=read_stdout, daemon=True)
-            reader.start()
+        if not e2e_mode:
+            # Prepare environment: pass sempipes config to subprocess
             try:
-                proc.stdin.write(input_code.encode("utf-8"))
-                proc.stdin.close()
-                proc.wait()  # No timeout - let operators run as long as needed
-            finally:
-                reader.join(timeout=1.0)
-            decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
-            captured_codes = _parse_captured_codes_from_stdout(decoded)
-            logger.info(f"Subprocess returncode: {proc.returncode}, stdout: {len(decoded)} chars, captured: {len(captured_codes)} blocks")
-            if len(decoded) > 0:
-                logger.info(f"Stdout preview: {decoded[:200]}")
-            
-            # Check for subprocess failure
-            exec_failed = (proc.returncode != 0)
-            
-            # Extract skrub graph dict (##SKRUB_GRAPH##) or fallback to SVG
-            if decoded:
-                graph_from_run = _parse_skrub_graph_from_stdout(decoded)
-                if not graph_from_run:
-                    idx = decoded.find("<svg")
-                    if idx >= 0:
-                        svg_from_run = decoded[idx:].strip() or None
-                    # When runner returns SVG or nothing, build graph from compile so user sees a graph
-                    graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
-        except (FileNotFoundError, Exception) as e:
-            logger.error(f"Subprocess exception: {type(e).__name__}: {e}")
-            exec_failed = True
+                from services.engine import get_sempipes_config
+                cfg = get_sempipes_config()
+                if cfg and "llm_for_code_generation" in cfg:
+                    llm_cfg = cfg["llm_for_code_generation"]
+                    subprocess_env["SEMPIPES_LLM_NAME"] = llm_cfg.get("name", "")
+                    temp = llm_cfg.get("parameters", {}).get("temperature", 0.0)
+                    subprocess_env["SEMPIPES_LLM_TEMP"] = str(temp)
+                    logger.info(f"Passing sempipes config to subprocess: {llm_cfg.get('name')} (temp={temp})")
+            except Exception as e:
+                logger.warning(f"Could not get sempipes config for subprocess: {e}")
+        
+        if not e2e_mode:
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "services.skrub_graph_runner"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=_BACKEND_ROOT,
+                    env=subprocess_env,  # Pass environment with sempipes config
+                    text=False,
+                )
+                logger.info(f"Subprocess started, PID: {proc.pid}")
+                stdout_chunks: list[bytes] = []
+
+                def read_stdout():
+                    for chunk in iter(proc.stdout.readline, b""):
+                        stdout_chunks.append(chunk)
+                        try:
+                            print(chunk.decode("utf-8", errors="replace"), end="", file=sys.stdout, flush=True)
+                        except Exception:
+                            pass
+
+                reader = threading.Thread(target=read_stdout, daemon=True)
+                reader.start()
+                try:
+                    proc.stdin.write(input_code.encode("utf-8"))
+                    proc.stdin.close()
+                    proc.wait()  # No timeout - let operators run as long as needed
+                finally:
+                    reader.join(timeout=1.0)
+                decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+                captured_codes = _parse_captured_codes_from_stdout(decoded)
+                logger.info(f"Subprocess returncode: {proc.returncode}, stdout: {len(decoded)} chars, captured: {len(captured_codes)} blocks")
+                if len(decoded) > 0:
+                    logger.info(f"Stdout preview: {decoded[:200]}")
+                # Check for subprocess failure
+                exec_failed = (proc.returncode != 0)
+                # Extract skrub graph dict (##SKRUB_GRAPH##) and native SVG (##SKRUB_GRAPH_SVG##)
+                if decoded:
+                    graph_from_run = _parse_skrub_graph_from_stdout(decoded)
+                    svg_from_run = _parse_skrub_svg_from_stdout(decoded)
+                    if not svg_from_run:
+                        idx = decoded.find("<svg")
+                        if idx >= 0:
+                            svg_from_run = decoded[idx:].strip() or None
+                    if not graph_from_run:
+                        graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
+                    # Save native skrub SVG to disk, keyed by script name
+                    if svg_from_run and script_id:
+                        _save_skrub_svg_to_disk(svg_from_run, script_id)
+            except (FileNotFoundError, Exception) as e:
+                logger.error(f"Subprocess exception: {type(e).__name__}: {e}")
+                exec_failed = True
 
         # Ensure we have a graph to show when runner returns nothing or fails
         if not graph_from_run and runnable:
@@ -408,7 +500,17 @@ def stream_execute_events(input_code: str):
 
         # Emit graph when we have nodes (from runner ##SKRUB_GRAPH## or fallback from compile)
         if graph_from_run and len(runner_nodes) > 0:
-            yield f"data: {json.dumps({'type': 'skrub_graph', 'graph': graph_from_run})}\n\n".encode()
+            skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
+            yield f"data: {json.dumps({'type': 'skrub_graph', 'graph': graph_from_run, 'skrubToCompileId': skrub_to_compile})}\n\n".encode()
+            # Emit input_summary with skrub node ids so frontend can show data when user selects input nodes
+            for sn in runner_nodes:
+                skid = sn.get("id")
+                if not skid or skid in sempipes_node_ids:
+                    continue
+                compile_node = next((n for n in runnable if (getattr(n, "label", n.id) or "") == sn.get("label", "")), None)
+                if compile_node and (getattr(compile_node, "type", "") or "").lower() == "input":
+                    summary = _mock_input_summary(f"skrub_{skid}", sn.get("label", ""))
+                    yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
 
         # Emit error if subprocess failed
         if exec_failed:

@@ -168,6 +168,7 @@ def _assignments_in_order(code):
 
 _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
+_SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 
 
 def _get_pipeline_result_dataop(code, globals_dict):
@@ -358,32 +359,36 @@ def _graph_to_serializable(raw):
 
 def _get_skrub_dag_dict(code, globals_dict):
     """
-    Get skrub DAG as a serializable dict using _Graph().run(result).
-    Returns (graph_dict, None) on success, (None, svg_fallback) if _Graph fails but draw_graph works.
+    Get skrub DAG as a serializable dict using _Graph().run(result) and native SVG from draw_graph().
+    Returns (graph_dict, svg_str). graph_dict for interactive DAG; svg_str for native skrub SVG (saved to disk).
     """
     result = _get_pipeline_result_dataop(code, globals_dict)
     if result is None:
         return None, None
 
+    graph_dict = None
+    svg_str = None
+
+    # Try _Graph().run() for interactive DAG
     try:
         from skrub._data_ops._evaluation import _Graph
         raw = _Graph().run(result)
         if raw and isinstance(raw, dict) and "nodes" in raw:
-            return _graph_to_serializable(raw), None
+            graph_dict = _graph_to_serializable(raw)
     except Exception:
         pass
 
-    # Fallback: SVG from draw_graph()
+    # Always try draw_graph() for native skrub SVG (for saving to disk)
     try:
         graph = result.skb.draw_graph()
         if graph:
             svg = getattr(graph, "svg", None)
             if svg:
                 svg_str = svg.decode("utf-8") if isinstance(svg, bytes) else str(svg)
-                return None, svg_str
     except Exception:
         pass
-    return None, None
+
+    return graph_dict, svg_str
 
 
 def main():
@@ -406,14 +411,17 @@ def main():
         print(json.dumps({"index": i, "code": code_str}))
         print("##END##")
 
-    # Extract skrub DAG as dict (_Graph().run) or fallback to SVG (draw_graph)
-    graph_dict, svg_fallback = _get_skrub_dag_dict(code, g)
+    # Extract skrub DAG as dict (_Graph().run) and native SVG (draw_graph)
+    graph_dict, svg_str = _get_skrub_dag_dict(code, g)
     if graph_dict:
         print(_SKRUB_GRAPH_MARKER)
         print(json.dumps(graph_dict))
         print(_SKRUB_GRAPH_END)
-    elif svg_fallback:
-        print(svg_fallback, end="")
+    if svg_str:
+        # Emit native skrub SVG for saving to disk (backend replaces by script name)
+        print(_SKRUB_GRAPH_SVG_MARKER)
+        print(svg_str, end="")
+        print("\n" + _SKRUB_GRAPH_END)
 
     if exec_failed:
         sys.exit(1)
