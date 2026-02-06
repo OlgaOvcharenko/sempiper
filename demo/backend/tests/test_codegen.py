@@ -57,7 +57,7 @@ def test_get_script_content_simple_returns_200_and_content():
     assert "content" in data
     assert isinstance(data["content"], str)
     assert len(data["content"]) > 0
-    assert "sem_fillna" in data["content"]
+    assert "sem_gen_features" in data["content"]
     assert "sempipes" in data["content"]
 
 
@@ -211,6 +211,36 @@ def test_compile_returns_200_and_nodes_with_ranges():
         if n.get("source_range"):
             r = n["source_range"]
             assert "start_line" in r and "start_column" in r and "end_line" in r and "end_column" in r
+
+
+def test_compile_medium_has_subsample_to_as_x_edge():
+    """
+    Compile API must return subsample->as_X and subsample->as_y for medium so graph shows as_X below subsample.
+    Uses TestClient (same process) - passes when code is correct.
+    To verify the LIVE backend (e.g. after make run), run: ./scripts/verify-compile-edges.sh
+    """
+    resp = client.get("/api/scripts/medium")
+    if resp.status_code != 200:
+        pytest.skip("medium script not available")
+    content = resp.json().get("content", "")
+    if not content.strip():
+        pytest.skip("medium script content empty")
+    resp = client.post("/api/compile", json={"input_code": content})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    subsample_id = next((n["id"] for n in nodes if (n.get("label") or "") == "skb.subsample"), None)
+    as_x_id = next((n["id"] for n in nodes if (n.get("label") or "").lower() == "as_x"), None)
+    as_y_id = next((n["id"] for n in nodes if (n.get("label") or "").lower() == "as_y"), None)
+    assert subsample_id and as_x_id and as_y_id, f"medium must have subsample, as_X, as_y. Nodes: {nodes}"
+    edge_pairs = {(e["source"], e["target"]) for e in edges}
+    assert (subsample_id, as_x_id) in edge_pairs, (
+        f"medium compile must include edge {subsample_id}->{as_x_id}. Got edges: {edges}"
+    )
+    assert (subsample_id, as_y_id) in edge_pairs, (
+        f"medium compile must include edge {subsample_id}->{as_y_id}. Got edges: {edges}"
+    )
 
 
 def test_compile_notebook_style_nodes():
@@ -499,6 +529,45 @@ def test_execute_stream_emits_fallback_graph_when_runner_returns_non_svg():
     assert len(skrub_events) >= 1, "emit fallback graph when runner does not return ##SKRUB_GRAPH##"
 
 
+def test_execute_stream_skrub_graph_includes_skrub_to_compile_id_mapping():
+    """skrub_graph event includes skrubToCompileId for frontend graph-to-code highlighting."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    def _fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        proc.stdout.readline.side_effect = [b""]
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen):
+        resp = client.post(
+            "/api/execute",
+            json={"input_code": "x = sempipes.as_X(df,'X')\nx = x.sem_fillna()"},
+        )
+    assert resp.status_code == 200
+    events = []
+    for line in resp.text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+    skrub_events = [e for e in events if e.get("type") == "skrub_graph"]
+    assert len(skrub_events) >= 1, "must emit skrub_graph"
+    ev = skrub_events[0]
+    mapping = ev.get("skrubToCompileId", {})
+    assert isinstance(mapping, dict), "skrubToCompileId must be a dict"
+    graph_nodes = (ev.get("graph") or {}).get("nodes") or []
+    for sn in graph_nodes:
+        skid = sn.get("id")
+        if skid:
+            assert skid in mapping, f"skrub node {skid} must have compile id mapping"
+            assert isinstance(mapping[skid], str), f"mapping for {skid} must be string"
+
+
 def test_execute_stream_emits_full_dag_when_skrub_misses_inputs():
     """When skrub graph has only sem_fillna+skb.eval, merge adds var+subsample so graph is full DAG."""
     import json
@@ -726,7 +795,9 @@ def test_execute_stream_includes_input_summary_for_input_nodes():
         assert isinstance(e["schema"], list)
         assert isinstance(e["sample"], list)
         assert isinstance(e["row_count"], int)
-        if e.get("node_id", "").startswith("as_y"):
+        schema_names = [c.get("name") for c in e["schema"]]
+        # as_y (or skrub node with as_y label) has target; as_X has ID
+        if e.get("node_id", "").startswith("as_y") or "target" in schema_names:
             assert any(c.get("name") == "target" for c in e["schema"])
         else:
             assert any(c.get("name") == "ID" for c in e["schema"])
@@ -757,12 +828,12 @@ def test_execute_stream_includes_cost_and_done_total_cost():
     assert "total_cost_usd" in done_events[-1], "done event must include total_cost_usd"
 
 
-def test_compile_simple_pipeline_full_dag_var_subsample_sem_fillna_eval():
-    """Compile returns full DAG for simple pipeline: skrub.var, skb.subsample, sem_fillna, skb.eval."""
+def test_compile_simple_pipeline_full_dag_var_subsample_sem_gen_features_eval():
+    """Compile returns full DAG for simple pipeline: skrub.var, skb.subsample, sem_gen_features, skb.eval."""
     code = """
 products = skrub.var("products", dataset.products)
 products = products.skb.subsample(n=100, how="random")
-products = products.sem_fillna(target_column="make")
+products = products.sem_gen_features(nl_prompt="Generate features.", name="product_features", how_many=3)
 result = products.skb.eval()
 """
     resp = client.post("/api/compile", json={"input_code": code})
@@ -773,10 +844,10 @@ result = products.skb.eval()
     labels = [n["label"] for n in nodes]
     assert "products" in labels, "var node (products) should be in graph"
     assert "skb.subsample" in labels, "subsample node should be in graph"
-    assert "sem_fillna" in labels, "sem_fillna node should be in graph"
+    assert "sem_gen_features" in labels, "sem_gen_features node should be in graph"
     assert "skb.eval" in labels, "skb.eval node should be in graph"
     assert len(nodes) >= 4, "expect at least 4 nodes for full DAG"
-    assert len(edges) >= 3, "expect at least 3 edges (var->subsample->sem_fillna->eval)"
+    assert len(edges) >= 3, "expect at least 3 edges (var->subsample->sem_gen_features->eval)"
 
 
 def test_compile_exact_nodes_and_edge_chain_for_snippet():
