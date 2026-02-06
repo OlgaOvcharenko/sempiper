@@ -2,6 +2,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 
+/** Node with source range for editor decorations and code–graph sync. */
 interface NodeRange {
   id: string;
   type?: string;
@@ -25,8 +26,14 @@ interface InputEditorProps {
   onSelectNode?: (nodeId: string | null) => void;
   /** Currently selected graph node id — highlight its range in the code. */
   selectedNodeId?: string | null;
+  /** Node IDs to show as selected (e.g. when selecting from graph, we pass compile node ids). */
+  highlightedNodeIds?: string[];
   /** Whether the panel is expanded (controls word wrap). */
   isExpanded?: boolean;
+  /** When set, move editor cursor to this node's source range (e.g. after graph node click). */
+  focusNodeId?: string | null;
+  /** Called after cursor has been moved to focusNodeId (parent should clear focusNodeId). */
+  onFocusApplied?: () => void;
 }
 
 const EDITOR_BG = "#ffffff";
@@ -71,12 +78,16 @@ export function InputEditor({
   onHighlightNodes,
   onSelectNode,
   selectedNodeId = null,
+  highlightedNodeIds = [],
   isExpanded = false,
+  focusNodeId = null,
+  onFocusApplied,
 }: InputEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const decorationIdsRef = useRef<string[]>([]);
   const [hoveredNodeIds, setHoveredNodeIds] = useState<string[]>([]);
+  const [editorReady, setEditorReady] = useState(false);
 
   const handleMount = useCallback((_: unknown, monaco: typeof import("monaco-editor")) => {
     monacoRef.current = monaco;
@@ -106,7 +117,8 @@ export function InputEditor({
       nodeRanges.map((nr) => {
         const r = nr.source_range;
         const isHovered = hoveredNodeIds.includes(nr.id);
-        const isSelected = selectedNodeId === nr.id;
+        const isSelected =
+          selectedNodeId === nr.id || highlightedNodeIds.includes(nr.id);
         const options = isSelected
           ? SELECTED_DECORATION
           : isHovered
@@ -119,8 +131,9 @@ export function InputEditor({
       })
     );
     decorationIdsRef.current = ids;
-  }, [nodeRanges, getEditor, hoveredNodeIds, selectedNodeId]);
+  }, [nodeRanges, getEditor, hoveredNodeIds, selectedNodeId, highlightedNodeIds]);
 
+  // ─── Code–graph sync: cursor/mouse → highlight nodes ───
   const findNodesAtPosition = useCallback(
     (line: number, column: number): string[] => {
       return nodeRanges
@@ -140,6 +153,7 @@ export function InputEditor({
     const ed = getEditor();
     if (!ed || !onHighlightNodes) return;
     const disposable = ed.onDidChangeCursorPosition((e) => {
+      // Cursor move: update highlighted nodes
       const nodes = findNodesAtPosition(e.position.lineNumber, e.position.column);
       onHighlightNodes(nodes);
     });
@@ -150,6 +164,7 @@ export function InputEditor({
     const ed = getEditor();
     if (!ed || !onHighlightNodes) return;
     const disposable = ed.onMouseDown((e) => {
+      // Click in editor: highlight and select node
       const target = e.target;
       if (target?.position) {
         const nodes = findNodesAtPosition(target.position.lineNumber, target.position.column);
@@ -164,6 +179,7 @@ export function InputEditor({
     const ed = getEditor();
     if (!ed) return;
     const disposable = ed.onMouseMove((e) => {
+      // Hover: show hover decoration
       const target = e.target;
       if (target?.position) {
         const nodes = findNodesAtPosition(target.position.lineNumber, target.position.column);
@@ -182,10 +198,36 @@ export function InputEditor({
     return () => disposable.dispose();
   }, [getEditor]);
 
+  // ─── Graph→code: when graph node is clicked, move editor cursor to that node's range ───
+  useEffect(() => {
+    if (!focusNodeId || !editorReady) return;
+    const ed = getEditor();
+    const monaco = monacoRef.current;
+    if (!ed || !monaco) return;
+    const nr = nodeRanges.find((r) => r.id === focusNodeId);
+    if (!nr) return;
+
+    const { start_line, start_column, end_line, end_column } = nr.source_range;
+    const range = new monaco.Range(start_line, start_column, end_line, end_column);
+
+    ed.setPosition({ lineNumber: start_line, column: start_column });
+    ed.setSelection(range);
+    ed.revealRangeInCenter(range);
+
+    // Defer focus so it runs after the click event; otherwise the graph panel keeps focus
+    const t = setTimeout(() => {
+      ed.focus();
+      onFocusApplied?.();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [focusNodeId, editorReady, getEditor, nodeRanges, onFocusApplied]);
+
   return (
     <div
       className="h-full w-full rounded-lg border border-slate-200 overflow-hidden bg-white"
       style={{ backgroundColor: EDITOR_BG }}
+      data-testid="input-editor"
+      data-highlighted={highlightedNodeIds.join(",") || undefined}
     >
       <style>{`
         /* as_X / as_y (input) — one distinct colour */
@@ -203,11 +245,12 @@ export function InputEditor({
           background-color: rgba(16, 185, 129, 0.28);
           border-radius: 3px;
         }
-        /* Selected graph element highlighted in code */
+        /* Selected graph element highlighted in code — very visible */
         .sempipe-selected-decoration {
-          background-color: rgba(251, 191, 36, 0.25);
-          border: 1px solid rgba(251, 191, 36, 0.6);
-          border-radius: 3px;
+          background-color: rgba(251, 191, 36, 0.45);
+          border: 2px solid rgb(245, 158, 11);
+          border-radius: 4px;
+          box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
         }
         .sempipe-element-margin { display: none; }
       `}</style>
@@ -220,6 +263,7 @@ export function InputEditor({
         onMount={(_, monaco) => {
           handleMount(_, monaco);
           editorRef.current = _;
+          setEditorReady(true);
         }}
         theme="light-editor"
         options={{

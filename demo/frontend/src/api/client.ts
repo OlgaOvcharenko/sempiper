@@ -157,7 +157,7 @@ export type ExecuteEvent =
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
   | { type: "cost"; total_usd: number }
   | { type: "done"; total_cost_usd?: number }
-  | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string };
+  | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string; skrubToCompileId?: Record<string, string> };
 
 /** Skrub DAG from _Graph().run(dag): nodes, parents, children (interactive viz). */
 export interface SkrubGraphDict {
@@ -166,6 +166,53 @@ export interface SkrubGraphDict {
   children: Record<string, string[]>;
   /** Sempipes semantic operator node ids in execution (topo) order; index matches captured code. */
   sempipesNodeIds?: string[];
+}
+
+/**
+ * Convert compile graph (nodes + edges) to SkrubGraphDict for immediate preview.
+ * Used when skrub graph is not yet available (before Run completes).
+ * Final graph is always skrub graph; this is a best-effort preview.
+ */
+export function compileToSkrubGraph(
+  nodes: CompileNode[],
+  edges: CompileEdge[]
+): SkrubGraphDict | null {
+  const runnable = nodes.filter(
+    (n) =>
+      ["input", "operator", "pipeline"].includes(
+        typeof n.type === "string" ? n.type.toLowerCase() : ""
+      )
+  );
+  if (runnable.length === 0) return null;
+
+  const nodeIds = new Set(runnable.map((n) => n.id));
+  const validEdges = edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+  const parents: Record<string, string[]> = {};
+  const children: Record<string, string[]> = {};
+  for (const n of runnable) {
+    parents[n.id] = [];
+    children[n.id] = [];
+  }
+  for (const e of validEdges) {
+    if (!parents[e.target].includes(e.source)) parents[e.target].push(e.source);
+    if (!children[e.source].includes(e.target)) children[e.source].push(e.target);
+  }
+
+  const sempipesNodeIds = runnable
+    .filter((n) => (n.type ?? "").toLowerCase() === "operator")
+    .map((n) => n.id);
+
+  return {
+    nodes: runnable.map((n) => ({
+      id: n.id,
+      label: n.label,
+      is_sempipes_semantic: (n.type ?? "").toLowerCase() === "operator",
+    })),
+    parents,
+    children,
+    sempipesNodeIds,
+  };
 }
 
 /** Request to update sempipes config (LLM name and temperature). */
@@ -203,10 +250,12 @@ export async function updateSempipesConfig(req: UpdateConfigRequest): Promise<Up
  * Returns an AbortController so the caller can abort the request.
  * All onEvent calls are wrapped in try/catch so exceptions from the callback do not crash the app;
  * on exception we emit error + done and stop.
+ * @param scriptId - Loaded script id (simple, medium, full); backend saves native skrub SVG to disk by this name.
  */
 export function executePipelineStream(
   inputCode: string,
-  onEvent: (event: ExecuteEvent) => void
+  onEvent: (event: ExecuteEvent) => void,
+  scriptId?: string | null
 ): AbortController {
   const controller = new AbortController();
 
@@ -228,10 +277,13 @@ export function executePipelineStream(
     }
   }
 
+  const body: { input_code: string; script_id?: string } = { input_code: inputCode };
+  if (scriptId) body.script_id = scriptId;
+
   const res = fetch(`${API_BASE}/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input_code: inputCode }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   });
   res

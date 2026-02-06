@@ -5,19 +5,25 @@ import {
   listPipelineScripts,
   getPipelineScriptContent,
   updateSempipesConfig,
+  compileToSkrubGraph,
   type CompileNode,
   type CompileEdge,
   type InputSummary,
   type PipelineScriptEntry,
   type SkrubGraphDict,
 } from "../api/client";
+import {
+  graphNodeToCompileIds,
+  compileIdsToSkrubIds,
+  skrubIdToRaw,
+} from "../utils/graphCodeSync";
 import { InputEditor } from "./InputEditor";
 import { GraphPanel, type GraphNode } from "./GraphPanel";
 import { NodeDetailsPanel } from "./NodeDetailsPanel";
 
 const DEFAULT_SCRIPT_ID = "simple";
 
-/** Initial pipeline code (credit fraud + sem_fillna); matches pipeline_scripts/simple.py. */
+/** Initial pipeline code (credit fraud + sem_gen_features); matches pipeline_scripts/simple.py. */
 const INITIAL_PIPELINE_CODE = `import os
 os.environ.setdefault("SCIPY_ARRAY_API", "1")
 
@@ -28,10 +34,10 @@ dataset = skrub.datasets.fetch_credit_fraud()
 products = skrub.var("products", dataset.products)
 products = products.skb.subsample(n=100, how="random")
 
-products = products.sem_fillna(
-    target_column="make",
-    nl_prompt="Infer the manufacturer from product attributes.",
-    impute_with_existing_values_only=True,
+products = products.sem_gen_features(
+    nl_prompt="Generate useful features for product analysis.",
+    name="product_features",
+    how_many=3,
 )
 
 result = products.skb.eval()
@@ -51,8 +57,10 @@ const AVAILABLE_LLMS = [
 export function CodeGenDemo() {
   const [pipelineScripts, setPipelineScripts] = useState<PipelineScriptEntry[]>([]);
   const [pipelineCode, setPipelineCode] = useState(INITIAL_PIPELINE_CODE);
+  const [loadedScriptId, setLoadedScriptId] = useState<string | null>(DEFAULT_SCRIPT_ID);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
+  const [cursorFocusNodeId, setCursorFocusNodeId] = useState<string | null>(null);
   const [compileNodes, setCompileNodes] = useState<CompileNode[]>([]);
   const [compileEdges, setCompileEdges] = useState<CompileEdge[]>([]);
   const [compileError, setCompileError] = useState<string | null>(null);
@@ -65,6 +73,7 @@ export function CodeGenDemo() {
   const [lastRunCostUsd, setLastRunCostUsd] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
   const [skrubGraph, setSkrubGraph] = useState<SkrubGraphDict | null>(null);
+  const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
   const [isExecuting, setIsExecuting] = useState(false);
   const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
   const [temperature, setTemperature] = useState<string>("0.0");
@@ -73,6 +82,8 @@ export function CodeGenDemo() {
   const [expandedPanel, setExpandedPanel] = useState<'left' | 'middle' | 'right' | null>(null);
   const executeAbortRef = useRef<AbortController | null>(null);
   const compileAbortRef = useRef<AbortController | null>(null);
+  const compileNodesRef = useRef<CompileNode[]>([]);
+  compileNodesRef.current = compileNodes;
 
   const refreshCompileGraph = useCallback(async () => {
     if (compileAbortRef.current) compileAbortRef.current.abort();
@@ -95,6 +106,7 @@ export function CodeGenDemo() {
   }, [pipelineCode]);
 
   const handleLoadScript = useCallback(async (id: string) => {
+    setLoadedScriptId(id);
     try {
       const { content } = await getPipelineScriptContent(id);
       setPipelineCode(content);
@@ -152,6 +164,7 @@ export function CodeGenDemo() {
     setLastRunCostUsd(null);
     setLastRunError(null);
     setSkrubGraph(null);
+    setSkrubToCompileId({});
     setIsExecuting(true);
 
     // Update sempipes config before execution
@@ -202,7 +215,29 @@ export function CodeGenDemo() {
           setLastRunCostUsd(event.total_usd);
         } else if (event.type === "skrub_graph") {
           // Only show graph from dictionary (nodes, parents, children); no SVG.
-          if (event.graph) setSkrubGraph(event.graph);
+          if (event.graph) {
+            setSkrubGraph(event.graph);
+            setSkrubToCompileId(event.skrubToCompileId ?? {});
+            // Copy input summaries to skrub node ids so selecting skrub_0 shows data when backend
+            // emitted input_summary with compile node id (e.g. as_X_1).
+            setInputSummaryByNode((prev) => {
+              const nodes = event.graph?.nodes ?? [];
+              const runnable = compileNodesRef.current.filter(
+                (n) => (n.type ?? "").toLowerCase() === "input" || (n.type ?? "").toLowerCase() === "operator"
+              );
+              let next = { ...prev };
+              for (const sn of nodes) {
+                if (sn.is_sempipes_semantic) continue;
+                const compileNode = runnable.find(
+                  (n) => (n.label ?? "") === (sn.label ?? "") && (n.type ?? "").toLowerCase() === "input"
+                );
+                if (compileNode && prev[compileNode.id]) {
+                  next[`skrub_${sn.id}`] = prev[compileNode.id];
+                }
+              }
+              return next;
+            });
+          }
         } else if (event.type === "done") {
           if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
           setIsExecuting(false);
@@ -213,9 +248,9 @@ export function CodeGenDemo() {
         setIsExecuting(false);
         executeAbortRef.current = null;
       }
-    });
+    }, loadedScriptId);
     executeAbortRef.current = controller;
-  }, [pipelineCode, isExecuting, llmName, temperature, validateTemperature]);
+  }, [pipelineCode, isExecuting, llmName, temperature, validateTemperature, loadedScriptId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,6 +262,7 @@ export function CodeGenDemo() {
           ? DEFAULT_SCRIPT_ID
           : scripts?.[0]?.id;
         if (defaultId) {
+          if (!cancelled) setLoadedScriptId(defaultId);
           return getPipelineScriptContent(defaultId)
             .then(({ content }) => {
               if (!cancelled) setPipelineCode(content);
@@ -255,6 +291,7 @@ export function CodeGenDemo() {
     setInputSummaryByNode({});
     setLastRunCostUsd(null);
     setSkrubGraph(null);
+    setSkrubToCompileId({});
     setCompileError(null);
   }, [pipelineCode]);
 
@@ -262,6 +299,11 @@ export function CodeGenDemo() {
     const t = setTimeout(refreshCompileGraph, 400);
     return () => clearTimeout(t);
   }, [refreshCompileGraph]);
+
+  // Always use compile graph (same flow as skrub, from code only). Do not replace with skrub graph after run.
+  const compilePreviewGraph = compileToSkrubGraph(compileNodes, compileEdges ?? []);
+  const displayGraph = compilePreviewGraph;
+  const isPreviewGraph = !!compilePreviewGraph?.nodes?.length;
 
   const nodes: GraphNode[] =
     compileNodes.length > 0
@@ -286,44 +328,37 @@ export function CodeGenDemo() {
         ];
   const selectedNode = (() => {
     if (!selectedNodeId) return null;
-    if (selectedNodeId.startsWith("skrub_") && skrubGraph?.nodes) {
-      const skid = selectedNodeId.slice(7);
-      const skrubNode = skrubGraph.nodes.find((n) => n.id === skid);
-      if (skrubNode) {
-        const isOperator = Boolean(skrubGraph.sempipesNodeIds?.includes(skid));
+    if (selectedNodeId.startsWith("skrub_") && displayGraph?.nodes) {
+      const nid = skrubIdToRaw(selectedNodeId);
+      const graphNode = displayGraph.nodes.find((n) => n.id === nid);
+      if (graphNode) {
+        const isOperator = Boolean(displayGraph.sempipesNodeIds?.includes(nid));
         return {
           id: selectedNodeId,
           type: (isOperator ? "operator" : "input") as "input" | "operator",
-          label: skrubNode.label,
+          label: graphNode.label,
         };
       }
     }
     return nodes.find((n) => n.id === selectedNodeId) ?? null;
   })();
 
-  // Map compile node IDs (from editor) to skrub IDs for graph highlighting when skrub graph is shown
-  const highlightedSkrubIds = (() => {
-    if (!skrubGraph?.nodes?.length) return highlightedNodeIds;
-    if (highlightedNodeIds.length === 0) return [];
-    const result: string[] = [];
-    for (const cid of highlightedNodeIds) {
-      const compileNode = compileNodes.find((n) => n.id === cid);
-      if (!compileNode) continue;
-      for (const sn of skrubGraph.nodes) {
-        if (sn.label === compileNode.label) result.push(`skrub_${sn.id}`);
-      }
-    }
-    return [...new Set(result)];
-  })();
+  // Map compile node IDs (from editor) → skrub display IDs for graph highlighting
+  const highlightedSkrubIds = compileIdsToSkrubIds(
+    highlightedNodeIds,
+    displayGraph?.nodes ?? [],
+    compileNodes,
+    false
+  );
 
-  // Input summary for skrub-selected input node: map skrub_0 → compile node by label → inputSummaryByNode[compileNodeId]
+  // Input summary for selected input node: map skrub_X → compile node by id or label → inputSummaryByNode
   const inputSummaryForSelectedNode = (() => {
-    if (!selectedNodeId?.startsWith("skrub_") || !skrubGraph?.nodes) return undefined;
-    const skid = selectedNodeId.slice(7);
-    const skrubNode = skrubGraph.nodes.find((n) => n.id === skid);
-    if (!skrubNode) return undefined;
+    if (!selectedNodeId?.startsWith("skrub_") || !displayGraph?.nodes) return undefined;
+    const nid = skrubIdToRaw(selectedNodeId);
+    const graphNode = displayGraph.nodes.find((n) => n.id === nid);
+    if (!graphNode) return undefined;
     const compileNode = compileNodes.find(
-      (n) => n.label === skrubNode.label && (n.type ?? "").toLowerCase() === "input"
+      (n) => n.id === nid || (n.label === graphNode.label && (n.type ?? "").toLowerCase() === "input")
     );
     return compileNode ? inputSummaryByNode[compileNode.id] : undefined;
   })();
@@ -333,6 +368,40 @@ export function CodeGenDemo() {
     (e) => nodeIds.has(e.source) && nodeIds.has(e.target)
   );
   const runnableNodeIds = nodes.map((n) => n.id);
+
+  const handleGraphNodeSelect = useCallback(
+    (nodeId: string | null) => {
+      setSelectedNodeId(nodeId);
+      if (!nodeId) {
+        setHighlightedNodeIds([]);
+        return;
+      }
+      if (!nodeId.startsWith("skrub_") || !displayGraph?.nodes) return;
+
+      const graphNodeId = skrubIdToRaw(nodeId);
+      const graphNode = displayGraph.nodes.find((n) => n.id === graphNodeId);
+      if (!graphNode) return;
+
+      const matchingIds = graphNodeToCompileIds(graphNodeId, graphNode, compileNodes, {
+        skrubToCompileId,
+        runnableNodeIds,
+      });
+
+      if (matchingIds.length > 0) {
+        setHighlightedNodeIds(matchingIds);
+        const withRange = compileNodes.find(
+          (n) => n.id === matchingIds[0] && n.source_range != null
+        );
+        if (withRange) setCursorFocusNodeId(withRange.id);
+      }
+    },
+    [
+      displayGraph?.nodes,
+      compileNodes,
+      skrubToCompileId,
+      runnableNodeIds,
+    ]
+  );
 
   // Compute panel widths based on expanded state
   const leftWidth = expandedPanel === 'left' ? '80%' : expandedPanel === null ? '33%' : '10%';
@@ -458,8 +527,24 @@ export function CodeGenDemo() {
               disabled={isExecuting}
               nodeRanges={compileNodes.filter((n): n is CompileNode & { source_range: NonNullable<CompileNode["source_range"]> } => n.source_range != null)}
               onHighlightNodes={setHighlightedNodeIds}
-              onSelectNode={setSelectedNodeId}
+              onSelectNode={(nodeId) => {
+                setHighlightedNodeIds(nodeId ? [nodeId] : []);
+                // When selecting from code (compile ID) and we have a graph, use display ID
+                // so graph shows selection; NodeDetailsPanel resolves both
+                if (nodeId && !nodeId.startsWith("skrub_") && displayGraph?.nodes) {
+                  const compileNode = compileNodes.find((n) => n.id === nodeId);
+                  const graphNode = compileNode
+                    ? displayGraph.nodes.find((n) => (n.label ?? "") === (compileNode.label ?? "") || n.id === nodeId)
+                    : null;
+                  setSelectedNodeId(graphNode ? `skrub_${graphNode.id}` : nodeId);
+                } else {
+                  setSelectedNodeId(nodeId);
+                }
+              }}
               selectedNodeId={selectedNodeId}
+              highlightedNodeIds={highlightedNodeIds}
+              focusNodeId={cursorFocusNodeId}
+              onFocusApplied={() => setCursorFocusNodeId(null)}
               isExpanded={expandedPanel === 'left'}
             />
           </div>
@@ -469,15 +554,17 @@ export function CodeGenDemo() {
         <div className="min-w-[200px] flex flex-col min-h-0 transition-all duration-300" style={{ width: middleWidth }}>
           <GraphPanel
             selectedNodeId={selectedNodeId}
-            onSelectNode={setSelectedNodeId}
+            onSelectNode={handleGraphNodeSelect}
             nodes={nodes}
             edges={graphEdges}
-            skrubGraph={skrubGraph}
+            skrubGraph={displayGraph}
             runnableNodeIds={runnableNodeIds}
-            isLoading={isExecuting && !skrubGraph}
+            isLoading={isExecuting && !displayGraph}
             highlightedNodeIds={highlightedSkrubIds}
             statusByNodeId={statusByNodeId}
-            showGraph={isExecuting || !!skrubGraph}
+            showGraph={isExecuting || !!displayGraph}
+            isPreview={isPreviewGraph}
+            isExecuting={isExecuting}
             expandButton={
               <button
                 type="button"

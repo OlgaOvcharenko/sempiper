@@ -124,4 +124,25 @@ describe("NodeDetailsPanel", () => {
     expect(screen.getByText("Schema")).toBeInTheDocument();
     expect(screen.getByText("int64")).toBeInTheDocument();
   });
+
+  it("shows data summary when input node selected and inputSummaryByNode has skrub_0 key (from execute stream)", () => {
+    const inputSummary = {
+      node_id: "skrub_0",
+      schema: [{ name: "ID", dtype: "int64" }],
+      sample: [{ ID: 1 }, { ID: 2 }, { ID: 3 }],
+      row_count: 5000,
+    };
+    render(
+      <NodeDetailsPanel
+        selectedNodeId="skrub_0"
+        selectedNode={{ id: "skrub_0", type: "input", label: "as_X" }}
+        inputSummaryByNode={{ skrub_0: inputSummary }}
+      />
+    );
+    expect(screen.getByText("Data summary")).toBeInTheDocument();
+    expect(screen.getByText(/Rows: 5,000/)).toBeInTheDocument();
+    expect(screen.getByText("Schema")).toBeInTheDocument();
+    expect(screen.getByText("int64")).toBeInTheDocument();
+    expect(screen.getByText(/Sample \(first 3 rows\)/)).toBeInTheDocument();
+  });
 });

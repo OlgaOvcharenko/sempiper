@@ -3,6 +3,7 @@ import {
   listPipelineScripts,
   getPipelineScriptContent,
   executePipelineStream,
+  compileToSkrubGraph,
 } from "../../src/api/client";
 
 describe("api/client (pipeline scripts)", () => {
@@ -124,6 +125,86 @@ describe("api/client (pipeline scripts)", () => {
       const skrubEvent = events.find((e) => e.type === "skrub_graph");
       expect(skrubEvent).toBeDefined();
       expect((skrubEvent as { type: "skrub_graph"; svg: string }).svg).toBe(skrubSvg);
+    });
+  });
+
+  describe("compileToSkrubGraph", () => {
+    it("converts compile nodes and edges to SkrubGraphDict for preview", () => {
+      const nodes = [
+        { id: "as_X_1", type: "input", label: "as_X", source_range: null },
+        { id: "sem_fillna_2", type: "operator", label: "sem_fillna", source_range: null },
+      ];
+      const edges = [{ source: "as_X_1", target: "sem_fillna_2" }];
+      const result = compileToSkrubGraph(nodes, edges);
+      expect(result).not.toBeNull();
+      expect(result!.nodes).toHaveLength(2);
+      expect(result!.nodes[0]).toEqual({ id: "as_X_1", label: "as_X", is_sempipes_semantic: false });
+      expect(result!.nodes[1]).toEqual({ id: "sem_fillna_2", label: "sem_fillna", is_sempipes_semantic: true });
+      expect(result!.parents["as_X_1"]).toEqual([]);
+      expect(result!.parents["sem_fillna_2"]).toEqual(["as_X_1"]);
+      expect(result!.children["as_X_1"]).toEqual(["sem_fillna_2"]);
+      expect(result!.sempipesNodeIds).toEqual(["sem_fillna_2"]);
+    });
+
+    it("returns null when nodes array is empty", () => {
+      expect(compileToSkrubGraph([], [])).toBeNull();
+    });
+
+    it("filters edges to only include valid node references", () => {
+      const nodes = [
+        { id: "n1", type: "input", label: "a", source_range: null },
+        { id: "n2", type: "operator", label: "b", source_range: null },
+      ];
+      const edges = [
+        { source: "n1", target: "n2" },
+        { source: "n1", target: "n3" },
+        { source: "n0", target: "n2" },
+      ];
+      const result = compileToSkrubGraph(nodes, edges);
+      expect(result!.parents["n2"]).toEqual(["n1"]);
+      expect(result!.children["n1"]).toEqual(["n2"]);
+    });
+
+    it("produces medium-like structure for layout: baskets branch before products branch", () => {
+      const nodes = [
+        { id: "var_products_13", type: "input", label: "products", source_range: null },
+        { id: "var_baskets_14", type: "input", label: "baskets", source_range: null },
+        { id: "subsample_15", type: "operator", label: "skb.subsample", source_range: null },
+        { id: "as_X_18", type: "input", label: "as_X", source_range: null },
+        { id: "as_y_19", type: "input", label: "as_y", source_range: null },
+        { id: "sem_fillna_22", type: "operator", label: "sem_fillna", source_range: null },
+        { id: "sem_gen_features_28", type: "operator", label: "sem_gen_features", source_range: null },
+        { id: "skb_apply_36", type: "operator", label: "skb.apply", source_range: null },
+        { id: "apply_with_sem_choose_44", type: "operator", label: "apply_with_sem_choose", source_range: null },
+        { id: "sem_choose_47", type: "operator", label: "sem_choose", source_range: null },
+      ];
+      const edges = [
+        { source: "var_baskets_14", target: "subsample_15" },
+        { source: "subsample_15", target: "as_X_18" },
+        { source: "subsample_15", target: "as_y_19" },
+        { source: "var_products_13", target: "sem_fillna_22" },
+        { source: "sem_fillna_22", target: "sem_gen_features_28" },
+        { source: "as_X_18", target: "sem_gen_features_28" },
+        { source: "sem_gen_features_28", target: "skb_apply_36" },
+        { source: "as_X_18", target: "apply_with_sem_choose_44" },
+        { source: "skb_apply_36", target: "apply_with_sem_choose_44" },
+        { source: "as_y_19", target: "apply_with_sem_choose_44" },
+        { source: "sem_choose_47", target: "apply_with_sem_choose_44" },
+      ];
+      const result = compileToSkrubGraph(nodes, edges);
+      expect(result).not.toBeNull();
+      expect(result!.nodes).toHaveLength(10);
+      expect(result!.children["var_baskets_14"]).toContain("subsample_15");
+      expect(result!.children["var_products_13"]).toContain("sem_fillna_22");
+      expect(result!.parents["as_X_18"]).toContain("subsample_15");
+      expect(result!.parents["as_y_19"]).toContain("subsample_15");
+      expect(result!.parents["sem_gen_features_28"]).toEqual(
+        expect.arrayContaining(["sem_fillna_22", "as_X_18"])
+      );
+      const nodeIndex = new Map(result!.nodes.map((n, i) => [n.id, i]));
+      const basketsChildIdx = Math.min(...(result!.children["var_baskets_14"] ?? []).map((c) => nodeIndex.get(c) ?? 999));
+      const productsChildIdx = Math.min(...(result!.children["var_products_13"] ?? []).map((c) => nodeIndex.get(c) ?? 999));
+      expect(basketsChildIdx).toBeLessThan(productsChildIdx);
     });
   });
 });

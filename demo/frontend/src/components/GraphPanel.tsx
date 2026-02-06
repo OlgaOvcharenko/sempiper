@@ -4,6 +4,7 @@
  * Renders interactive DAG: click nodes to select and inspect. Loading icon while pipeline runs.
  */
 import type { SkrubGraphDict } from "../api/client";
+import { toSkrubId } from "../utils/graphCodeSync";
 
 export interface GraphNode {
   id: string;
@@ -32,6 +33,10 @@ interface GraphPanelProps {
   /** Per-node status for badges (idle | running | done | error). */
   statusByNodeId?: Record<string, NodeStatus>;
   showGraph?: boolean;
+  /** True when showing compile preview (before Run); final graph is always skrub. */
+  isPreview?: boolean;
+  /** True when pipeline is executing (show "Running pipeline…" in subtitle). */
+  isExecuting?: boolean;
   expandButton?: React.ReactNode;
 }
 
@@ -68,31 +73,176 @@ function skrubLevels(graph: SkrubGraphDict): Map<string, number> {
   return levels;
 }
 
+/**
+ * Order nodes within each level to match skrub SVG flow (e.g. baskets branch left, products branch right).
+ * Roots: sort by min child index (branch used first in flow goes left).
+ * Other levels: sort by median parent position (children under same branch stay grouped).
+ */
+function orderNodesByFlow(
+  graph: SkrubGraphDict,
+  levels: Map<string, number>,
+  sortedLevels: number[]
+): Map<number, typeof graph.nodes> {
+  const { nodes, parents, children } = graph;
+  const levelToNodes = new Map<number, typeof graph.nodes>();
+  nodes.forEach((n) => {
+    const lvl = levels.get(n.id) ?? 0;
+    if (!levelToNodes.has(lvl)) levelToNodes.set(lvl, []);
+    levelToNodes.get(lvl)!.push(n);
+  });
+
+  const nodeIndex = new Map<string, number>();
+  nodes.forEach((n, i) => nodeIndex.set(n.id, i));
+
+  const orderedLevelToNodes = new Map<number, typeof graph.nodes>();
+  for (const lvl of sortedLevels) {
+    const rowNodes = levelToNodes.get(lvl) ?? [];
+    let sorted: typeof graph.nodes;
+    if (lvl === 0) {
+      sorted = [...rowNodes].sort((a, b) => {
+        const aChildren = children[a.id] ?? [];
+        const bChildren = children[b.id] ?? [];
+        const aMin = aChildren.length > 0 ? Math.min(...aChildren.map((c) => nodeIndex.get(c) ?? 999)) : 999;
+        const bMin = bChildren.length > 0 ? Math.min(...bChildren.map((c) => nodeIndex.get(c) ?? 999)) : 999;
+        return aMin - bMin;
+      });
+    } else {
+      sorted = [...rowNodes].sort((a, b) => {
+        const aPreds = parents[a.id] ?? [];
+        const bPreds = parents[b.id] ?? [];
+        const parentPos = (nid: string): number => {
+          const predLevel = levels.get(nid) ?? 0;
+          const predRow = orderedLevelToNodes.get(predLevel) ?? [];
+          const idx = predRow.findIndex((n) => n.id === nid);
+          return idx >= 0 ? idx : 0;
+        };
+        const aMed = aPreds.length > 0
+          ? aPreds.reduce((s, p) => s + parentPos(p), 0) / aPreds.length
+          : 0;
+        const bMed = bPreds.length > 0
+          ? bPreds.reduce((s, p) => s + parentPos(p), 0) / bPreds.length
+          : 0;
+        return aMed - bMed;
+      });
+    }
+    orderedLevelToNodes.set(lvl, sorted);
+  }
+  return orderedLevelToNodes;
+}
+
+/** Single clickable node in the skrub DAG. Uses pointer-events: bounding-box for reliable clicks. */
+function SkrubGraphNode({
+  node,
+  position,
+  skrubNodeId,
+  isSelected,
+  isHighlighted,
+  isSempipesSemantic,
+  status,
+  onSelect,
+}: {
+  node: { id: string; label: string };
+  position: { x: number; y: number };
+  skrubNodeId: string;
+  isSelected: boolean;
+  isHighlighted: boolean;
+  isSempipesSemantic: boolean;
+  status: "idle" | "running" | "done" | "error";
+  onSelect: () => void;
+}) {
+  const isActive = isSelected || isHighlighted;
+  const fill = isActive ? "rgb(254, 249, 195)" : "white";
+  const stroke = isActive ? "rgb(245, 158, 11)" : "black";
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect();
+  };
+
+  return (
+    <g
+      key={node.id}
+      data-testid={`graph-node-${node.id}`}
+      transform={`translate(${position.x}, ${position.y})`}
+      onClick={handleClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelect();
+        }
+      }}
+      style={{ cursor: "pointer", pointerEvents: "bounding-box" }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Graph node ${node.label}${isSempipesSemantic ? " (sempipes operator)" : ""}`}
+    >
+      <rect
+        width={NODE_WIDTH}
+        height={NODE_HEIGHT}
+        rx={6}
+        ry={6}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={isActive ? 3 : 1}
+        strokeDasharray={isSempipesSemantic ? "5,4" : "none"}
+        onClick={handleClick}
+      />
+      <text
+        x={NODE_WIDTH / 2}
+        y={NODE_HEIGHT / 2 + 4}
+        textAnchor="middle"
+        fontSize={EDITOR_FONT_SIZE}
+        fill="rgb(24, 24, 27)"
+        style={{ pointerEvents: "none" }}
+      >
+        {node.label}
+      </text>
+      {status === "running" && (
+        <circle cx={NODE_WIDTH - 10} cy={10} r={4} fill="rgb(59, 130, 246)" className="animate-pulse" />
+      )}
+      {status === "done" && (
+        <text x={NODE_WIDTH - 8} y={12} textAnchor="end" fontSize={10} fill="rgb(34, 197, 94)" data-testid="node-status-done">
+          ✓
+        </text>
+      )}
+      {status === "error" && (
+        <text x={NODE_WIDTH - 8} y={12} textAnchor="end" fontSize={10} fill="rgb(239, 68, 68)" data-testid="node-status-error">
+          ✗
+        </text>
+      )}
+      {node.label === "as_y" && (
+        <text
+          x={NODE_WIDTH - 8}
+          y={status !== "idle" ? NODE_HEIGHT - 4 : 12}
+          textAnchor="end"
+          fontSize={10}
+          fill="rgb(220, 38, 38)"
+        >
+          y
+        </text>
+      )}
+    </g>
+  );
+}
+
 export function GraphPanel({
   selectedNodeId,
   onSelectNode,
-  nodes = MOCK_NODES,
-  edges = [],
+  nodes: _nodes = MOCK_NODES,
+  edges: _edges = [],
   skrubGraph = null,
-  runnableNodeIds = [],
+  runnableNodeIds: _runnableNodeIds = [],
   isLoading = false,
   highlightedNodeIds = [],
   statusByNodeId = {},
-  showGraph = false,
+  showGraph: _showGraph = false,
+  isPreview = false,
+  isExecuting = false,
   expandButton = null,
 }: GraphPanelProps) {
   const hasSkrubDict = Boolean(skrubGraph?.nodes?.length);
   const shouldShowSkrubDict = hasSkrubDict;
-
-  const nodeFill = (isSelected: boolean, isHighlighted: boolean) => {
-    if (isSelected) return "rgb(248, 250, 252)";
-    if (isHighlighted) return "rgb(250, 250, 252)";
-    return "white";
-  };
-  const nodeStroke = (_node: GraphNode, isSelected: boolean, isHighlighted: boolean) => {
-    if (isSelected || isHighlighted) return "rgb(30, 30, 30)";
-    return "black";
-  };
 
   // Layout for skrub DAG (when skrubGraph dict is present)
   const skrubNodePositions = new Map<string, { x: number; y: number }>();
@@ -100,13 +250,8 @@ export function GraphPanel({
   let skrubSvgHeight = 200;
   if (skrubGraph && shouldShowSkrubDict) {
     const levels = skrubLevels(skrubGraph);
-    const levelToNodes = new Map<number, typeof skrubGraph.nodes>();
-    skrubGraph.nodes.forEach((n) => {
-      const lvl = levels.get(n.id) ?? 0;
-      if (!levelToNodes.has(lvl)) levelToNodes.set(lvl, []);
-      levelToNodes.get(lvl)!.push(n);
-    });
-    const sortedLevels = Array.from(levelToNodes.keys()).sort((a, b) => a - b);
+    const sortedLevels = Array.from(new Set(skrubGraph.nodes.map((n) => levels.get(n.id) ?? 0))).sort((a, b) => a - b);
+    const levelToNodes = orderNodesByFlow(skrubGraph, levels, sortedLevels);
     sortedLevels.forEach((lvl, levelIndex) => {
       const rowNodes = levelToNodes.get(lvl) ?? [];
       const rowWidth = rowNodes.length * NODE_WIDTH + (rowNodes.length - 1) * GAP;
@@ -132,11 +277,11 @@ export function GraphPanel({
           <div className="flex-1">
             <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
             <p className="text-xs text-zinc-500 mt-0.5">
-              {isLoading
+              {isLoading || (isExecuting && shouldShowSkrubDict)
                 ? "Running pipeline…"
                 : shouldShowSkrubDict
-                  ? "Skrub graph (from run) · Click an operator to see generated code"
-                  : "Run to see the skrub graph (nodes, parents, children from pipeline run)"}
+                  ? "Computation graph (from code) · Click an operator to see generated code"
+                  : "Edit code to see computation graph"}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -191,85 +336,19 @@ export function GraphPanel({
                 ];
               })
             )}
-            {skrubGraph.nodes.map((n) => {
-              const pos = skrubNodePositions.get(n.id) ?? { x: PADDING, y: PADDING };
-              const skrubNodeId = `skrub_${n.id}`;
-              const isSempipesSemantic = skrubGraph.sempipesNodeIds?.includes(n.id) ?? n.is_sempipes_semantic ?? false;
-              const isSelected = selectedNodeId === skrubNodeId;
-              const isHighlighted = highlightedNodeIds.includes(skrubNodeId);
-              const status = statusByNodeId[skrubNodeId] ?? "idle";
-              return (
-                <g
-                  key={n.id}
-                  transform={`translate(${pos.x}, ${pos.y})`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectNode(skrubNodeId);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onSelectNode(skrubNodeId);
-                    }
-                  }}
-                  style={{ cursor: "pointer" }}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Graph node ${n.label}${isSempipesSemantic ? " (sempipes operator)" : ""}`}
-                >
-                  <rect
-                    width={NODE_WIDTH}
-                    height={NODE_HEIGHT}
-                    rx={6}
-                    ry={6}
-                    fill={nodeFill(isSelected, isHighlighted)}
-                    stroke={nodeStroke(n as GraphNode, isSelected, isHighlighted)}
-                    strokeWidth={isSelected || isHighlighted ? 2 : 1}
-                    strokeDasharray={isSempipesSemantic ? "5,4" : "none"}
-                  />
-                  <text
-                    x={NODE_WIDTH / 2}
-                    y={NODE_HEIGHT / 2 + 4}
-                    textAnchor="middle"
-                    fontSize={EDITOR_FONT_SIZE}
-                    fill="rgb(24, 24, 27)"
-                  >
-                    {n.label}
-                  </text>
-                  {status === "running" && (
-                    <circle
-                      cx={NODE_WIDTH - 10}
-                      cy={10}
-                      r={4}
-                      fill="rgb(59, 130, 246)"
-                      className="animate-pulse"
-                    />
-                  )}
-                  {status === "done" && (
-                    <text x={NODE_WIDTH - 8} y={12} textAnchor="end" fontSize={10} fill="rgb(34, 197, 94)" data-testid="node-status-done">
-                      ✓
-                    </text>
-                  )}
-                  {status === "error" && (
-                    <text x={NODE_WIDTH - 8} y={12} textAnchor="end" fontSize={10} fill="rgb(239, 68, 68)" data-testid="node-status-error">
-                      ✗
-                    </text>
-                  )}
-                  {n.label === "as_y" && (
-                    <text
-                      x={NODE_WIDTH - 8}
-                      y={status !== "idle" ? NODE_HEIGHT - 4 : 12}
-                      textAnchor="end"
-                      fontSize={10}
-                      fill="rgb(220, 38, 38)"
-                    >
-                      y
-                    </text>
-                  )}
-                </g>
-              );
-            })}
+            {skrubGraph.nodes.map((n) => (
+              <SkrubGraphNode
+                key={n.id}
+                node={n}
+                position={skrubNodePositions.get(n.id) ?? { x: PADDING, y: PADDING }}
+                skrubNodeId={toSkrubId(n.id)}
+                isSelected={selectedNodeId === toSkrubId(n.id)}
+                isHighlighted={highlightedNodeIds.includes(toSkrubId(n.id))}
+                isSempipesSemantic={skrubGraph.sempipesNodeIds?.includes(n.id) ?? n.is_sempipes_semantic ?? false}
+                status={statusByNodeId[toSkrubId(n.id)] ?? "idle"}
+                onSelect={() => onSelectNode(toSkrubId(n.id))}
+              />
+            ))}
           </svg>
         ) : isLoading ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 gap-3">
@@ -284,7 +363,7 @@ export function GraphPanel({
             <div className="text-6xl text-zinc-300">📊</div>
             <div className="text-sm text-zinc-500 font-medium">No computation graph yet</div>
             <div className="text-xs text-zinc-400 max-w-xs">
-              Click <span className="font-semibold text-emerald-600">Run</span> to execute the pipeline and see skrub&apos;s computation graph (DataOp.skb.draw_graph).
+              Edit pipeline code to see the computation graph.
             </div>
           </div>
         )}
