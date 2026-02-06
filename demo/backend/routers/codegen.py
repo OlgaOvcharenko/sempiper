@@ -60,6 +60,7 @@ class CompileRequest(BaseModel):
 
 class ExecuteRequest(BaseModel):
     input_code: str
+    script_id: str | None = None  # Loaded script id (simple, medium, full); used to save SVG by name
 
 
 class UpdateConfigRequest(BaseModel):
@@ -98,9 +99,10 @@ def sempipes_info() -> dict:
 def compile_pipeline(req: CompileRequest) -> CompileResponse:
     """Return graph nodes and edges with source ranges. Graph JSON is validated; errors are in validation_errors."""
     nodes, edges = extract_nodes_with_ranges(req.input_code)
-    nodes_dict = [n.model_dump() for n in nodes]
-    edges_dict = [e.model_dump() for e in edges]
-    valid, errors = validate_graph_json(nodes_dict, edges_dict)
+    _, errors = validate_graph_json(
+        [n.model_dump() for n in nodes],
+        [e.model_dump() for e in edges],
+    )
     return CompileResponse(nodes=nodes, edges=edges, validation_errors=errors)
 
 
@@ -111,7 +113,7 @@ def execute_pipeline(req: ExecuteRequest):
     Frontend shows live terminal output and live-updating code blocks per node.
     """
     return StreamingResponse(
-        stream_execute_events(req.input_code),
+        stream_execute_events(req.input_code, script_id=req.script_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

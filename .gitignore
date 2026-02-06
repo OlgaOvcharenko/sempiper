@@ -38,5 +38,6 @@ coverage/
 # Build / artifacts
 target/
 build/
+demo/graph_svgs/
 *.log
 .demo.pids
