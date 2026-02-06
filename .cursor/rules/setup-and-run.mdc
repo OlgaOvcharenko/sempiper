@@ -19,8 +19,10 @@ alwaysApply: true
 
 ## Tests
 
+- **All tests**: From repo root run `make test` (backend + frontend + E2E).
 - **Backend**: Run `pytest` from repo root or from `demo/backend` (after `poetry install` at root).
 - **Frontend**: From `demo/frontend`, run `npm test`.
+- **E2E**: From `demo/frontend`, run `npm run test:e2e` (Playwright; starts backend+frontend via webServer).
 
 ## Docker
 
