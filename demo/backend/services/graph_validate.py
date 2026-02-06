@@ -6,6 +6,8 @@ Schema: nodes = [{ id, type, label, source_range? }], edges = [{ source, target 
 
 from __future__ import annotations
 
+from collections import deque
+
 
 def _is_dag(node_ids: set[str], edges: list[dict]) -> bool:
     """Return True if the graph has no cycle (topological sort)."""
@@ -14,7 +16,6 @@ def _is_dag(node_ids: set[str], edges: list[dict]) -> bool:
         s, t = e.get("source"), e.get("target")
         if t in in_degree and s != t:
             in_degree[t] = in_degree.get(t, 0) + 1
-    from collections import deque
     q = deque(n for n in node_ids if in_degree[n] == 0)
     seen = 0
     while q:
