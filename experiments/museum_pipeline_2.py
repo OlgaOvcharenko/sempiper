@@ -11,10 +11,12 @@ from tabpfn.constants import ModelVersion
 
 import sempipes
 
+
 warnings.filterwarnings("ignore")
 
 sempipes.update_config(
-    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0})
+    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0}),
+    llm_for_batch_processing=sempipes.LLM("gemini/gemini-2.5-flash-lite", {"temperature": 0.0})
 )
 
 DATA_PATH = "experiments/data/met_10k.csv"
@@ -43,7 +45,7 @@ def apply_spacy_features(df):
     ent_norp = [] 
     ent_person = [] 
     
-    docs = list(nlp.pipe(df['description'].fillna("").astype(str)))
+    docs = list(nlp.pipe(df['title'].fillna("").astype(str)))
 
     for doc in docs:
         ent_norp.append(", ".join({e.text for e in doc.ents if e.label_ == "NORP"}))
@@ -70,29 +72,7 @@ artwork_data = sempipes.as_X(
 
 artwork_data = artwork_data.sem_extract_features(
     nl_prompt="""
-    Extract 4 columns from the 'date' string to handle centuries, ranges, and BCE flags.
-    
-    Handle 'century' (e.g., 5th century -> 400-499)
-    Handle 'century pairs' (e.g., 3rd–4th century -> 200-399)
-    Handle BCE centuries (e.g., 5th century b.c. -> 499-400)
-    Handle BCE flags. This can appear as b.c, b.c.e, bc, or bce.
-    Handle early, mid and late partitions.
-    Handle NaN values.
-    """,
-    name="extract_dates",
-    input_columns=["date"],
-    output_columns={
-        "year_start": "Start year",
-        "start_is_bce": "Start is BCE",
-        "year_end": "End year",
-        "end_is_bce": "End is BCE",
-    },
-    generate_via_code=True,
-)
-
-artwork_data = artwork_data.sem_extract_features(
-    nl_prompt="""
-    Extract useful keywords related to cultural terms, demonyms, religions, locations, or famous people.
+    Extract useful keywords related to cultural origin, demonyms, religions, locations, or famous people.
     """,
     name="extract_desc_features",
     input_columns=["description"],
@@ -103,6 +83,7 @@ artwork_data = artwork_data.sem_clean(
     nl_prompt="Standardize the 'object_name' column.",
     columns=["object_name"],
 )
+
 
 vectorizer = skrub.TableVectorizer()
 vectorized_artworks = artwork_data.skb.apply(
@@ -115,6 +96,7 @@ tabpfn = TabPFNClassifier.create_default_for_version(ModelVersion.V2, device='cp
 pred_pipeline = vectorized_artworks.skb.apply(tabpfn, y=culture_target)
 
 res = pred_pipeline.skb.cross_validate(cv=2)
+
 test_scores = res['test_score']
 print(f"\nTest scores per fold: {test_scores}")
 print(f"Mean accuracy: {test_scores.mean():.2%}")
