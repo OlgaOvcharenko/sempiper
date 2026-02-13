@@ -1,5 +1,6 @@
 [
-  { "id": "simple", "label": "Simple", "file": "simple.py" },
-  { "id": "medium", "label": "Medium", "file": "medium.py" },
-  { "id": "full", "label": "Full (notebook)", "file": "full.py" }
+  { "id": "simple", "label": "Fraud baskets (simple)", "file": "simple.py" },
+  { "id": "medium", "label": "Fraud baskets (medium)", "file": "medium.py" },
+  { "id": "full", "label": "Fraud baskets (full)", "file": "full.py" },
+  { "id": "new", "label": "New", "file": "new.py" }
 ]
