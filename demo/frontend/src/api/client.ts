@@ -141,7 +141,7 @@ export interface InputSummary {
   row_count: number;
 }
 
-/** SSE event from execute stream: terminal, node_code, input_summary, cost, done, error, or skrub_graph. */
+/** SSE event from execute stream: terminal, node_code, input_summary, node_data, cost, done, error, or skrub_graph. */
 export type ExecuteEvent =
   | { type: "terminal"; line: string }
   | { type: "error"; message: string }
@@ -155,8 +155,16 @@ export type ExecuteEvent =
       is_fallback?: boolean;
     }
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
+  | {
+      /** Intermediate data for operator nodes (from .skb.preview()). */
+      type: "node_data";
+      node_id: string;
+      schema: InputSummary["schema"];
+      sample: InputSummary["sample"];
+      row_count: number;
+    }
   | { type: "cost"; total_usd: number }
-  | { type: "done"; total_cost_usd?: number }
+  | { type: "done"; total_cost_usd?: number; duration_ms?: number }
   | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string; skrubToCompileId?: Record<string, string> };
 
 /** Skrub DAG from _Graph().run(dag): nodes, parents, children (interactive viz). */
@@ -199,15 +207,21 @@ export function compileToSkrubGraph(
     if (!children[e.source].includes(e.target)) children[e.source].push(e.target);
   }
 
+  // Only mark nodes as sempipes if their label starts with "sem_" (actual sempipes semantic operators)
+  const isSempipesLabel = (label: string): boolean => {
+    const low = (label ?? "").toLowerCase();
+    return low.startsWith("sem_");
+  };
+
   const sempipesNodeIds = runnable
-    .filter((n) => (n.type ?? "").toLowerCase() === "operator")
+    .filter((n) => (n.type ?? "").toLowerCase() === "operator" && isSempipesLabel(n.label))
     .map((n) => n.id);
 
   return {
     nodes: runnable.map((n) => ({
       id: n.id,
       label: n.label,
-      is_sempipes_semantic: (n.type ?? "").toLowerCase() === "operator",
+      is_sempipes_semantic: (n.type ?? "").toLowerCase() === "operator" && isSempipesLabel(n.label),
     })),
     parents,
     children,
