@@ -14,3 +14,33 @@ vi.mock("../src/components/CodeOutput", () => ({
     return React.createElement("pre", null, code);
   },
 }));
+
+// Mock Cytoscape to avoid Canvas errors in JSDOM
+vi.mock("cytoscape", () => {
+  const mockCy = {
+    nodes: vi.fn(() => ({
+      forEach: vi.fn(),
+      removeClass: vi.fn().mockReturnThis(),
+      addClass: vi.fn().mockReturnThis(),
+      length: 0,
+    })),
+    edges: vi.fn(() => ({
+      forEach: vi.fn(),
+    })),
+    getElementById: vi.fn((id: string) => ({
+      length: 1,
+      addClass: vi.fn().mockReturnThis(),
+      removeClass: vi.fn().mockReturnThis(),
+      data: vi.fn(),
+    })),
+    on: vi.fn(),
+    destroy: vi.fn(),
+    layout: vi.fn(() => ({
+      run: vi.fn(),
+    })),
+  };
+
+  return {
+    default: vi.fn(() => mockCy),
+  };
+});

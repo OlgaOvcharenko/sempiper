@@ -90,7 +90,7 @@ describe("NodeDetailsPanel", () => {
     expect(screen.getByText(/generating code for this node/i)).toBeInTheDocument();
   });
 
-  it("shows Retries and Cost for operator when live retries/cost provided", () => {
+  it("shows Attempts and Cost for operator when live retries/cost provided", () => {
     render(
       <NodeDetailsPanel
         selectedNodeId="sem_fillna_2"
@@ -100,7 +100,7 @@ describe("NodeDetailsPanel", () => {
         liveCostUsdByNode={{ sem_fillna_2: 0.001234 }}
       />
     );
-    expect(screen.getByText("Retries: 2")).toBeInTheDocument();
+    expect(screen.getByText("Attempts: 2")).toBeInTheDocument();
     expect(screen.getByText(/Cost: \$0\.001234/)).toBeInTheDocument();
   });
 

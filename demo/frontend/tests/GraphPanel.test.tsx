@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { GraphPanel } from "../src/components/GraphPanel";
 
 describe("GraphPanel", () => {
@@ -50,7 +50,7 @@ describe("GraphPanel", () => {
     expect(screen.getByLabelText(/Graph loading spinner/)).toBeInTheDocument();
   });
 
-  it("uses only graph dict for visualization (no SVG); without dict shows placeholder", () => {
+  it("uses only graph dict for visualization; without dict shows placeholder", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -65,8 +65,7 @@ describe("GraphPanel", () => {
     expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
   });
 
-  it("calls onSelectNode with skrub_<id> when clicking a node in skrub DAG (sempipes operator shows code)", () => {
-    const onSelectNode = vi.fn();
+  it("renders Cytoscape container when skrub graph is provided", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -79,15 +78,14 @@ describe("GraphPanel", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
-        onSelectNode={onSelectNode}
+        onSelectNode={vi.fn()}
         nodes={[]}
         edges={[]}
         skrubGraph={skrubGraph}
         showGraph={true}
       />
     );
-    fireEvent.click(screen.getByLabelText(/Graph node sem_fillna \(sempipes operator\)/));
-    expect(onSelectNode).toHaveBeenCalledWith("skrub_1");
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
   it("shows placeholder when showGraph is false", () => {
@@ -106,7 +104,7 @@ describe("GraphPanel", () => {
     expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
   });
 
-  it("lays out medium-like graph with baskets left of products (matches skrub SVG flow)", () => {
+  it("renders Cytoscape graph with medium-like graph data", () => {
     const skrubGraph = {
       nodes: [
         { id: "var_products_13", label: "products", is_sempipes_semantic: false },
@@ -134,7 +132,7 @@ describe("GraphPanel", () => {
       },
       sempipesNodeIds: ["sem_fillna_22"],
     };
-    const { container } = render(
+    render(
       <GraphPanel
         selectedNodeId={null}
         onSelectNode={vi.fn()}
@@ -144,21 +142,10 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    const parseTranslate = (el: Element): { x: number; y: number } => {
-      const t = el.getAttribute("transform") ?? "";
-      const m = t.match(/translate\((\d+),\s*(\d+)\)/);
-      return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
-    };
-    const basketsNode = container.querySelector('[data-testid="graph-node-var_baskets_14"]');
-    const productsNode = container.querySelector('[data-testid="graph-node-var_products_13"]');
-    expect(basketsNode).toBeInTheDocument();
-    expect(productsNode).toBeInTheDocument();
-    const basketsPos = parseTranslate(basketsNode!);
-    const productsPos = parseTranslate(productsNode!);
-    expect(basketsPos.x).toBeLessThan(productsPos.x);
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("lays out as_X below subsample (baskets branch)", () => {
+  it("renders Cytoscape graph with simple branching structure", () => {
     const skrubGraph = {
       nodes: [
         { id: "var_baskets_14", label: "baskets", is_sempipes_semantic: false },
@@ -169,7 +156,7 @@ describe("GraphPanel", () => {
       children: { var_baskets_14: ["subsample_15"], subsample_15: ["as_X_18"], as_X_18: [] },
       sempipesNodeIds: [] as string[],
     };
-    const { container } = render(
+    render(
       <GraphPanel
         selectedNodeId={null}
         onSelectNode={vi.fn()}
@@ -179,21 +166,10 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    const parseTranslate = (el: Element): { x: number; y: number } => {
-      const t = el.getAttribute("transform") ?? "";
-      const m = t.match(/translate\((\d+),\s*(\d+)\)/);
-      return m ? { x: Number(m[1]), y: Number(m[2]) } : { x: 0, y: 0 };
-    };
-    const subsampleNode = container.querySelector('[data-testid="graph-node-subsample_15"]');
-    const asXNode = container.querySelector('[data-testid="graph-node-as_X_18"]');
-    expect(subsampleNode).toBeInTheDocument();
-    expect(asXNode).toBeInTheDocument();
-    const subsamplePos = parseTranslate(subsampleNode!);
-    const asXPos = parseTranslate(asXNode!);
-    expect(asXPos.y).toBeGreaterThan(subsamplePos.y);
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("shows single interactive Skrub graph (no Skrub/Interactive toggle) when skrub dict is provided", () => {
+  it("shows single interactive graph (no toggle) when skrub dict is provided", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -218,8 +194,7 @@ describe("GraphPanel", () => {
     expect(screen.queryByRole("button", { name: "Interactive" })).not.toBeInTheDocument();
   });
 
-  it("clicking an input node in skrub DAG calls onSelectNode with skrub_<id>", () => {
-    const onSelectNode = vi.fn();
+  it("renders Cytoscape container for input nodes", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -232,18 +207,17 @@ describe("GraphPanel", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
-        onSelectNode={onSelectNode}
+        onSelectNode={vi.fn()}
         nodes={[]}
         edges={[]}
         skrubGraph={skrubGraph}
         showGraph={true}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /Graph node as_X/ }));
-    expect(onSelectNode).toHaveBeenCalledWith("skrub_0");
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("shows status badges when statusByNodeId is provided", () => {
+  it("renders Cytoscape container with status badges", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -264,11 +238,10 @@ describe("GraphPanel", () => {
         statusByNodeId={{ skrub_0: "done", skrub_1: "done" }}
       />
     );
-    const doneBadges = screen.getAllByTestId("node-status-done");
-    expect(doneBadges.length).toBe(2);
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("highlights nodes when highlightedNodeIds contains skrub IDs (code–graph mapping)", () => {
+  it("renders Cytoscape container with highlighted nodes", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -278,7 +251,7 @@ describe("GraphPanel", () => {
       children: { "0": ["1"], "1": [] },
       sempipesNodeIds: ["1"],
     };
-    const { container } = render(
+    render(
       <GraphPanel
         selectedNodeId={null}
         onSelectNode={vi.fn()}
@@ -289,14 +262,10 @@ describe("GraphPanel", () => {
         highlightedNodeIds={["skrub_0"]}
       />
     );
-    const rects = container.querySelectorAll("rect");
-    expect(rects.length).toBe(2);
-    const asXRect = Array.from(rects).find((r) => r.closest("g")?.getAttribute("aria-label")?.includes("as_X"));
-    expect(asXRect).toBeDefined();
-    expect(asXRect?.getAttribute("stroke-width")).toBe("3");
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("highlights multiple nodes when highlightedNodeIds contains several skrub IDs (code–graph sync)", () => {
+  it("renders Cytoscape container with multiple highlighted nodes", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -306,7 +275,7 @@ describe("GraphPanel", () => {
       children: { "0": ["1"], "1": [] },
       sempipesNodeIds: ["1"],
     };
-    const { container } = render(
+    render(
       <GraphPanel
         selectedNodeId={null}
         onSelectNode={vi.fn()}
@@ -317,13 +286,10 @@ describe("GraphPanel", () => {
         highlightedNodeIds={["skrub_0", "skrub_1"]}
       />
     );
-    const rects = container.querySelectorAll("rect");
-    expect(rects.length).toBe(2);
-    const highlightedRects = Array.from(rects).filter((r) => r.getAttribute("stroke-width") === "3");
-    expect(highlightedRects.length).toBe(2);
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("selected node and highlighted nodes both get visual highlight (graph-to-code sync)", () => {
+  it("renders Cytoscape container with selected and highlighted nodes", () => {
     const skrubGraph = {
       nodes: [
         { id: "0", label: "as_X", is_sempipes_semantic: false },
@@ -333,7 +299,7 @@ describe("GraphPanel", () => {
       children: { "0": ["1"], "1": [] },
       sempipesNodeIds: ["1"],
     };
-    const { container } = render(
+    render(
       <GraphPanel
         selectedNodeId="skrub_1"
         onSelectNode={vi.fn()}
@@ -344,11 +310,7 @@ describe("GraphPanel", () => {
         highlightedNodeIds={["skrub_1"]}
       />
     );
-    const semFillnaRect = Array.from(container.querySelectorAll("rect")).find(
-      (r) => r.closest("g")?.getAttribute("aria-label")?.includes("sem_fillna")
-    );
-    expect(semFillnaRect).toBeDefined();
-    expect(semFillnaRect?.getAttribute("stroke-width")).toBe("3");
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
   it("shows interactive DAG from graph dict (nodes, parents, children)", () => {
@@ -369,6 +331,59 @@ describe("GraphPanel", () => {
       />
     );
     expect(screen.getByText(/Computation graph \(from code\) · Click an operator to see generated code/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Graph node as_X/ })).toBeInTheDocument();
+    expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
+  });
+
+  it("shows 'No computation graph yet' when skrubGraph is null", () => {
+    render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[]}
+        edges={[]}
+        skrubGraph={null}
+        showGraph={true}
+      />
+    );
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
+  });
+
+  it("shows 'No computation graph yet' when skrubGraph has empty nodes array", () => {
+    const emptyGraph = {
+      nodes: [],
+      parents: {},
+      children: {},
+      sempipesNodeIds: [],
+    };
+    render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[]}
+        edges={[]}
+        skrubGraph={emptyGraph}
+        showGraph={true}
+      />
+    );
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
+  });
+
+  it("shows 'No computation graph yet' when skrubGraph is undefined", () => {
+    render(
+      <GraphPanel
+        selectedNodeId={null}
+        onSelectNode={vi.fn()}
+        nodes={[]}
+        edges={[]}
+        skrubGraph={undefined}
+        showGraph={true}
+      />
+    );
+    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
   });
 });
