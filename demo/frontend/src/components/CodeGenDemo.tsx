@@ -10,7 +10,6 @@ import {
   type CompileEdge,
   type InputSummary,
   type PipelineScriptEntry,
-  type SkrubGraphDict,
 } from "../api/client";
 import {
   graphNodeToCompileIds,
@@ -54,6 +53,15 @@ const AVAILABLE_LLMS = [
   "gemini/gemini-3-pro",
 ];
 
+/** Format duration in milliseconds to human-readable string. */
+const formatDuration = (ms: number): string => {
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}m ${secs}s`;
+};
+
 export function CodeGenDemo() {
   const [pipelineScripts, setPipelineScripts] = useState<PipelineScriptEntry[]>([]);
   const [pipelineCode, setPipelineCode] = useState(INITIAL_PIPELINE_CODE);
@@ -68,11 +76,12 @@ export function CodeGenDemo() {
   const [liveNodeRetries, setLiveNodeRetries] = useState<Record<string, number>>({});
   const [liveFallbackByNode, setLiveFallbackByNode] = useState<Record<string, boolean>>({});
   const [liveNodeCostUsd, setLiveNodeCostUsd] = useState<Record<string, number>>({});
-  const [statusByNodeId, setStatusByNodeId] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
   const [inputSummaryByNode, setInputSummaryByNode] = useState<Record<string, InputSummary>>({});
+  /** Intermediate data for operator nodes (from .skb.preview()). */
+  const [nodeDataByNode, setNodeDataByNode] = useState<Record<string, InputSummary>>({});
   const [lastRunCostUsd, setLastRunCostUsd] = useState<number | null>(null);
+  const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
-  const [skrubGraph, setSkrubGraph] = useState<SkrubGraphDict | null>(null);
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
   const [isExecuting, setIsExecuting] = useState(false);
   const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
@@ -83,6 +92,7 @@ export function CodeGenDemo() {
   const executeAbortRef = useRef<AbortController | null>(null);
   const compileAbortRef = useRef<AbortController | null>(null);
   const compileNodesRef = useRef<CompileNode[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   compileNodesRef.current = compileNodes;
 
   const refreshCompileGraph = useCallback(async () => {
@@ -113,6 +123,22 @@ export function CodeGenDemo() {
     } catch {
       setPipelineCode("# Failed to load script: " + id + "\n");
     }
+  }, []);
+
+  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result;
+      if (typeof content === "string") {
+        setPipelineCode(content);
+        setLoadedScriptId(null); // Clear selection since this is a custom upload
+      }
+    };
+    reader.readAsText(file);
+    // Reset input so the same file can be uploaded again
+    event.target.value = "";
   }, []);
 
   const validateTemperature = useCallback((value: string): boolean => {
@@ -159,11 +185,11 @@ export function CodeGenDemo() {
     setLiveNodeRetries({});
     setLiveFallbackByNode({});
     setLiveNodeCostUsd({});
-    setStatusByNodeId({});
     setInputSummaryByNode({});
+    setNodeDataByNode({});
     setLastRunCostUsd(null);
+    setLastRunDurationMs(null);
     setLastRunError(null);
-    setSkrubGraph(null);
     setSkrubToCompileId({});
     setIsExecuting(true);
 
@@ -191,32 +217,58 @@ export function CodeGenDemo() {
               row_count: event.row_count,
             },
           }));
-        } else if (event.type === "node_code") {
-          setLiveNodeCode((prev) => ({ ...prev, [event.node_id]: event.generated_code }));
-          setStatusByNodeId((prev) => ({
+        } else if (event.type === "node_data") {
+          // Intermediate data for operator nodes (from .skb.preview())
+          setNodeDataByNode((prev) => ({
             ...prev,
-            [event.node_id]: event.is_fallback ? "error" : "done",
+            [event.node_id]: {
+              node_id: event.node_id,
+              schema: event.schema,
+              sample: event.sample,
+              row_count: event.row_count,
+            },
+          }));
+        } else if (event.type === "node_code") {
+          // Store code under both the raw ID and skrub-prefixed ID for graph lookup.
+          // Graph display uses skrub_<compile_id> format, backend emits compile IDs.
+          const nodeId = event.node_id;
+          const skrubId = nodeId.startsWith("skrub_") ? nodeId : `skrub_${nodeId}`;
+          setLiveNodeCode((prev) => ({
+            ...prev,
+            [nodeId]: event.generated_code,
+            [skrubId]: event.generated_code,
           }));
           if (event.retries != null) {
             const retries = event.retries;
-            setLiveNodeRetries((prev) => ({ ...prev, [event.node_id]: retries }));
+            setLiveNodeRetries((prev) => ({
+              ...prev,
+              [nodeId]: retries,
+              [skrubId]: retries,
+            }));
           }
           if (event.is_fallback != null) {
             const isFallback = event.is_fallback;
-            setLiveFallbackByNode((prev) => ({ ...prev, [event.node_id]: isFallback }));
+            setLiveFallbackByNode((prev) => ({
+              ...prev,
+              [nodeId]: isFallback,
+              [skrubId]: isFallback,
+            }));
           }
           if (event.cost_usd != null) {
             const cost = event.cost_usd;
-            setLiveNodeCostUsd((prev) => ({ ...prev, [event.node_id]: cost }));
+            setLiveNodeCostUsd((prev) => ({
+              ...prev,
+              [nodeId]: cost,
+              [skrubId]: cost,
+            }));
           }
         } else if (event.type === "error") {
           setLastRunError(event.message);
         } else if (event.type === "cost") {
           setLastRunCostUsd(event.total_usd);
         } else if (event.type === "skrub_graph") {
-          // Only show graph from dictionary (nodes, parents, children); no SVG.
+          // Store skrubToCompileId mapping for code-graph sync; graph display uses compile preview.
           if (event.graph) {
-            setSkrubGraph(event.graph);
             setSkrubToCompileId(event.skrubToCompileId ?? {});
             // Copy input summaries to skrub node ids so selecting skrub_0 shows data when backend
             // emitted input_summary with compile node id (e.g. as_X_1).
@@ -240,6 +292,7 @@ export function CodeGenDemo() {
           }
         } else if (event.type === "done") {
           if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
+          if (event.duration_ms != null) setLastRunDurationMs(event.duration_ms);
           setIsExecuting(false);
           executeAbortRef.current = null;
         }
@@ -287,10 +340,10 @@ export function CodeGenDemo() {
     setLiveNodeCode({});
     setLiveNodeRetries({});
     setLiveNodeCostUsd({});
-    setStatusByNodeId({});
     setInputSummaryByNode({});
+    setNodeDataByNode({});
     setLastRunCostUsd(null);
-    setSkrubGraph(null);
+    setLastRunDurationMs(null);
     setSkrubToCompileId({});
     setCompileError(null);
   }, [pipelineCode]);
@@ -332,7 +385,13 @@ export function CodeGenDemo() {
       const nid = skrubIdToRaw(selectedNodeId);
       const graphNode = displayGraph.nodes.find((n) => n.id === nid);
       if (graphNode) {
-        const isOperator = Boolean(displayGraph.sempipesNodeIds?.includes(nid));
+        // Determine node type from compile nodes (not just sempipesNodeIds).
+        // sempipesNodeIds only contains sem_* operators, but we want to show
+        // generated code for ALL operators (skb.apply, skb.eval, etc.)
+        const compileNode = compileNodes.find((n) => n.id === nid);
+        const compileType = (compileNode?.type ?? "").toLowerCase();
+        const isOperator = compileType === "operator" || compileType === "pipeline" ||
+          Boolean(displayGraph.sempipesNodeIds?.includes(nid));
         return {
           id: selectedNodeId,
           type: (isOperator ? "operator" : "input") as "input" | "operator",
@@ -410,93 +469,84 @@ export function CodeGenDemo() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-200 text-zinc-900 font-sans min-w-[1280px]">
-      <div className="flex flex-1 min-h-0 gap-4 p-4">
-        {/* Left: Pipeline editor (notebook-cell style) with Run in corner */}
+      {/* Header with SemPipes logo */}
+      <header className="shrink-0 px-6 py-2 flex items-center justify-center">
+        <h1 className="text-2xl font-semibold tracking-tight" style={{ fontFamily: "'Outfit', sans-serif" }}>
+          <span className="text-rose-400">Sem</span>
+          <span className="text-slate-500">Pipes</span>
+        </h1>
+      </header>
+      <div className="flex flex-1 min-h-0 gap-4 px-4 pb-4">
+        {/* Left: Pipeline editor */}
         <div className="min-w-[280px] flex flex-col min-h-0 rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md transition-all duration-300" style={{ width: leftWidth }}>
-          <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100">
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="flex flex-col gap-2 flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-zinc-500">LLM:</span>
-                  <select
-                    value={llmName}
-                    onChange={(e) => setLlmName(e.target.value)}
-                    disabled={isExecuting}
-                    className="text-xs px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-700"
-                    title="Select LLM model"
-                  >
-                    {AVAILABLE_LLMS.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-xs text-zinc-500 ml-2">Temperature:</span>
-                  <div className="flex flex-col gap-0.5">
-                    <input
-                      type="text"
-                      value={temperature}
-                      onChange={(e) => handleTemperatureChange(e.target.value)}
-                      disabled={isExecuting}
-                      className={`text-xs px-2 py-1 rounded border bg-white hover:bg-slate-100 disabled:opacity-50 w-16 transition-colors ${
-                        temperatureError
-                          ? "border-red-500 bg-red-50 text-red-900"
-                          : "border-slate-300 text-zinc-700"
-                      } ${temperatureShake ? "animate-shake" : ""}`}
-                      placeholder="0.0"
-                      title="LLM temperature (0-2)"
-                    />
-                    {temperatureError && (
-                      <span className="text-[10px] text-red-600 whitespace-nowrap">
-                        Must be 0-2
-                      </span>
-                    )}
-                  </div>
-                  {lastRunCostUsd != null && lastRunCostUsd > 0 && (
-                    <span className="text-xs text-zinc-500 ml-2" title="LLM cost from last run">
-                      ${lastRunCostUsd.toFixed(6)}
-                    </span>
-                  )}
-                  {lastRunError && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 ml-2" title={lastRunError}>
-                      ⚠ Failed
-                    </span>
-                  )}
-                  {!isExecuting && !lastRunError && lastRunCostUsd != null && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 ml-2" title="Pipeline executed successfully">
-                      ✓ Success
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-zinc-500">Load script:</span>
+          <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100 flex flex-col gap-2">
+            {/* Primary row: Script + Run */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="text-xs text-zinc-500">Pipeline:</span>
+                <select
+                  value={loadedScriptId ?? ""}
+                  onChange={(e) => handleLoadScript(e.target.value)}
+                  disabled={isExecuting}
+                  className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-700 min-w-[140px]"
+                  title="Select pipeline script"
+                >
+                  {(pipelineScripts ?? []).length === 0 ? (
+                    <option value="">No pipelines — is the backend running?</option>
+                  ) : null}
                   {(pipelineScripts ?? []).map(({ id, label }) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => handleLoadScript(id)}
-                      disabled={isExecuting}
-                      className="text-xs px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-700"
-                    >
+                    <option key={id} value={id}>
                       {label}
-                    </button>
+                    </option>
                   ))}
-                  <button
-                    type="button"
-                    onClick={handlePlay}
-                    disabled={isExecuting}
-                    className="shrink-0 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors flex items-center gap-1.5 ml-2"
-                    title={isExecuting ? "Stop execution" : "Run pipeline"}
-                  >
-                    {isExecuting ? (
-                      <>Stop</>
-                    ) : (
-                      <>
-                        <span aria-hidden>▶</span> Run
-                      </>
-                    )}
-                  </button>
-                </div>
+                </select>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".py,.txt"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  data-testid="file-upload-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isExecuting}
+                  className="p-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-500"
+                  title="Upload script from file"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePlay}
+                  disabled={isExecuting}
+                  className="p-1.5 rounded border border-emerald-600 bg-emerald-600 hover:bg-emerald-500 hover:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+                  title="Run pipeline"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePlay}
+                  disabled={!isExecuting}
+                  className={`p-1.5 rounded border transition-colors ${
+                    isExecuting
+                      ? "border-red-600 bg-red-600 hover:bg-red-500 hover:border-red-500 text-white"
+                      : "border-slate-300 bg-slate-100 text-slate-300 cursor-not-allowed"
+                  }`}
+                  title="Stop execution"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" />
+                  </svg>
+                </button>
               </div>
               <button
                 type="button"
@@ -509,14 +559,53 @@ export function CodeGenDemo() {
                 {expandedPanel === 'left' ? '⤡' : '⤢'}
               </button>
             </div>
+            {/* Secondary row: Model settings */}
+            <div className="flex items-center gap-3 text-xs text-zinc-500">
+              <div className="flex items-center gap-1.5">
+                <span>Model:</span>
+                <select
+                  value={llmName}
+                  onChange={(e) => setLlmName(e.target.value)}
+                  disabled={isExecuting}
+                  className="text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-600"
+                  title="Select LLM model"
+                >
+                  {AVAILABLE_LLMS.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span>Temperature:</span>
+                <input
+                  type="text"
+                  value={temperature}
+                  onChange={(e) => handleTemperatureChange(e.target.value)}
+                  disabled={isExecuting}
+                  className={`text-xs px-1.5 py-0.5 rounded border bg-white hover:bg-slate-100 disabled:opacity-50 w-12 transition-colors ${
+                    temperatureError
+                      ? "border-red-500 bg-red-50 text-red-900"
+                      : "border-slate-300 text-zinc-600"
+                  } ${temperatureShake ? "animate-shake" : ""}`}
+                  placeholder="0.0"
+                  title="LLM temperature (0-2)"
+                />
+                {temperatureError && (
+                  <span className="text-[10px] text-red-600">0-2</span>
+                )}
+              </div>
+            </div>
+            {/* Error messages */}
             {lastRunError != null && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5" role="alert">
-                Run error: {lastRunError}
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1" role="alert">
+                {lastRunError}
               </p>
             )}
             {compileError != null && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5" role="alert">
-                Compile error: {compileError}
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1" role="alert">
+                {compileError}
               </p>
             )}
           </div>
@@ -546,11 +635,38 @@ export function CodeGenDemo() {
               focusNodeId={cursorFocusNodeId}
               onFocusApplied={() => setCursorFocusNodeId(null)}
               isExpanded={expandedPanel === 'left'}
+              sempipesNodeIds={compileNodes.filter((n) => (n.type ?? "").toLowerCase() === "operator" && (n.label ?? "").toLowerCase().startsWith("sem_")).map((n) => n.id)}
             />
           </div>
+          {/* Stats panel - appears after execution */}
+          {!isExecuting && lastRunDurationMs != null && (
+            <div className="shrink-0 px-3 py-2 border-t border-slate-300 bg-slate-50 flex items-center gap-3 text-xs">
+              {lastRunError ? (
+                <span className="text-red-600 flex items-center gap-1">
+                  <span>✗</span> Failed
+                </span>
+              ) : (
+                <span className="text-emerald-600 flex items-center gap-1">
+                  <span>✓</span> Completed
+                </span>
+              )}
+              <span className="text-zinc-400">·</span>
+              <span className="text-zinc-600" title="Execution time">
+                {formatDuration(lastRunDurationMs)}
+              </span>
+              {lastRunCostUsd != null && lastRunCostUsd > 0 && (
+                <>
+                  <span className="text-zinc-400">·</span>
+                  <span className="text-zinc-600" title="LLM cost">
+                    ${lastRunCostUsd.toFixed(6)}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Middle: Computation graph — placeholder before run, skrub native graph after */}
+        {/* Middle: Computation graph */}
         <div className="min-w-[200px] flex flex-col min-h-0 transition-all duration-300" style={{ width: middleWidth }}>
           <GraphPanel
             selectedNodeId={selectedNodeId}
@@ -561,7 +677,6 @@ export function CodeGenDemo() {
             runnableNodeIds={runnableNodeIds}
             isLoading={isExecuting && !displayGraph}
             highlightedNodeIds={highlightedSkrubIds}
-            statusByNodeId={statusByNodeId}
             showGraph={isExecuting || !!displayGraph}
             isPreview={isPreviewGraph}
             isExecuting={isExecuting}
@@ -592,6 +707,7 @@ export function CodeGenDemo() {
             liveCostUsdByNode={liveNodeCostUsd}
             inputSummaryByNode={inputSummaryByNode}
             inputSummaryForSelectedNode={inputSummaryForSelectedNode}
+            nodeDataByNode={nodeDataByNode}
             isExecuting={isExecuting}
             nodeMetadata={null}
             isExpanded={expandedPanel === 'right'}

@@ -34,6 +34,8 @@ interface InputEditorProps {
   focusNodeId?: string | null;
   /** Called after cursor has been moved to focusNodeId (parent should clear focusNodeId). */
   onFocusApplied?: () => void;
+  /** Node IDs that are sempipes semantic operators (for pink selection styling). */
+  sempipesNodeIds?: string[];
 }
 
 const EDITOR_BG = "#ffffff";
@@ -45,10 +47,17 @@ const INPUT_DECORATION: editor.IModelDecorationOptions = {
   marginClassName: "sempipe-element-margin",
 };
 
-/** Decoration for operators (sem_fillna, sem_gen_features, etc.) — green. */
-const OPERATOR_DECORATION: editor.IModelDecorationOptions = {
+/** Decoration for sempipes operators (sem_fillna, sem_gen_features, etc.) — green. */
+const SEMPIPES_OPERATOR_DECORATION: editor.IModelDecorationOptions = {
   isWholeLine: false,
   className: "sempipe-operator-decoration",
+  marginClassName: "sempipe-element-margin",
+};
+
+/** Decoration for non-sempipes operators (skb.subsample, etc.) — no color/white. */
+const REGULAR_OPERATOR_DECORATION: editor.IModelDecorationOptions = {
+  isWholeLine: false,
+  className: "sempipe-regular-operator-decoration",
   marginClassName: "sempipe-element-margin",
 };
 
@@ -59,15 +68,24 @@ const HOVER_DECORATION: editor.IModelDecorationOptions = {
   marginClassName: "sempipe-element-margin",
 };
 
-/** Selected graph node highlighted in code. */
+/** Selected non-sempipes graph node highlighted in code — yellow. */
 const SELECTED_DECORATION: editor.IModelDecorationOptions = {
   isWholeLine: false,
   className: "sempipe-selected-decoration",
   marginClassName: "sempipe-element-margin",
 };
 
-function decorationForType(nodeType: string | undefined): editor.IModelDecorationOptions {
-  return nodeType === "input" ? INPUT_DECORATION : OPERATOR_DECORATION;
+/** Selected sempipes graph node highlighted in code — pink. */
+const SELECTED_SEMPIPES_DECORATION: editor.IModelDecorationOptions = {
+  isWholeLine: false,
+  className: "sempipe-selected-sempipes-decoration",
+  marginClassName: "sempipe-element-margin",
+};
+
+function decorationForType(nodeType: string | undefined, isSempipes: boolean): editor.IModelDecorationOptions {
+  if (nodeType === "input") return INPUT_DECORATION;
+  if (isSempipes) return SEMPIPES_OPERATOR_DECORATION;
+  return REGULAR_OPERATOR_DECORATION;
 }
 
 export function InputEditor({
@@ -82,6 +100,7 @@ export function InputEditor({
   isExpanded = false,
   focusNodeId = null,
   onFocusApplied,
+  sempipesNodeIds = [],
 }: InputEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -119,11 +138,14 @@ export function InputEditor({
         const isHovered = hoveredNodeIds.includes(nr.id);
         const isSelected =
           selectedNodeId === nr.id || highlightedNodeIds.includes(nr.id);
+        const isSempipes = sempipesNodeIds.includes(nr.id);
         const options = isSelected
-          ? SELECTED_DECORATION
+          ? isSempipes
+            ? SELECTED_SEMPIPES_DECORATION
+            : SELECTED_DECORATION
           : isHovered
             ? HOVER_DECORATION
-            : decorationForType(nr.type);
+            : decorationForType(nr.type, isSempipes);
         return {
           range: new monaco.Range(r.start_line, r.start_column, r.end_line, r.end_column),
           options,
@@ -131,7 +153,7 @@ export function InputEditor({
       })
     );
     decorationIdsRef.current = ids;
-  }, [nodeRanges, getEditor, hoveredNodeIds, selectedNodeId, highlightedNodeIds]);
+  }, [nodeRanges, getEditor, hoveredNodeIds, selectedNodeId, highlightedNodeIds, sempipesNodeIds]);
 
   // ─── Code–graph sync: cursor/mouse → highlight nodes ───
   const findNodesAtPosition = useCallback(
@@ -235,9 +257,14 @@ export function InputEditor({
           background-color: rgba(59, 130, 246, 0.14);
           border-radius: 3px;
         }
-        /* Operators (sem_fillna, sem_gen_features, etc.) — green */
+        /* Sempipes operators (sem_fillna, sem_gen_features, etc.) — green */
         .sempipe-operator-decoration {
           background-color: rgba(34, 197, 94, 0.14);
+          border-radius: 3px;
+        }
+        /* Regular operators (skb.subsample, etc.) — no color/white */
+        .sempipe-regular-operator-decoration {
+          background-color: transparent;
           border-radius: 3px;
         }
         /* Darker on hover to mark middle panel */
@@ -245,12 +272,19 @@ export function InputEditor({
           background-color: rgba(16, 185, 129, 0.28);
           border-radius: 3px;
         }
-        /* Selected graph element highlighted in code — very visible */
+        /* Selected non-sempipes graph element highlighted in code — yellow */
         .sempipe-selected-decoration {
           background-color: rgba(251, 191, 36, 0.45);
           border: 2px solid rgb(245, 158, 11);
           border-radius: 4px;
           box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3);
+        }
+        /* Selected sempipes graph element highlighted in code — pink */
+        .sempipe-selected-sempipes-decoration {
+          background-color: rgba(252, 231, 243, 0.9);
+          border: 2px solid rgb(236, 72, 153);
+          border-radius: 4px;
+          box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.3);
         }
         .sempipe-element-margin { display: none; }
       `}</style>

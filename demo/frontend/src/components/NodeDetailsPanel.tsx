@@ -73,7 +73,7 @@ interface NodeDetailsPanelProps {
   generatedCode?: string | null;
   /** Live-updating generated code per node during/after execution (node_id → code). */
   liveGeneratedCodeByNode?: Record<string, string> | null;
-  /** Per-node retries from last run (node_id → retry count). */
+  /** Per-node LLM attempts from last run (node_id → attempt count). */
   liveRetriesByNode?: Record<string, number> | null;
   /** Per-node fallback flag: true when backend used placeholder (LLM unavailable or failed). */
   liveFallbackByNode?: Record<string, boolean> | null;
@@ -83,6 +83,8 @@ interface NodeDetailsPanelProps {
   inputSummaryByNode?: Record<string, InputSummary> | null;
   /** Resolved input summary for selected node (used when selected is skrub input; CodeGenDemo maps skrub_0 → compile node → summary). */
   inputSummaryForSelectedNode?: InputSummary | null;
+  /** Per-node intermediate data (schema, sample, row_count) from .skb.preview() (node_id → data). */
+  nodeDataByNode?: Record<string, InputSummary> | null;
   /** Whether pipeline is currently executing (so we show "Generating..." until code arrives). */
   isExecuting?: boolean;
   /** When we have backend: metadata / LLM stats for the node. */
@@ -103,21 +105,40 @@ export function NodeDetailsPanel({
   liveCostUsdByNode,
   inputSummaryByNode,
   inputSummaryForSelectedNode,
+  nodeDataByNode,
   isExecuting = false,
   nodeMetadata = null,
   expandButton = null,
   isExpanded = false,
 }: NodeDetailsPanelProps) {
+  // Try both the full selectedNodeId and the version without "skrub_" prefix
+  // This handles the case where node_code events use compile IDs but the UI uses skrub_ prefixed IDs
+  const rawNodeId = selectedNodeId?.startsWith("skrub_") ? selectedNodeId.slice(6) : selectedNodeId;
+
+  // Direct lookups trying both ID formats
   const liveMap = liveGeneratedCodeByNode ?? {};
-  const liveCodeForNode =
-    selectedNodeId && typeof liveMap[selectedNodeId] === "string"
-      ? liveMap[selectedNodeId]
-      : undefined;
+  const liveCodeForNode = (selectedNodeId && liveMap[selectedNodeId]) || (rawNodeId && liveMap[rawNodeId]) || undefined;
   const effectiveCode =
     liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode ?? null : null);
   const isLive = liveCodeForNode !== undefined;
   const waitingForCode = isExecuting && selectedNode?.type === "operator" && liveCodeForNode === undefined;
   const hasCodeToShow = (effectiveCode != null && effectiveCode !== "") || waitingForCode;
+
+  // Look up other per-node data using both ID formats
+  const retriesMap = liveRetriesByNode ?? {};
+  const nodeRetries = (selectedNodeId && retriesMap[selectedNodeId]) ?? (rawNodeId && retriesMap[rawNodeId]) ?? undefined;
+
+  const fallbackMap = liveFallbackByNode ?? {};
+  const nodeFallback = (selectedNodeId && fallbackMap[selectedNodeId]) ?? (rawNodeId && fallbackMap[rawNodeId]) ?? undefined;
+
+  const costMap = liveCostUsdByNode ?? {};
+  const nodeCostUsd = (selectedNodeId && costMap[selectedNodeId]) ?? (rawNodeId && costMap[rawNodeId]) ?? undefined;
+
+  const dataMap = nodeDataByNode ?? {};
+  const nodeData = (selectedNodeId && dataMap[selectedNodeId]) || (rawNodeId && dataMap[rawNodeId]) || undefined;
+
+  const summaryMap = inputSummaryByNode ?? {};
+  const inputSummary = inputSummaryForSelectedNode ?? (selectedNodeId && summaryMap[selectedNodeId]) ?? (rawNodeId && summaryMap[rawNodeId]) ?? undefined;
   if (!selectedNodeId || !selectedNode) {
     return (
       <div className="h-full flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md">
@@ -150,8 +171,8 @@ export function NodeDetailsPanel({
           <>
             <section>
               <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Data summary</h3>
-              {(inputSummaryForSelectedNode ?? (selectedNodeId && inputSummaryByNode?.[selectedNodeId])) ? (
-                <InputSummaryView summary={inputSummaryForSelectedNode ?? inputSummaryByNode![selectedNodeId!]} />
+              {inputSummary ? (
+                <InputSummaryView summary={inputSummary} />
               ) : isExecuting ? (
                 <p className="text-sm text-zinc-500 italic py-3">
                   Running pipeline… data summary will appear when this input is processed.
@@ -180,34 +201,39 @@ export function NodeDetailsPanel({
                 </p>
               )}
             </section>
+            {nodeData && (
+              <section>
+                <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
+                  Output data (preview)
+                </h3>
+                <InputSummaryView summary={nodeData} />
+              </section>
+            )}
             <section>
               <h3 className="text-xs text-zinc-500 uppercase tracking-wider mb-2">
                 LLM / prompt stats
               </h3>
-              {liveFallbackByNode?.[selectedNodeId] === true && (
+              {nodeFallback === true && (
                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">
                   Placeholder code shown above (LLM unavailable or failed). Configure sempipes with an API key for real generated code.
                 </p>
               )}
-              {(liveRetriesByNode?.[selectedNodeId] != null ||
-                (liveCostUsdByNode?.[selectedNodeId] != null &&
-                  liveCostUsdByNode[selectedNodeId] > 0)) && (
+              {(nodeRetries != null || (nodeCostUsd != null && nodeCostUsd > 0)) && (
                 <div className="flex flex-wrap gap-3 text-sm text-zinc-600 mb-2">
-                  {liveRetriesByNode?.[selectedNodeId] != null && (
-                    <span title={liveFallbackByNode?.[selectedNodeId] ? "Attempts before falling back to placeholder" : "Number of retries used for this node"}>
-                      Retries: {liveRetriesByNode[selectedNodeId]}
-                      {liveFallbackByNode?.[selectedNodeId] && " (LLM failed, placeholder shown)"}
+                  {nodeRetries != null && (
+                    <span title={nodeFallback ? "Attempts before falling back to placeholder" : "Number of LLM calls for this node"}>
+                      Attempts: {nodeRetries}
+                      {nodeFallback && " (LLM failed, placeholder shown)"}
                     </span>
                   )}
-                  {liveCostUsdByNode?.[selectedNodeId] != null &&
-                    liveCostUsdByNode[selectedNodeId] > 0 && (
-                      <span title="LLM cost for this node (USD)">
-                        Cost: ${liveCostUsdByNode[selectedNodeId].toFixed(6)}
-                      </span>
-                    )}
+                  {nodeCostUsd != null && nodeCostUsd > 0 && (
+                    <span title="LLM cost for this node (USD)">
+                      Cost: ${nodeCostUsd.toFixed(6)}
+                    </span>
+                  )}
                 </div>
               )}
-              {liveFallbackByNode?.[selectedNodeId] !== true && (
+              {nodeFallback !== true && (
                 <p className="text-sm text-zinc-600">
                   Prompt statistics and node-specific metadata will appear here when available.
                 </p>
