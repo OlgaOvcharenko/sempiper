@@ -30,26 +30,36 @@ _SEMPIPES_NODE_CODE_END = "##END##"
 _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
 _SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
+_NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
+_EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
 
 
-def _parse_captured_codes_from_stdout(stdout_str: str) -> list[str]:
+def _parse_captured_codes_from_stdout(stdout_str: str) -> list[dict]:
     """
     Parse ##SEMPIPES_NODE_CODE##\\n{json}\\n##END## blocks from runner stdout.
-    Returns list of code strings in index order (by "index" in each JSON).
+    Returns list of dicts with "code", "cost_usd", "attempts", and optionally "skrub_node_id".
     """
-    codes_by_index: dict[int, str] = {}
+    by_index: dict[int, dict] = {}
     pattern = re.compile(
         re.escape(_SEMPIPES_NODE_CODE_MARKER) + r"\s*\n([^\n]+)\n" + re.escape(_SEMPIPES_NODE_CODE_END)
     )
     for m in pattern.finditer(stdout_str):
         try:
             obj = json.loads(m.group(1))
-            idx = obj.get("index", len(codes_by_index))
+            idx = obj.get("index", len(by_index))
             code = obj.get("code", "")
-            codes_by_index[idx] = code if isinstance(code, str) else str(code)
+            code_str = code if isinstance(code, str) else str(code)
+            cost_usd = float(obj.get("cost_usd", 0.0)) if isinstance(obj.get("cost_usd"), (int, float)) else 0.0
+            raw_attempts = obj.get("attempts", obj.get("retries", 1))
+            attempts = max(1, int(raw_attempts)) if isinstance(raw_attempts, (int, float)) else 1
+            entry: dict = {"code": code_str, "cost_usd": cost_usd, "attempts": attempts}
+            skrub_id = obj.get("skrub_node_id")
+            if skrub_id is not None and isinstance(skrub_id, str) and skrub_id.strip():
+                entry["skrub_node_id"] = str(skrub_id).strip()
+            by_index[idx] = entry
         except (json.JSONDecodeError, TypeError):
             continue
-    return [codes_by_index[i] for i in sorted(codes_by_index)]
+    return [by_index[i] for i in sorted(by_index)]
 
 
 def _parse_skrub_graph_from_stdout(stdout_str: str) -> dict | None:
@@ -90,6 +100,45 @@ def _parse_skrub_svg_from_stdout(stdout_str: str) -> str | None:
     svg = m.group(1).strip()
     if svg.startswith("<svg") and "</svg>" in svg:
         return svg
+    return None
+
+
+def _parse_node_previews_from_stdout(stdout_str: str) -> list[dict]:
+    """
+    Parse ##NODE_PREVIEW##\\n{json}\\n##END## blocks from runner stdout.
+    Returns list of preview dicts with node_id, schema, sample, row_count.
+    """
+    previews: list[dict] = []
+    pattern = re.compile(
+        re.escape(_NODE_PREVIEW_MARKER) + r"\s*\n([^\n]+)\n" + re.escape(_SKRUB_GRAPH_END)
+    )
+    for m in pattern.finditer(stdout_str):
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict) and "node_id" in obj:
+                previews.append(obj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return previews
+
+
+def _parse_execution_stats_from_stdout(stdout_str: str) -> dict | None:
+    """
+    Parse ##EXECUTION_STATS##\\n{json}\\n##END## block from runner stdout.
+    Returns dict with duration_ms and cost_usd, or None.
+    """
+    pattern = re.compile(
+        re.escape(_EXECUTION_STATS_MARKER) + r"\s*\n([^\n]+)\n" + re.escape(_SKRUB_GRAPH_END)
+    )
+    m = pattern.search(stdout_str)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(1))
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, TypeError):
+        pass
     return None
 
 
@@ -251,32 +300,50 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
     """
     Build mapping from skrub graph node id to compile node id.
     Used by frontend to highlight code when user clicks a graph node.
+
+    IMPORTANT: Matches by label ONLY. The skrub graph node order (from _Graph().run())
+    may differ from document order, so we cannot use numeric index mapping.
+    Handles multiple nodes with the same label by matching Nth occurrence in skrub graph
+    to Nth occurrence in compile nodes (sorted by source_range.start_line for document order).
     """
     if not graph or not runnable:
         return {}
     nodes = graph.get("nodes") or []
     result: dict[str, str] = {}
-    # Fallback graph: node ids are "0","1","2" and count matches runnable
-    if (
-        len(nodes) == len(runnable)
-        and all(sn.get("id", "").isdigit() for sn in nodes if sn.get("id"))
-    ):
-        for sn in nodes:
-            skid = sn.get("id")
-            if skid and skid.isdigit():
-                idx = int(skid)
-                if 0 <= idx < len(runnable):
-                    result[skid] = getattr(runnable[idx], "id", str(runnable[idx]))
-    # Otherwise match by label
+
+    # Sort runnable by document order (source_range.start_line) to ensure correct matching
+    sorted_runnable = sorted(
+        runnable,
+        key=lambda n: getattr(n, "source_range", None).start_line
+        if getattr(n, "source_range", None)
+        else 999999,
+    )
+
+    # Build label -> list of compile node ids mapping (in document order)
+    label_to_compile_ids: dict[str, list[str]] = {}
+    for n in sorted_runnable:
+        label = (getattr(n, "label", "") or "").lower()
+        node_id = getattr(n, "id", str(n))
+        if label not in label_to_compile_ids:
+            label_to_compile_ids[label] = []
+        label_to_compile_ids[label].append(node_id)
+
+    # Track which occurrence of each label we've used
+    label_usage: dict[str, int] = {}
+
+    # Match by label, handling duplicates by tracking occurrences
     for sn in nodes:
         skid = sn.get("id")
-        if not skid or skid in result:
+        if not skid:
             continue
-        label = sn.get("label", "")
-        for n in runnable:
-            if (getattr(n, "label", n.id) or "") == label:
-                result[skid] = getattr(n, "id", str(n))
-                break
+        label = (sn.get("label", "") or "").lower()
+        occurrence = label_usage.get(label, 0)
+        compile_ids = label_to_compile_ids.get(label, [])
+
+        if occurrence < len(compile_ids):
+            result[skid] = compile_ids[occurrence]
+            label_usage[label] = occurrence + 1
+
     return result
 
 
@@ -329,6 +396,7 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
     ##SEMPIPES_NODE_CODE## blocks from stdout. We do not call the LLM directly.
     """
     total_cost_usd = 0.0
+    duration_ms = 0.0
     exec_failed = False
     try:
         nodes, compile_edges = extract_nodes_with_ranges(input_code)
@@ -339,8 +407,11 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
         # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##), or SVG.
         # When DEMO_E2E=1, skip real subprocess (no sempipes/LLM) for full-stack E2E tests.
         captured_codes: list[str] = []
+        captured_costs: list[float] = []
+        captured_attempts: list[int] = []
         graph_from_run: dict | None = None
         svg_from_run: str | None = None
+        node_previews: list[dict] = []
         e2e_mode = os.environ.get("DEMO_E2E") == "1"
         if e2e_mode:
             logger.info("E2E mode: skipping subprocess, using fallback graph and mock code")
@@ -393,16 +464,26 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                 finally:
                     reader.join(timeout=1.0)
                 decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
-                captured_codes = _parse_captured_codes_from_stdout(decoded)
+                captured = _parse_captured_codes_from_stdout(decoded)
+                captured_codes = [x["code"] for x in captured]
+                captured_costs = [x["cost_usd"] for x in captured]
+                captured_attempts = [x["attempts"] for x in captured]
                 logger.info(f"Subprocess returncode: {proc.returncode}, stdout: {len(decoded)} chars, captured: {len(captured_codes)} blocks")
                 if len(decoded) > 0:
                     logger.info(f"Stdout preview: {decoded[:200]}")
                 # Check for subprocess failure
                 exec_failed = (proc.returncode != 0)
-                # Extract skrub graph dict (##SKRUB_GRAPH##) and native SVG (##SKRUB_GRAPH_SVG##)
+                # Extract skrub graph dict (##SKRUB_GRAPH##), native SVG (##SKRUB_GRAPH_SVG##), node previews (##NODE_PREVIEW##), and execution stats (##EXECUTION_STATS##)
                 if decoded:
                     graph_from_run = _parse_skrub_graph_from_stdout(decoded)
                     svg_from_run = _parse_skrub_svg_from_stdout(decoded)
+                    node_previews = _parse_node_previews_from_stdout(decoded)
+                    exec_stats = _parse_execution_stats_from_stdout(decoded)
+                    if exec_stats:
+                        total_cost_usd = exec_stats.get("cost_usd", 0.0)
+                        duration_ms = exec_stats.get("duration_ms", 0.0)
+                        logger.info(f"Parsed execution stats: duration={duration_ms:.0f}ms, cost=${total_cost_usd:.6f}")
+                    logger.info(f"Parsed {len(node_previews)} node previews from subprocess")
                     if not svg_from_run:
                         idx = decoded.find("<svg")
                         if idx >= 0:
@@ -426,6 +507,15 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                 graph_from_run, nodes, compile_edges
             )
 
+        # When runner emitted skrub_node_id with each code block, use it for correct code-to-node mapping.
+        code_by_skrub: dict[str, dict] = {}
+        for x in captured:
+            sid = x.get("skrub_node_id")
+            if sid:
+                code_by_skrub[sid] = {"code": x["code"], "cost_usd": x["cost_usd"], "attempts": x["attempts"]}
+        skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
+        compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
+
         yield f"data: {json.dumps({'type': 'terminal', 'line': 'Starting pipeline execution...'})}\n\n".encode()
         time.sleep(0.3)
 
@@ -439,40 +529,93 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                 time.sleep(0.1)
                 code = _mock_generated_code_for_node(node.id, node.label, node.type)
                 is_fallback = True
+                node_cost = 0.0
+                node_retries = 0
             else:
-                if op_index < len(captured_codes):
-                    code = captured_codes[op_index]
+                skid = compile_to_skrub.get(node.id) if compile_to_skrub else None
+                if skid is not None and skid in code_by_skrub:
+                    code = code_by_skrub[skid]["code"]
+                    node_cost = code_by_skrub[skid]["cost_usd"]
+                    node_retries = code_by_skrub[skid]["attempts"]
                     is_fallback = False
                 else:
-                    code = _mock_generated_code_for_node(node.id, node.label, node.type)
-                    is_fallback = True
-                op_index += 1
+                    if op_index < len(captured_codes):
+                        code = captured_codes[op_index]
+                        node_cost = captured_costs[op_index] if op_index < len(captured_costs) else 0.0
+                        node_retries = captured_attempts[op_index] if op_index < len(captured_attempts) else 1
+                        is_fallback = False
+                    else:
+                        code = _mock_generated_code_for_node(node.id, node.label, node.type)
+                        node_cost = 0.0
+                        node_retries = 1
+                        is_fallback = True
+                    op_index += 1
             payload = {
                 "type": "node_code",
                 "node_id": node.id,
                 "generated_code": code,
-                "retries": 0,
-                "cost_usd": 0.0,
+                "retries": node_retries,
+                "cost_usd": node_cost,
                 "is_fallback": is_fallback,
             }
             yield f"data: {json.dumps(payload)}\n\n".encode()
             time.sleep(0.2)
 
-        # Emit node_code for skrub semantic nodes so clicking them in the graph shows generated code
+        # Emit node_code for skrub semantic nodes so clicking them in the graph shows generated code.
+        # When runner sent skrub_node_id with each block, use code_by_skrub; else fall back to label/occurrence.
         sempipes_node_ids = graph_from_run.get("sempipesNodeIds", []) if graph_from_run else []
-        for i, skid in enumerate(sempipes_node_ids):
-            if i < len(captured_codes):
-                code_str = captured_codes[i]
-                payload = {
-                    "type": "node_code",
-                    "node_id": f"skrub_{skid}",
-                    "generated_code": code_str,
-                    "retries": 0,
-                    "cost_usd": 0.0,
-                    "is_fallback": False,
-                }
-                yield f"data: {json.dumps(payload)}\n\n".encode()
-                time.sleep(0.1)
+        runner_nodes = (graph_from_run or {}).get("nodes") or []
+
+        if code_by_skrub:
+            for skid in sempipes_node_ids:
+                if skid in code_by_skrub:
+                    info = code_by_skrub[skid]
+                    payload = {
+                        "type": "node_code",
+                        "node_id": f"skrub_{skid}",
+                        "generated_code": info["code"],
+                        "retries": info["attempts"],
+                        "cost_usd": info["cost_usd"],
+                        "is_fallback": False,
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n".encode()
+                    time.sleep(0.1)
+        else:
+            # Fallback: match by label and occurrence (document vs topo order may differ).
+            label_to_op_index: dict[str, list[int]] = {}
+            op_idx = 0
+            for node in runnable:
+                if (node.type or "").lower() != "input":
+                    label = (node.label or "").lower()
+                    if label not in label_to_op_index:
+                        label_to_op_index[label] = []
+                    label_to_op_index[label].append(op_idx)
+                    op_idx += 1
+            label_usage: dict[str, int] = {}
+            for skid in sempipes_node_ids:
+                skrub_node = next((sn for sn in runner_nodes if sn.get("id") == skid), None)
+                if not skrub_node:
+                    continue
+                label = (skrub_node.get("label", "") or "").lower()
+                occurrence = label_usage.get(label, 0)
+                op_indices = label_to_op_index.get(label, [])
+                if occurrence < len(op_indices):
+                    code_idx = op_indices[occurrence]
+                    label_usage[label] = occurrence + 1
+                    if code_idx < len(captured_codes):
+                        code_str = captured_codes[code_idx]
+                        cost_usd = captured_costs[code_idx] if code_idx < len(captured_costs) else 0.0
+                        retries = captured_attempts[code_idx] if code_idx < len(captured_attempts) else 1
+                        payload = {
+                            "type": "node_code",
+                            "node_id": f"skrub_{skid}",
+                            "generated_code": code_str,
+                            "retries": retries,
+                            "cost_usd": cost_usd,
+                            "is_fallback": False,
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n".encode()
+                        time.sleep(0.1)
 
         # Emit node_code for skrub input/non-semantic nodes so they get "done" status in the graph
         runner_nodes = (graph_from_run or {}).get("nodes") or []
@@ -512,6 +655,32 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                     summary = _mock_input_summary(f"skrub_{skid}", sn.get("label", ""))
                     yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
 
+        # Emit node_data for each node preview (intermediate data from .skb.preview())
+        for preview in node_previews:
+            # Preview node_id is "0", "1", etc. (skrub graph node id); emit with skrub_ prefix
+            skid = preview.get("node_id", "")
+            payload = {
+                "type": "node_data",
+                "node_id": f"skrub_{skid}",
+                "schema": preview.get("schema", []),
+                "sample": preview.get("sample", []),
+                "row_count": preview.get("row_count", 0),
+            }
+            yield f"data: {json.dumps(payload)}\n\n".encode()
+            # Also emit for the compile node id if we have a mapping
+            if graph_from_run:
+                skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
+                compile_id = skrub_to_compile.get(skid)
+                if compile_id:
+                    payload_compile = {
+                        "type": "node_data",
+                        "node_id": compile_id,
+                        "schema": preview.get("schema", []),
+                        "sample": preview.get("sample", []),
+                        "row_count": preview.get("row_count", 0),
+                    }
+                    yield f"data: {json.dumps(payload_compile)}\n\n".encode()
+
         # Emit error if subprocess failed
         if exec_failed:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Pipeline execution failed. Check terminal for details.'})}\n\n".encode()
@@ -521,4 +690,4 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
     except Exception as e:
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n".encode()
     yield f"data: {json.dumps({'type': 'cost', 'total_usd': total_cost_usd})}\n\n".encode()
-    yield f"data: {json.dumps({'type': 'done', 'total_cost_usd': total_cost_usd})}\n\n".encode()
+    yield f"data: {json.dumps({'type': 'done', 'total_cost_usd': total_cost_usd, 'duration_ms': duration_ms})}\n\n".encode()
