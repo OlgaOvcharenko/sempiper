@@ -1,0 +1,129 @@
+import os
+os.environ.setdefault("SCIPY_ARRAY_API", "1")
+
+import warnings
+import pandas as pd
+import skrub
+import spacy
+
+from tabpfn import TabPFNClassifier
+from tabpfn.constants import ModelVersion
+
+import sempipes
+
+warnings.filterwarnings("ignore")
+
+sempipes.update_config(
+    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0})
+)
+
+DATA_PATH = "experiments/data/met_10k.csv"
+N_SAMPLES = 100
+
+full_df = pd.read_csv(DATA_PATH)
+
+if len(full_df) >= N_SAMPLES:
+    sample_df = full_df.sample(n=N_SAMPLES, random_state=912).copy()
+else:
+    sample_df = full_df.copy()
+
+sample_df = sample_df.drop(columns=["department", "source_file", "image"], errors="ignore")
+sample_df["object_name_raw"] = sample_df["object_name"]
+
+def apply_spacy_features(df):
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except OSError:
+        from spacy.cli import download
+        download("en_core_web_sm")
+        nlp = spacy.load("en_core_web_sm")
+
+    print("Running spaCy extraction (Entities + Linguistic Features)...")
+    
+    ent_norp = []
+    ent_person = []
+    ent_loc = []
+    ent_date = []
+    
+    noun_phrases = []
+    adj_density = []
+    docs = list(nlp.pipe(df['description'].fillna("").astype(str)))
+
+    for doc in docs:
+        ent_norp.append(", ".join({e.text for e in doc.ents if e.label_ == "NORP"}))
+        ent_person.append(", ".join({e.text for e in doc.ents if e.label_ == "PERSON"}))
+        ent_loc.append(", ".join({e.text for e in doc.ents if e.label_ in ("GPE", "LOC")}))
+        ent_date.append(", ".join({e.text for e in doc.ents if e.label_ == "DATE"}))
+        
+        chunks = [chunk.text for chunk in doc.noun_chunks if len(chunk.text.split()) > 1]
+        noun_phrases.append(", ".join(chunks))
+        
+        n_adj = len([t for t in doc if t.pos_ == "ADJ"])
+        n_words = len(doc)
+        adj_density.append((n_adj / n_words) if n_words > 0 else 0.0)
+
+    df["ent_cultural_group"] = ent_norp
+    df["ent_people"] = ent_person
+    df["ent_location"] = ent_loc
+    df["ent_period"] = ent_date
+    df["desc_noun_phrases"] = noun_phrases
+    df["desc_adjective_density"] = adj_density
+    
+    return df
+
+sample_df = apply_spacy_features(sample_df)
+
+artworks = skrub.var("artworks", sample_df)
+
+culture_target = sempipes.as_y(
+    artworks["culture"],
+    "The cultural or geographic origin of the artwork",
+)
+
+artwork_data = sempipes.as_X(
+    artworks[list(set(sample_df.columns) - {"culture"})],
+    "Artwork metadata including date, description, and extracted features",
+)
+
+artwork_data = artwork_data.sem_extract_features(
+    nl_prompt="""
+    Convert the date strings into precise integer intervals by applying date logic.
+    
+    - Identify numerical century markers and calculate the corresponding 100-year span (e.g., 5 -> 400-499).
+    - Use arithmetic offsets if modifiers like 'early', 'mid', or 'late' are detected.
+    - Detect 'BCE' text indicators to accurately position the years on the timeline.
+    - Handle NaNs
+    """,
+    name="extract_dates",
+    input_columns=["date"],
+    output_columns={
+        "year_start": "Start year",
+        "start_is_bce": "Start is BCE",
+        "year_end": "End year",
+        "end_is_bce": "End is BCE",
+    },
+    generate_via_code=True,
+)
+
+artwork_data = artwork_data.sem_clean(
+    nl_prompt="Standardize the 'object_name' column.",
+    columns=["object_name"],
+)
+
+vectorizer = skrub.TableVectorizer()
+vectorized_artworks = artwork_data.skb.apply(
+    vectorizer,
+    exclude_cols=["object_ID"],
+)
+
+tabpfn = TabPFNClassifier.create_default_for_version(ModelVersion.V2, device='cpu')
+
+pred_pipeline = vectorized_artworks.skb.apply(tabpfn, y=culture_target)
+
+res = pred_pipeline.skb.cross_validate(cv=2)
+test_scores = res['test_score']
+print(f"\nTest scores per fold: {test_scores}")
+print(f"Mean accuracy: {test_scores.mean():.2%}")
+
+print("\nTarget Distribution:")
+print(sample_df["culture"].value_counts())
