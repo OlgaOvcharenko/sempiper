@@ -76,10 +76,12 @@ def validate_graph_json(nodes: list[dict], edges: list[dict]) -> tuple[bool, lis
         elif t not in node_ids:
             errors.append(f"edges[{i}]: target {t!r} not in nodes")
 
-    if not node_ids and not errors:
-        errors.append("at least one node required")
     if errors:
         return False, errors
+
+    # Empty graph is valid (frontend shows "No computation graph yet")
+    if not node_ids:
+        return True, []
 
     if not _is_dag(node_ids, edges):
         errors.append("graph must be a DAG (no cycles)")

@@ -81,7 +81,8 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     pipeline_pat = re.compile(r"\bpipeline\s*\(")
 
     def add(line_no: int, start: int, end: int, node_id: str, node_type: str, label: str) -> None:
-        results.append(_RawEntry(line_no, start + 1, line_no, end, node_id, node_type, label))
+        # Both start and end are 0-indexed from regex match; convert to 1-indexed for Monaco
+        results.append(_RawEntry(line_no, start + 1, line_no, end + 1, node_id, node_type, label))
 
     for one_indexed_line, line in enumerate(lines, start=1):
         # Only match in code; ignore content after first # (line comment)
@@ -323,17 +324,14 @@ def extract_nodes_with_ranges(input_code: str) -> tuple[list[CompileNode], list[
             )
         )
     if not nodes:
-        nodes = [
-            CompileNode(id="input", type="input", label="Input", source_range=None),
-            CompileNode(id="op1", type="operator", label="Op", source_range=None),
+        # Return empty graph - frontend shows "No computation graph yet"
+        return [], []
+
+    edges = _infer_edges_from_flow(raw, lines)
+    # Fallback: if data flow yields no edges (e.g. snippet without assignments), use document order
+    if not edges and len(nodes) > 1:
+        edges = [
+            CompileEdge(source=nodes[i].id, target=nodes[i + 1].id)
+            for i in range(len(nodes) - 1)
         ]
-        edges = [CompileEdge(source="input", target="op1")]
-    else:
-        edges = _infer_edges_from_flow(raw, lines)
-        # Fallback: if data flow yields no edges (e.g. snippet without assignments), use document order
-        if not edges and len(nodes) > 1:
-            edges = [
-                CompileEdge(source=nodes[i].id, target=nodes[i + 1].id)
-                for i in range(len(nodes) - 1)
-            ]
     return nodes, edges
