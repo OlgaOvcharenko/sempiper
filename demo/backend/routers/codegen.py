@@ -11,8 +11,7 @@ from models.schemas import (
     StageTiming,
 )
 from pydantic import BaseModel, Field
-from services.compile_parse import extract_nodes_with_ranges
-from services.graph_validate import validate_graph_json
+from services.graph_api import compile_script_to_graph, compile_script_to_graph_dynamic
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 from services.execute_stream import stream_execute_events
 
@@ -24,12 +23,28 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _PIPELINE_SCRIPTS_DIR = _REPO_ROOT / "pipeline_scripts"
 
 
+def _get_pipeline_scripts_dir() -> Path:
+    """Return pipeline_scripts directory; try repo root first, then cwd."""
+    if (_PIPELINE_SCRIPTS_DIR / "manifest.json").is_file():
+        return _PIPELINE_SCRIPTS_DIR
+    cwd = Path.cwd()
+    for base in (cwd, cwd.parent):
+        candidate = base / "pipeline_scripts" / "manifest.json"
+        if candidate.is_file():
+            return candidate.parent
+    return _PIPELINE_SCRIPTS_DIR
+
+
 def _load_manifest() -> list[dict]:
-    manifest_path = _PIPELINE_SCRIPTS_DIR / "manifest.json"
+    scripts_dir = _get_pipeline_scripts_dir()
+    manifest_path = scripts_dir / "manifest.json"
     if not manifest_path.is_file():
         return []
-    with open(manifest_path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
 
 
 @router.get("/scripts")
@@ -46,7 +61,8 @@ def get_script_content(name: str) -> dict:
     entry = next((e for e in manifest if e["id"] == name), None)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Script not found: {name}")
-    path = _PIPELINE_SCRIPTS_DIR / entry["file"]
+    scripts_dir = _get_pipeline_scripts_dir()
+    path = scripts_dir / entry["file"]
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"Script file not found: {entry['file']}")
     with open(path, encoding="utf-8") as f:
@@ -56,6 +72,7 @@ def get_script_content(name: str) -> dict:
 
 class CompileRequest(BaseModel):
     input_code: str
+    use_dynamic: bool = True  # Use dynamic skrub graph extraction by default
 
 
 class ExecuteRequest(BaseModel):
@@ -97,13 +114,21 @@ def sempipes_info() -> dict:
 
 @router.post("/compile", response_model=CompileResponse)
 def compile_pipeline(req: CompileRequest) -> CompileResponse:
-    """Return graph nodes and edges with source ranges. Graph JSON is validated; errors are in validation_errors."""
-    nodes, edges = extract_nodes_with_ranges(req.input_code)
-    _, errors = validate_graph_json(
-        [n.model_dump() for n in nodes],
-        [e.model_dump() for e in edges],
+    """
+    Return graph nodes and edges with source ranges.
+
+    By default uses static regex-based parsing (fast, matches sempipes API level).
+    Set use_dynamic=True to get the real skrub computation graph (lower-level, requires execution).
+    """
+    if req.use_dynamic:
+        result = compile_script_to_graph_dynamic(req.input_code)
+    else:
+        result = compile_script_to_graph(req.input_code)
+    return CompileResponse(
+        nodes=result.nodes,
+        edges=result.edges,
+        validation_errors=result.validation_errors,
     )
-    return CompileResponse(nodes=nodes, edges=edges, validation_errors=errors)
 
 
 @router.post("/execute")
