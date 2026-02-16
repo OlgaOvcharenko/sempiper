@@ -58,5 +58,9 @@ class CompileResponse(BaseModel):
     nodes: list[CompileNode]
     edges: list[CompileEdge] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list, description="Graph validation errors if any")
+    compile_timings_ms: dict[str, float] | None = Field(
+        default=None,
+        description="Timing breakdown (ms) when X-Compile-Timing: 1 header was sent and use_dynamic=True",
+    )
 
 
