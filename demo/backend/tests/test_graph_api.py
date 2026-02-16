@@ -8,6 +8,7 @@ This test file covers:
 """
 
 import pytest
+from unittest.mock import Mock
 
 from services.graph_api import (
     GraphResult,
@@ -19,6 +20,7 @@ from services.graph_api import (
     rewrite_script_for_graph_extraction,
     _rewrite_var_calls,
     _remove_eval_calls,
+    _remove_skrub_datasets_fetches,
     _infer_node_type,
 )
 
@@ -78,6 +80,41 @@ fraud_detector = augmented_baskets.skb.apply_with_sem_choose(hgb, y=fraud_flags,
         assert "sem_choose" in labels
         assert result.is_valid
 
+    def test_all_sempipes_dot_operators_recognized(self):
+        """Static compile recognizes all DataOp sempipes operators (sem_*)."""
+        script = """
+x = sempipes.as_X(df, 'X')
+x = x.sem_fillna(target_column='a')
+x = x.sem_gen_features(nl_prompt='gen')
+x = x.sem_extract_features(columns=['a'], nl_prompt='extract')
+x = x.sem_clean(nl_prompt='clean', columns=['a'])
+x = x.sem_augment(nl_prompt='augment')
+x = x.sem_agg_features(nl_prompt='agg')
+x = x.sem_refine(target_column='a', nl_prompt='refine')
+x = x.sem_select(nl_prompt='select')
+x = x.sem_distill(nl_prompt='distill')
+"""
+        result = compile_script_to_graph(script)
+
+        labels = {n.label for n in result.nodes}
+        expected = {
+            "as_X",
+            "sem_fillna",
+            "sem_gen_features",
+            "sem_extract_features",
+            "sem_clean",
+            "sem_augment",
+            "sem_agg_features",
+            "sem_refine",
+            "sem_select",
+            "sem_distill",
+        }
+        for op in expected:
+            assert op in labels, f"operator {op} should be recognized"
+        for node in result.nodes:
+            assert node.source_range is not None, f"node {node.label} should have source_range"
+        assert result.is_valid
+
     def test_skrub_var_and_subsample(self):
         """Recognizes skrub.var and skb.subsample operators."""
         script = """
@@ -89,7 +126,7 @@ result = products.skb.eval()
         result = compile_script_to_graph(script)
 
         labels = {n.label for n in result.nodes}
-        assert "products" in labels  # var label is the name
+        assert any("products" in l for l in labels)  # var: "<Var 'products'>" or "products"
         assert "skb.subsample" in labels
         assert "sem_gen_features" in labels
         assert "skb.eval" in labels
@@ -331,7 +368,17 @@ class TestIntegrationWithPipelineScripts:
 
 
 class TestScriptRewriting:
-    """Tests for script rewriting functions."""
+    """Tests for script rewriting functions (modify scripts for graph extraction)."""
+
+    def test_rewrite_var_example_strips_data_argument(self):
+        """Preprocessing: var with data is rewritten so the dataset part is not evaluated.
+        Example from docstring:
+          products = skrub.var("products", dataset.products)  ->  products = skrub.var("products")
+        """
+        script = 'products = skrub.var("products", dataset.products)'
+        result = _rewrite_var_calls(script)
+        assert result == 'products = skrub.var("products")'
+        assert "dataset.products" not in result
 
     def test_rewrite_var_removes_data_argument(self):
         """_rewrite_var_calls removes the data argument from skrub.var()."""
@@ -394,17 +441,44 @@ result = products.skb.eval()'''
         assert "result = products" in result
         assert ".skb.eval()" not in result
 
+    def test_remove_skrub_datasets_fetches_stubs_fetch_line(self):
+        """_remove_skrub_datasets_fetches replaces fetch_*() so we don't run dataset load during exec."""
+        script = 'dataset = skrub.datasets.fetch_credit_fraud()'
+        result = _remove_skrub_datasets_fetches(script)
+        assert "fetch_credit_fraud" not in result
+        assert "dataset = None" in result
+
     def test_rewrite_script_combines_both(self):
-        """rewrite_script_for_graph_extraction applies both transformations."""
-        script = '''products = skrub.var("products", dataset.products)
+        """rewrite_script_for_graph_extraction removes skrub.datasets fetch, strips var data, removes eval/cross_validate."""
+        script = '''dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
 products = products.skb.subsample(n=100)
 result = products.skb.eval()'''
         result = rewrite_script_for_graph_extraction(script)
-        assert 'skrub.var("products")' in result
-        assert "dataset.products" not in result
         assert ".skb.eval()" not in result
-        # subsample should be preserved
+        assert "dataset.products" not in result
+        assert "skrub.var(\"products\")" in result
         assert ".skb.subsample(n=100)" in result
+        assert "fetch_credit_fraud()" not in result
+        assert "dataset = None" in result
+
+    def test_rewrite_script_modifies_var_calls_like_docstring_example(self):
+        """rewrite_script_for_graph_extraction modifies scripts so every skrub.var(name, data) becomes skrub.var(name)."""
+        # Same example as in graph_api.py: products = skrub.var("products", dataset.products) -> skrub.var("products")
+        script = """
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100)
+result = products.skb.eval()
+"""
+        rewritten = rewrite_script_for_graph_extraction(script)
+        # Preprocessing must have stripped the data argument from var()
+        assert "skrub.var(\"products\", dataset.products)" not in rewritten
+        assert "skrub.var(\"products\")" in rewritten
+        # Other pipeline lines unchanged (except eval removed)
+        assert "skb.subsample(n=100)" in rewritten
+        assert ".skb.eval()" not in rewritten
+        assert "result = products" in rewritten
 
 
 class TestSkrubGraphResult:
@@ -483,45 +557,53 @@ class TestExtractSkrubGraph:
         assert result.is_valid, f"Expected valid graph but got error: {result.error}"
         assert len(result.nodes) >= 1
 
-    def test_var_with_data_is_rewritten(self):
-        """var() with data argument is rewritten to remove data."""
+    def test_var_with_data_produces_graph_when_data_defined(self):
+        """Rewrite strips var data and stubs fetch so we don't run fetch_credit_fraud(); graph still builds."""
         try:
             import skrub
         except ImportError:
             pytest.skip("skrub not available")
 
-        script = 'products = skrub.var("products", some_data)'
+        script = """import skrub
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+"""
         result = extract_skrub_graph(script)
 
-        # Should succeed because data arg is removed
         assert result.is_valid, f"Expected valid graph but got error: {result.error}"
-        # Check that the rewritten script has no data arg
-        assert "some_data" not in result.rewritten_script
+        # Rewritten script strips var data and stubs fetch so we never run fetch_credit_fraud()
+        assert "dataset.products" not in result.rewritten_script
+        assert "skrub.var(\"products\")" in result.rewritten_script
 
     def test_var_with_subsample_produces_graph(self):
-        """var + subsample produces graph with two nodes."""
+        """var + subsample produces graph with two nodes when dataset is defined."""
         try:
             import skrub
         except ImportError:
             pytest.skip("skrub not available")
 
-        script = '''products = skrub.var("products", dataset.products)
-products = products.skb.subsample(n=100)'''
+        script = """import skrub
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100)
+"""
         result = extract_skrub_graph(script)
 
         assert result.is_valid, f"Expected valid graph but got error: {result.error}"
-        # Should have at least var and subsample
         assert len(result.nodes) >= 2
 
     def test_eval_is_removed(self):
-        """eval() is removed from script before execution."""
+        """eval() is removed from script before execution; var data is kept."""
         try:
             import skrub
         except ImportError:
             pytest.skip("skrub not available")
 
-        script = '''products = skrub.var("products", dataset.products)
-result = products.skb.eval()'''
+        script = """import skrub
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+result = products.skb.eval()
+"""
         result = extract_skrub_graph(script)
 
         assert result.is_valid, f"Expected valid graph but got error: {result.error}"
@@ -589,7 +671,78 @@ class TestExtractSkrubGraphWithPipelineScripts:
         script = script_path.read_text()
         result = extract_skrub_graph(script)
 
-        # Note: may fail if sempipes operators require more setup
-        # At minimum, we should get the rewritten script
+        # Rewritten script stubs fetch and strips var data so we don't run fetch_credit_fraud()
         assert result.rewritten_script
-        assert "dataset.products" not in result.rewritten_script
+        assert result.is_valid, f"Expected valid graph: {result.error}"
+
+    def test_extract_skrub_graph_medium_does_not_call_real_litellm(self):
+        """Graph extraction patches sempipes.llm.llm so the real LLM is never called for medium."""
+        try:
+            import sempipes.llm.llm as llm_module
+            import skrub
+        except ImportError:
+            pytest.skip("sempipes or skrub not available")
+
+        from pathlib import Path
+
+        script_path = Path(__file__).parent.parent.parent.parent / "pipeline_scripts" / "medium.py"
+        if not script_path.exists():
+            pytest.skip("medium.py not found")
+
+        script = script_path.read_text()
+        real_completion = llm_module.completion
+        spy = Mock(wraps=real_completion)
+        llm_module.completion = spy
+        try:
+            result = extract_skrub_graph(script)
+            assert result.is_valid, f"Expected valid graph: {result.error}"
+            assert spy.call_count == 0, "Real LLM completion must not be called during graph extraction"
+        finally:
+            llm_module.completion = real_completion
+
+    def test_extract_skrub_graph_medium_produces_valid_graph_with_apply_with_sem_choose(self):
+        """Medium script produces a valid fused graph containing apply_with_sem_choose and expected edges."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        from pathlib import Path
+
+        script_path = Path(__file__).parent.parent.parent.parent / "pipeline_scripts" / "medium.py"
+        if not script_path.exists():
+            pytest.skip("medium.py not found")
+
+        script = script_path.read_text()
+        result = compile_script_to_graph_dynamic(script)
+
+        assert result.is_valid, f"Expected valid graph: {result.validation_errors}"
+        labels = {n.label for n in result.nodes}
+        assert "apply_with_sem_choose" in labels, f"Graph should contain apply_with_sem_choose. Got: {labels}"
+        apply_id = next((n.id for n in result.nodes if n.label == "apply_with_sem_choose"), None)
+        assert apply_id, "apply_with_sem_choose node must exist"
+        as_y_id = next((n.id for n in result.nodes if n.label == "as_y"), None)
+        if as_y_id:
+            edge_pairs = {(e.source, e.target) for e in result.edges}
+            assert (as_y_id, apply_id) in edge_pairs, "as_y should have edge to apply_with_sem_choose"
+
+    def test_extract_skrub_graph_medium_exec_ms_bounded(self):
+        """Medium script exec phase stays fast (no real LLM); catches regression."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        from pathlib import Path
+
+        script_path = Path(__file__).parent.parent.parent.parent / "pipeline_scripts" / "medium.py"
+        if not script_path.exists():
+            pytest.skip("medium.py not found")
+
+        script = script_path.read_text()
+        timings_out = {}
+        result = extract_skrub_graph(script, timings_out=timings_out)
+        assert result.is_valid, f"Expected valid graph: {result.error}"
+        exec_ms = timings_out.get("exec_ms")
+        assert exec_ms is not None, "timings_out should contain exec_ms"
+        assert exec_ms < 5000, f"exec_ms should be under 5s (no real LLM). Got {exec_ms} ms"
