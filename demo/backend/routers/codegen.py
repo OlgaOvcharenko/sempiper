@@ -1,7 +1,9 @@
 import json
+import logging
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from models.schemas import (
     CompileResponse,
@@ -112,22 +114,36 @@ def sempipes_info() -> dict:
     }
 
 
+def _compile_timing_enabled(request: Request) -> bool:
+    """True when compile timing should be collected (X-Compile-Timing: 1 or DEBUG set)."""
+    return request.headers.get("X-Compile-Timing") == "1" or os.environ.get("DEBUG")
+
+
 @router.post("/compile", response_model=CompileResponse)
-def compile_pipeline(req: CompileRequest) -> CompileResponse:
+def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
     """
     Return graph nodes and edges with source ranges.
 
-    By default uses static regex-based parsing (fast, matches sempipes API level).
-    Set use_dynamic=True to get the real skrub computation graph (lower-level, requires execution).
+    By default uses dynamic extraction (use_dynamic=True) for the real skrub graph.
+    Dynamic compile runs the pipeline script (data load, subsample, etc.), so it can
+    be slow for large scripts; send use_dynamic=false for fast static parsing when
+    you only need the graph structure from code.
+    Send X-Compile-Timing: 1 (or set DEBUG) to log compile timing breakdown.
     """
+    timings: dict[str, float] | None = (
+        {} if (_compile_timing_enabled(request) and req.use_dynamic) else None
+    )
     if req.use_dynamic:
-        result = compile_script_to_graph_dynamic(req.input_code)
+        result = compile_script_to_graph_dynamic(req.input_code, timings_out=timings)
     else:
         result = compile_script_to_graph(req.input_code)
+    if timings and len(timings) > 0:
+        logging.getLogger(__name__).info("compile_timings_ms: %s", timings)
     return CompileResponse(
         nodes=result.nodes,
         edges=result.edges,
         validation_errors=result.validation_errors,
+        compile_timings_ms=timings if timings else None,
     )
 
 
