@@ -370,11 +370,24 @@ def _sanitize_svg_for_save(svg: str) -> str:
     return s
 
 
+def _extract_single_svg_document(s: str) -> str:
+    """Return the first complete SVG document (first <svg to last </svg> inclusive), or original if not found."""
+    start = s.find("<svg")
+    if start < 0:
+        return s
+    end_tag = "</svg>"
+    end = s.rfind(end_tag)
+    if end < 0 or end < start:
+        return s
+    return s[start : end + len(end_tag)]
+
+
 def _save_skrub_svg_to_disk(svg: str, script_id: str) -> None:
     """Save native skrub SVG to demo/graph_svgs/{script_id}.svg, replacing existing file."""
     if not script_id or not svg:
         return
     svg = _sanitize_svg_for_save(svg)
+    svg = _extract_single_svg_document(svg)
     if not svg.startswith("<svg") or "</svg>" not in svg:
         return
     # Sanitize script_id to avoid path traversal
@@ -487,7 +500,8 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                     if not svg_from_run:
                         idx = decoded.find("<svg")
                         if idx >= 0:
-                            svg_from_run = decoded[idx:].strip() or None
+                            extracted = _extract_single_svg_document(decoded[idx:].strip())
+                            svg_from_run = extracted if (extracted and extracted.startswith("<svg")) else None
                     if not graph_from_run:
                         graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
                     # Save native skrub SVG to disk, keyed by script name
