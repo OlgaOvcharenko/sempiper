@@ -64,12 +64,12 @@ def _edge_pairs_by_label(edges, label_to_ids):
 
 # --- Simple pipeline (simple.svg) ---
 # Flow: Var 'products' -> SubsamplePreviews -> product_features | Apply LLMFeatureGenerator
-# Our labels: products (var), skb.subsample, sem_gen_features
+# Our labels: <Var 'products'> (var), skb.subsample, sem_gen_features
 
-SIMPLE_EXPECTED_LABELS = {"products", "skb.subsample", "sem_gen_features"}
+SIMPLE_EXPECTED_LABELS = {"<Var 'products'>", "skb.subsample", "sem_gen_features"}
 
 SIMPLE_EXPECTED_EDGES = {
-    ("products", "skb.subsample"),
+    ("<Var 'products'>", "skb.subsample"),
     ("skb.subsample", "sem_gen_features"),
 }
 
@@ -104,8 +104,8 @@ def test_simple_pipeline_graph_matches_svg_structure():
 #   sem_choose -> apply_with_sem_choose
 
 MEDIUM_EXPECTED_LABELS = {
-    "products",
-    "baskets",
+    "<Var 'products'>",
+    "<Var 'baskets'>",
     "skb.subsample",
     "as_X",
     "as_y",
@@ -117,10 +117,10 @@ MEDIUM_EXPECTED_LABELS = {
 }
 
 MEDIUM_EXPECTED_EDGES = {
-    ("baskets", "skb.subsample"),
+    ("<Var 'baskets'>", "skb.subsample"),
     ("skb.subsample", "as_X"),
     ("skb.subsample", "as_y"),
-    ("products", "sem_fillna"),
+    ("<Var 'products'>", "sem_fillna"),
     ("sem_fillna", "sem_gen_features"),
     ("as_X", "sem_gen_features"),
     ("sem_gen_features", "skb.apply"),
@@ -171,8 +171,8 @@ def test_medium_pipeline_node_order_supports_layout():
         children.setdefault(e.source, []).append(e.target)
 
     # Baskets' first child (subsample) must have lower index than products' first child (sem_fillna)
-    baskets_ids = [n.id for n in runnable if (n.label or "").lower() == "baskets"]
-    products_ids = [n.id for n in runnable if (n.label or "").lower() == "products"]
+    baskets_ids = [n.id for n in runnable if (n.label or "").lower() == "<var 'baskets'>"]
+    products_ids = [n.id for n in runnable if (n.label or "").lower() == "<var 'products'>"]
     assert baskets_ids, "must have baskets node"
     assert products_ids, "must have products node"
     baskets_id = baskets_ids[0]
