@@ -19,6 +19,7 @@ Usage:
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from models.schemas import CompileEdge, CompileNode
@@ -49,79 +50,7 @@ class SkrubNode:
     is_sempipes_semantic: bool = False
 
 
-def _normalize_skrub_label(label: str) -> str:
-    """
-    Normalize skrub internal labels to frontend-friendly display labels.
-
-    Transforms:
-        <Var 'products'> -> products (var name)
-        <SubsamplePreviews> -> skb.subsample
-        <Apply LearnedImputer> -> sem_fillna
-        <Apply LLMFeatureGenerator> -> sem_gen_features
-        <GetItem 'col'> -> getitem
-        etc.
-    """
-    if not label or not isinstance(label, str):
-        return label or "unknown"
-
-    label = label.strip()
-
-    # Handle <Var 'name'> pattern
-    import re
-    var_match = re.match(r"<Var\s*['\"]([^'\"]+)['\"]>", label)
-    if var_match:
-        name = var_match.group(1)
-        # Check for sempipes internal vars
-        if name.startswith("sempipes_"):
-            return name  # Keep as-is for internal sempipes vars
-        return name  # Return the variable name
-
-    # Handle <SubsamplePreviews> or <Subsample>
-    if "subsample" in label.lower():
-        return "skb.subsample"
-
-    # Handle <Apply X> patterns -> map to sempipes operators
-    apply_match = re.match(r"<Apply\s+(\w+)>", label)
-    if apply_match:
-        estimator = apply_match.group(1).lower()
-        # Map known estimators to sempipes operators
-        if estimator in ("learnedimputer", "llmimputer", "imputedlearner"):
-            return "sem_fillna"
-        if estimator in ("llmfeaturegenerator", "codebasedfeatureextractor", "caafe"):
-            return "sem_gen_features"
-        if estimator in ("codedataaugmentor", "codeaugmentor"):
-            return "sem_augment"
-        if estimator in ("selectcols",):
-            return "sem_select"
-        if estimator in ("tablevectorizer",):
-            return "TableVectorizer"
-        if estimator in ("histgradientboostingclassifier",):
-            return "apply_with_sem_choose"
-        return f"Apply {apply_match.group(1)}"
-
-    # Handle <EvalMode>
-    if label == "<EvalMode>":
-        return "skb.eval"
-
-    # Handle <GetItem 'col'> or <GetItem ['cols']>
-    if label.startswith("<GetItem"):
-        return "getitem"
-
-    # Handle <CallMethod 'name'>
-    method_match = re.match(r"<CallMethod\s*['\"]([^'\"]+)['\"]>", label)
-    if method_match:
-        return method_match.group(1)
-
-    # Handle <Call 'name'>
-    call_match = re.match(r"<Call\s*['\"]([^'\"]+)['\"]>", label)
-    if call_match:
-        return call_match.group(1)
-
-    # Remove angle brackets for other patterns
-    if label.startswith("<") and label.endswith(">"):
-        return label[1:-1]
-
-    return label
+ 
 
 
 def _infer_node_type(label: str, is_sempipes_semantic: bool) -> str:
@@ -224,6 +153,38 @@ class SkrubGraphResult:
         return GraphResult(nodes=nodes, edges=edges, validation_errors=errors)
 
 
+# --- Graph extraction LLM mocks (avoid real LLM during extract_skrub_graph) ---
+
+_SEM_CHOOSE_MOCK_CONTENT = "__generated_sempipes_choices = skrub.choose_from([5, 3, 7, 10])"
+
+
+def _graph_extraction_mock_completion(*args: object, **kwargs: object) -> object:
+    """Return a litellm-style response so sem_choose/apply_with_sem_choose run without calling the real LLM.
+
+    Sempipes reads response.choices[0].message["content"] and safe_exec's it. This content must be
+    valid Python that defines __generated_sempipes_choices (e.g. via skrub.choose_from(...)).
+    """
+    return _GraphExtractionMockResponse(_SEM_CHOOSE_MOCK_CONTENT)
+
+
+def _graph_extraction_mock_batch_completion(*args: object, messages: list | None = None, **kwargs: object) -> list:
+    """Return a list of litellm-style responses for batch_completion (one per message)."""
+    n = len(messages) if messages else 1
+    return [_GraphExtractionMockResponse(_SEM_CHOOSE_MOCK_CONTENT) for _ in range(n)]
+
+
+class _GraphExtractionMockResponse:
+    """Minimal object satisfying response.choices[0].message['content']."""
+
+    def __init__(self, content: str) -> None:
+        self.choices = [_GraphExtractionMockChoice(content)]
+
+
+class _GraphExtractionMockChoice:
+    def __init__(self, content: str) -> None:
+        self.message = {"content": content}
+
+
 def compile_script_to_graph(script: str) -> GraphResult:
     """
     Compile a pipeline script to a computational graph using static parsing.
@@ -247,6 +208,13 @@ def compile_script_to_graph(script: str) -> GraphResult:
 
 
 # --- Script Rewriting ---
+#
+# Preprocessing step for graph extraction: rewrite skrub.var() so the data
+# argument is removed and the dataset part is not evaluated, e.g.:
+#
+#   products = skrub.var("products", dataset.products)
+#   ->  products = skrub.var("products")
+#
 
 
 def _rewrite_var_calls(script: str) -> str:
@@ -328,23 +296,74 @@ def _remove_eval_calls(script: str) -> str:
     return '\n'.join(result_lines)
 
 
+def _remove_skrub_datasets_fetches(script: str) -> str:
+    """
+    Remove skrub.datasets.fetch_*() calls so we don't run them during graph extraction.
+
+    Transforms: dataset = skrub.datasets.fetch_credit_fraud()  ->  dataset = None
+    Combined with var rewrite, nothing in the script needs the dataset for building the graph.
+    """
+    lines = script.split("\n")
+    result_lines = []
+    fetch_pat = re.compile(
+        r"^(\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*skrub\.datasets\.fetch_\w+\s*\([^)]*\)\s*$"
+    )
+    for line in lines:
+        m = fetch_pat.match(line)
+        if m:
+            indent, var = m.group(1, 2)
+            line = f"{indent}{var} = None  # skrub.datasets fetch removed for graph extraction"
+        result_lines.append(line)
+    return "\n".join(result_lines)
+
+
+def _remove_cross_validate_calls(script: str) -> str:
+    """
+    Replace .skb.cross_validate(...) with the DataOp so we don't run CV during graph extraction.
+
+    Transforms: res = expr.skb.cross_validate(cv=2)  ->  res = expr
+    """
+    lines = script.split("\n")
+    result_lines = []
+    for line in lines:
+        if ".skb.cross_validate(" in line:
+            # Match: var = something.skb.cross_validate(...)
+            assign_match = re.match(
+                r"^(\s*)(\w+)\s*=\s*(.+)\.skb\.cross_validate\s*\([^)]*\)\s*$",
+                line,
+            )
+            if assign_match:
+                indent, var_name, data_op = assign_match.group(1, 2, 3)
+                line = f"{indent}{var_name} = {data_op}"
+        result_lines.append(line)
+    return "\n".join(result_lines)
+
+
 def rewrite_script_for_graph_extraction(script: str) -> str:
     """
-    Rewrite a pipeline script for graph extraction without data execution.
+    Rewrite a pipeline script for graph extraction without full execution.
+
+    Preprocessing:
+    - Remove skrub.datasets.fetch_*() so we don't run dataset load during exec.
+    - Strip the data argument from skrub.var(name, data) -> skrub.var(name), e.g.:
+      products = skrub.var("products", dataset.products)  ->  products = skrub.var("products")
 
     Transformations:
-    1. Remove data arguments from skrub.var() calls
-    2. Remove .skb.eval() calls
+    1. skrub.datasets.fetch_*(...) -> assign None (preprocessing: no dataset load).
+    2. skrub.var("name", data) -> skrub.var("name") (preprocessing: no data argument).
+    3. Remove .skb.eval() calls (so we don't materialize the pipeline).
+    4. Remove .skb.cross_validate() calls (so we don't run CV; keep the DataOp for graph).
 
     Args:
         script: Original pipeline script
 
     Returns:
-        Rewritten script that can be executed to build the computation graph
-        without requiring actual data or triggering computation.
+        Rewritten script that can be executed to build the computation graph.
     """
+    script = _remove_skrub_datasets_fetches(script)
     script = _rewrite_var_calls(script)
     script = _remove_eval_calls(script)
+    script = _remove_cross_validate_calls(script)
     return script
 
 
@@ -481,7 +500,7 @@ def _graph_to_result(raw: dict, rewritten_script: str) -> SkrubGraphResult:
     )
 
 
-def extract_skrub_graph(script: str) -> SkrubGraphResult:
+def extract_skrub_graph(script: str, timings_out: dict[str, float] | None = None) -> SkrubGraphResult:
     """
     Extract the real skrub computation graph by executing a rewritten script.
 
@@ -490,8 +509,14 @@ def extract_skrub_graph(script: str) -> SkrubGraphResult:
     2. Executes the rewritten script to build the computation graph
     3. Extracts the graph structure using skrub's internal graph() function
 
+    Note: Execution runs the full script (e.g. fetch_credit_fraud(), subsample),
+    so extraction can be slow for large pipelines. For fast graph-from-code only,
+    use compile_script_to_graph (static) instead.
+
     Args:
         script: Python source code containing pipeline declarations
+        timings_out: If provided, filled with rewrite_ms, exec_globals_ms, exec_ms,
+            get_last_dataop_ms, skrub_graph_ms (for profiling).
 
     Returns:
         SkrubGraphResult with nodes, parent/child relationships, and the rewritten script.
@@ -508,16 +533,20 @@ def extract_skrub_graph(script: str) -> SkrubGraphResult:
         >>> len(result.nodes)
         2
     """
-    # Rewrite the script
+    t0 = time.perf_counter()
     rewritten = rewrite_script_for_graph_extraction(script)
+    if timings_out is not None:
+        timings_out["rewrite_ms"] = (time.perf_counter() - t0) * 1000
 
-    # Prepare execution globals
+    t0 = time.perf_counter()
     exec_globals = {"__builtins__": __builtins__}
 
     try:
         import skrub
         exec_globals["skrub"] = skrub
     except ImportError as e:
+        if timings_out is not None:
+            timings_out["exec_globals_ms"] = (time.perf_counter() - t0) * 1000
         return SkrubGraphResult(
             nodes=[],
             parents={},
@@ -538,7 +567,6 @@ def extract_skrub_graph(script: str) -> SkrubGraphResult:
     except ImportError:
         pass
 
-    # Add common sklearn imports
     try:
         from sklearn.ensemble import HistGradientBoostingClassifier
         exec_globals["HistGradientBoostingClassifier"] = HistGradientBoostingClassifier
@@ -551,41 +579,86 @@ def extract_skrub_graph(script: str) -> SkrubGraphResult:
     except ImportError:
         pass
 
-    # Execute the rewritten script
     try:
-        exec(rewritten, exec_globals)
-    except Exception as e:
-        return SkrubGraphResult(
-            nodes=[],
-            parents={},
-            children={},
-            rewritten_script=rewritten,
-            error=f"Execution failed: {e}",
-        )
-
-    # Find the last DataOp
-    data_op = _get_last_dataop(exec_globals, rewritten)
-    if data_op is None:
-        return SkrubGraphResult(
-            nodes=[],
-            parents={},
-            children={},
-            rewritten_script=rewritten,
-            error="No DataOp found in executed script",
-        )
-
-    # Extract the graph using skrub's internal function
-    try:
-        from skrub._data_ops._evaluation import graph as skrub_graph
-        raw = skrub_graph(data_op)
-        return _graph_to_result(raw, rewritten)
+        from catboost import CatBoostClassifier
+        exec_globals["CatBoostClassifier"] = CatBoostClassifier
     except ImportError:
-        # Fallback to _Graph class
+        pass
+
+    if timings_out is not None:
+        timings_out["exec_globals_ms"] = (time.perf_counter() - t0) * 1000
+
+    # Patch sempipes.llm.llm so apply_with_sem_choose does not call the real LLM during graph extraction.
+    llm_module = None
+    try:
+        import sempipes.llm.llm as llm_module
+    except ImportError:
+        pass
+    orig_completion = None
+    orig_batch = None
+    if llm_module is not None:
+        orig_completion = llm_module.completion
+        orig_batch = getattr(llm_module, "batch_completion", None)
+        llm_module.completion = _graph_extraction_mock_completion
+        llm_module.batch_completion = _graph_extraction_mock_batch_completion
+
+    try:
+        t0 = time.perf_counter()
         try:
-            from skrub._data_ops._evaluation import _Graph
-            raw = _Graph().run(data_op)
-            return _graph_to_result(raw, rewritten)
+            exec(rewritten, exec_globals)
         except Exception as e:
+            if timings_out is not None:
+                timings_out["exec_ms"] = (time.perf_counter() - t0) * 1000
+            return SkrubGraphResult(
+                nodes=[],
+                parents={},
+                children={},
+                rewritten_script=rewritten,
+                error=f"Execution failed: {e}",
+            )
+        if timings_out is not None:
+            timings_out["exec_ms"] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        data_op = _get_last_dataop(exec_globals, rewritten)
+        if timings_out is not None:
+            timings_out["get_last_dataop_ms"] = (time.perf_counter() - t0) * 1000
+        if data_op is None:
+            return SkrubGraphResult(
+                nodes=[],
+                parents={},
+                children={},
+                rewritten_script=rewritten,
+                error="No DataOp found in executed script",
+            )
+
+        t0 = time.perf_counter()
+        try:
+            from skrub._data_ops._evaluation import graph as skrub_graph
+            raw = skrub_graph(data_op)
+            if timings_out is not None:
+                timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
+            return _graph_to_result(raw, rewritten)
+        except ImportError:
+            try:
+                from skrub._data_ops._evaluation import _Graph
+                raw = _Graph().run(data_op)
+                if timings_out is not None:
+                    timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
+                return _graph_to_result(raw, rewritten)
+            except Exception as e:
+                if timings_out is not None:
+                    timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
+                return SkrubGraphResult(
+                    nodes=[],
+                    parents={},
+                    children={},
+                    rewritten_script=rewritten,
+                    error=f"Graph extraction failed: {e}",
+                )
+        except Exception as e:
+            if timings_out is not None:
+                timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
             return SkrubGraphResult(
                 nodes=[],
                 parents={},
@@ -593,14 +666,11 @@ def extract_skrub_graph(script: str) -> SkrubGraphResult:
                 rewritten_script=rewritten,
                 error=f"Graph extraction failed: {e}",
             )
-    except Exception as e:
-        return SkrubGraphResult(
-            nodes=[],
-            parents={},
-            children={},
-            rewritten_script=rewritten,
-            error=f"Graph extraction failed: {e}",
-        )
+    finally:
+        if llm_module is not None:
+            llm_module.completion = orig_completion
+            if orig_batch is not None:
+                llm_module.batch_completion = orig_batch
 
 
 def _extract_key_from_skrub_label(label: str) -> str:
@@ -625,20 +695,32 @@ def _extract_key_from_skrub_label(label: str) -> str:
     if "subsample" in low:
         return "skb.subsample"
 
-    # Handle <Apply X> patterns
+    # Handle <Apply X> patterns (aligned with graph_fusion._OPERATOR_MAPPINGS)
     apply_match = re.match(r"<apply\s+(\w+)>", low)
     if apply_match:
         estimator = apply_match.group(1).lower()
-        if estimator in ("learnedimputer", "llmimputer", "imputedlearner"):
+        if estimator in ("learnedimputer", "llmimputer", "imputedlearner", "semfillnawithllm", "semfillnalllmplusmodel"):
             return "sem_fillna"
-        if estimator in ("llmfeaturegenerator", "codebasedfeatureextractor", "caafe"):
+        if estimator in ("llmfeaturegenerator", "codebasedfeatureextractor", "caafe", "semgenfeaturescaafe"):
             return "sem_gen_features"
-        if estimator in ("codedataaugmentor", "codeaugmentor"):
+        if estimator in ("codedataaugmentor", "directdataaugmentor", "codeaugmentor", "semaugmentdata"):
             return "sem_augment"
-        if estimator in ("histgradientboostingclassifier",):
-            return "apply_with_sem_choose"
+        if estimator in ("selectcols", "semselectllm", "filter"):
+            return "sem_select"
+        if estimator in ("llmcleaner", "semcleanwithllm"):
+            return "sem_clean"
+        if estimator in ("llmdeduplicator", "semrefinewithllm"):
+            return "sem_refine"
+        if estimator in ("llmcodegensemaggfeaturesestimator", "llmcodegensemaaggjoinfeaturesoperator", "semaggfeatures"):
+            return "sem_agg_features"
+        if estimator in ("codedatadistiller", "semdistilldata"):
+            return "sem_distill"
+        if estimator in ("llmfeatureextractor", "semextractfeaturesllm"):
+            return "sem_extract_features"
         if estimator in ("tablevectorizer",):
             return "tablevectorizer"
+        if estimator in ("histgradientboostingclassifier", "histgradientboostingregressor", "randomforestclassifier", "randomforestregressor", "gradientboostingclassifier", "gradientboostingregressor", "xgbclassifier", "xgbregressor", "lgbmclassifier", "lgbmregressor"):
+            return "apply_with_sem_choose"
         return f"apply_{estimator}"
 
     # Handle <EvalMode> -> skb.eval
@@ -719,38 +801,60 @@ def _merge_source_ranges(
     return result
 
 
-def compile_script_to_graph_dynamic(script: str) -> GraphResult:
+def compile_script_to_graph_dynamic(
+    script: str,
+    timings_out: dict[str, float] | None = None,
+) -> GraphResult:
     """
     Compile a pipeline script using dynamic extraction (real skrub graph).
 
     This executes a rewritten version of the script (with data args removed
     and eval calls replaced) to get the actual computation graph from skrub.
 
-    Falls back to static parsing if dynamic extraction fails.
+    If extraction fails, returns an empty graph (no fallback to static parsing).
+
+    Static parsing runs once for source-range merge (no duplicate compile_script_to_graph).
 
     Args:
         script: Python source code containing pipeline declarations.
+        timings_out: If provided, filled with extract_ms, fuse_ms, static_ms, merge_ms
+            (and extract_skrub_graph sub-timings: rewrite_ms, exec_globals_ms, exec_ms,
+            get_last_dataop_ms, skrub_graph_ms) for profiling.
 
     Returns:
         GraphResult with nodes, edges, and validation_errors.
     """
-    # Try dynamic extraction first
-    skrub_result = extract_skrub_graph(script)
+    # Single static parse for source ranges (reused in merge step; avoids duplicate compile_script_to_graph)
+    t0 = time.perf_counter()
+    static_nodes, _ = extract_nodes_with_ranges(script)
+    if timings_out is not None:
+        timings_out["static_ms"] = (time.perf_counter() - t0) * 1000
 
-    if skrub_result.is_valid:
-        # Get base result from skrub
-        result = skrub_result.to_graph_result()
+    t0 = time.perf_counter()
+    skrub_result = extract_skrub_graph(script, timings_out=timings_out)
+    if timings_out is not None:
+        timings_out["extract_ms"] = (time.perf_counter() - t0) * 1000
 
-        # Fuse sempipes internal nodes into single semantic operator nodes
-        from services.graph_fusion import fuse_graph
-        result.nodes, result.edges = fuse_graph(result.nodes, result.edges)
+    if not skrub_result.is_valid:
+        return GraphResult(
+            nodes=[],
+            edges=[],
+            validation_errors=[skrub_result.error] if skrub_result.error else [],
+        )
 
-        # Merge source ranges from static parsing for code-graph sync
-        static_result = compile_script_to_graph(script)
-        if static_result.nodes:
-            result.nodes = _merge_source_ranges(result.nodes, static_result.nodes)
+    # Get base result from skrub
+    result = skrub_result.to_graph_result()
 
-        return result
+    t0 = time.perf_counter()
+    from services.graph_fusion import fuse_graph
+    result.nodes, result.edges = fuse_graph(result.nodes, result.edges)
+    if timings_out is not None:
+        timings_out["fuse_ms"] = (time.perf_counter() - t0) * 1000
 
-    # Fall back to static parsing
-    return compile_script_to_graph(script)
+    t0 = time.perf_counter()
+    if static_nodes:
+        result.nodes = _merge_source_ranges(result.nodes, static_nodes)
+    if timings_out is not None:
+        timings_out["merge_ms"] = (time.perf_counter() - t0) * 1000
+
+    return result
