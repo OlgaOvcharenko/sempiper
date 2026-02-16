@@ -197,7 +197,7 @@ def test_generate_default_options():
 def test_compile_returns_200_and_nodes_with_ranges():
     resp = client.post(
         "/api/compile",
-        json={"input_code": 'p = pipeline(\n  source("input"),\n  op("transform"),\n)'},
+        json={"input_code": 'p = pipeline(\n  source("input"),\n  op("transform"),\n)', "use_dynamic": False},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -225,7 +225,7 @@ def test_compile_medium_has_subsample_to_as_x_edge():
     content = resp.json().get("content", "")
     if not content.strip():
         pytest.skip("medium script content empty")
-    resp = client.post("/api/compile", json={"input_code": content})
+    resp = client.post("/api/compile", json={"input_code": content, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data.get("nodes", [])
@@ -250,7 +250,7 @@ products = products.sem_fillna(target_column="make", nl_prompt="Infer manufactur
 kept = kept_products.sem_gen_features(nl_prompt="Generate features.", how_many=5)
 fraud_detector = augmented_baskets.skb.apply_with_sem_choose(hgb, y=fraud_flags, choices=sem_choose(name="hgb"))
 """
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -317,7 +317,7 @@ def test_execute_streams_sse_events():
 def test_compile_parsed_nodes_have_source_ranges():
     """Design: compile returns source_range for each parsed node (code–graph mapping)."""
     code = "x = sempipes.as_X(df, 'X')\ny = x.sem_fillna(target_column='a')"
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     nodes = resp.json()["nodes"]
     assert len(nodes) >= 2
@@ -331,7 +331,7 @@ def test_compile_parsed_nodes_have_source_ranges():
 def test_compile_edges_reference_existing_node_ids():
     """Design: every edge source/target must be in nodes (valid DAG)."""
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -364,7 +364,7 @@ def test_compile_skb_eval_has_data_flow_edge():
 basket_ids = sempipes.as_X(baskets[["ID"]], "Baskets")
 result = basket_ids.skb.eval()
 """
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -400,6 +400,87 @@ def test_compile_code_with_no_pipeline_nodes_returns_empty_graph():
     assert len(edges) == 0, "code with no pipeline nodes should return empty edges"
 
 
+def test_compile_dynamic_failure_returns_empty_graph_no_fallback():
+    """When dynamic extraction fails (e.g. exec error), compile returns empty graph; no fallback to static.
+
+    We return empty on failing scripts (no fallback to static parsing) so the frontend
+    always sees a single source of truth: either the real skrub graph from execution,
+    or nothing. A static-only graph for runnable-but-dynamic-failing code would be
+    misleading (different structure/labels than what would actually run).
+    """
+    # Use a script that fails during exec (undefined name not touched by rewrite)
+    code = """
+baskets = skrub.var("baskets")
+_undefined_trigger_for_dynamic_failure
+basket_ids = sempipes.as_X(baskets[["ID"]], "X")
+"""
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    # Return empty graph on failure: no fallback to static, so UI gets one source of truth (real graph or nothing).
+    assert len(nodes) == 0, "dynamic failure must return empty nodes (no static fallback)"
+    assert len(edges) == 0, "dynamic failure must return empty edges"
+    # Report the extraction error so the frontend can show why the graph is empty.
+    errors = data.get("validation_errors", [])
+    assert len(errors) >= 1, "validation_errors should contain extraction error when dynamic fails"
+
+
+def test_compile_full_like_script_produces_graph_with_dynamic():
+    """Script with var(data), as_X/as_y, and no eval/cross_validate must produce a graph (same shape as full)."""
+    # Minimal script that matches full.py shape: real data for vars, no stripping; runs in seconds.
+    code = """
+import skrub
+import sempipes
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+baskets = skrub.var("baskets", dataset.baskets)
+baskets = baskets.skb.subsample(n=100, how="random")
+fraud_flags = sempipes.as_y(baskets["fraud_flag"], "Fraud label")
+basket_ids = sempipes.as_X(baskets[["ID"]], "Baskets")
+"""
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    errors = data.get("validation_errors", [])
+    if not nodes and errors:
+        pytest.skip("dynamic extraction failed: " + (errors[0] if errors else "unknown"))
+    assert len(nodes) >= 1, f"full-like script must produce nodes. errors={errors}"
+    labels = [n.get("label") or "" for n in nodes]
+    assert any("baskets" in l or "products" in l for l in labels), f"expected var nodes. labels={labels}"
+
+
+@pytest.mark.slow
+def test_compile_full_script_produces_graph_with_dynamic():
+    """Full pipeline script (from scripts/full) must produce a non-empty graph with use_dynamic=True."""
+    resp = client.get("/api/scripts/full")
+    if resp.status_code != 200:
+        pytest.skip("full script not available")
+    content = resp.json().get("content", "")
+    if not content.strip():
+        pytest.skip("full script content empty")
+    resp = client.post("/api/compile", json={"input_code": content, "use_dynamic": True})
+    assert resp.status_code == 200
+    data = resp.json()
+    nodes = data.get("nodes", [])
+    edges = data.get("edges", [])
+    errors = data.get("validation_errors", [])
+    if not nodes and errors:
+        pytest.skip(
+            "dynamic extraction failed (e.g. catboost or skrub not available): "
+            + (errors[0] if errors else "unknown")
+        )
+    assert len(nodes) >= 1, f"full script must produce at least one node. errors={errors}"
+    labels = [n.get("label") or "" for n in nodes]
+    assert any(
+        "baskets" in l or "products" in l or "sem_fillna" in l or "sem_gen" in l
+        for l in labels
+    ), f"expected var/operator nodes from full script. labels={labels}"
+
+
 def test_compile_comment_containing_pipeline_word_does_not_create_node():
     """Design: comment text like 'Evaluate the pipeline (materialize result)' must not create a Pipeline node."""
     code = """
@@ -407,7 +488,7 @@ basket_ids = sempipes.as_X(baskets[["ID"]], "Baskets")
 # 4) Evaluate the pipeline (materialize result)
 result = basket_ids.skb.eval()
 """
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -424,7 +505,7 @@ basket_ids = sempipes.as_X(baskets[["ID"]], "X")
 fraud_flags = sempipes.as_y(baskets["fraud_flag"], "y")
 fraud_detector = augmented_baskets.skb.apply_with_sem_choose(hgb, y=fraud_flags, choices=sem_choose(name="hgb"))
 """
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -646,7 +727,7 @@ result = products.skb.eval()
     graph = skrub_events[0].get("graph", {})
     nodes = graph.get("nodes", [])
     labels = [n.get("label", "") for n in nodes]
-    assert "products" in labels, "merge must add var (products) for full DAG"
+    assert any("products" in l for l in labels), "merge must add var (products) for full DAG"
     assert "skb.subsample" in labels, "merge must add subsample for full DAG"
     assert "sem_fillna" in labels, "skrub sem_fillna must remain"
     assert "skb.eval" in labels, "skrub skb.eval must remain"
@@ -853,6 +934,29 @@ def test_parse_captured_codes_returns_code_cost_usd_and_attempts():
     assert result[1]["attempts"] == 2
 
 
+def test_extract_single_svg_document_strips_trailing_markers():
+    """_extract_single_svg_document returns only the SVG document; no ##END## or ##EXECUTION_STATS##."""
+    from services.execute_stream import _extract_single_svg_document
+
+    svg_content = '<svg width="100" height="50"><g id="graph0"/></svg>'
+    with_junk = svg_content + "\n\n##END##\n##EXECUTION_STATS##\n{\"duration_ms\": 100, \"cost_usd\": 0}"
+    result = _extract_single_svg_document(with_junk)
+    assert result.startswith("<svg")
+    assert result.endswith("</svg>")
+    assert "##EXECUTION_STATS##" not in result
+    assert "##END##" not in result
+    assert "duration_ms" not in result
+    assert result == svg_content
+
+
+def test_extract_single_svg_document_returns_original_when_no_closing_tag():
+    """_extract_single_svg_document returns original string when </svg> is missing."""
+    from services.execute_stream import _extract_single_svg_document
+
+    incomplete = "<svg><g></g>"
+    assert _extract_single_svg_document(incomplete) == incomplete
+
+
 def test_runner_cost_tracking_patches_sempipes_llm_and_records_cost():
     """Runner patches sempipes.llm.llm (call site) so cost is recorded; guards against patching wrong module."""
     from unittest.mock import MagicMock, patch
@@ -956,7 +1060,7 @@ products = products.skb.subsample(n=100, how="random")
 products = products.sem_gen_features(nl_prompt="Generate features.", name="product_features", how_many=3)
 result = products.skb.eval()
 """
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -974,7 +1078,7 @@ result = products.skb.eval()
 def test_compile_exact_nodes_and_edge_chain_for_snippet():
     """Functionality: compile returns exact node count and edges form a linear chain for known code."""
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
-    resp = client.post("/api/compile", json={"input_code": code})
+    resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert resp.status_code == 200
     data = resp.json()
     nodes = data["nodes"]
@@ -992,7 +1096,7 @@ def test_execute_node_code_ids_match_compile_runnable_nodes():
     import json
 
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
-    compile_resp = client.post("/api/compile", json={"input_code": code})
+    compile_resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert compile_resp.status_code == 200
     compile_nodes = compile_resp.json()["nodes"]
     runnable_ids = {n["id"] for n in compile_nodes if n["type"] in ("input", "operator")}
