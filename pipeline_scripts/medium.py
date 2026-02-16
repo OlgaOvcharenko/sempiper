@@ -33,7 +33,7 @@ kept_products = kept_products.sem_gen_features(
 
 # 3) Vectorize and aggregate per basket, then merge with X
 vectorizer = skrub.TableVectorizer()
-vectorized_products = kept_products.skb.apply(vectorizer, exclude_cols="basket_ID")
+vectorized_products = kept_products.skb.apply(vectorizer, exclude_cols=["basket_ID"])
 aggregated_products = vectorized_products.groupby("basket_ID").agg("mean").reset_index()
 augmented_baskets = basket_ids.merge(aggregated_products, left_on="ID", right_on="basket_ID").drop(
     columns=["ID", "basket_ID"]

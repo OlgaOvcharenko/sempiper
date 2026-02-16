@@ -1,19 +1,11 @@
 import time
 import sempipes
 
-import warnings
-warnings.filterwarnings("ignore")
-
 import skrub
 from catboost import CatBoostClassifier
 
 time_start = time.time()
 
-sempipes.update_config(
-    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0})
-)
-
-print("\n> Loading Credit Fraud Data...")
 dataset = skrub.datasets.fetch_credit_fraud()
 
 products = skrub.var("products", dataset.products)
@@ -34,17 +26,15 @@ basket_ids = sempipes.as_X(
 
 products = products.sem_fillna(
     target_column="make",
-    nl_prompt="Infer the manufacturer from relevant product-related attributes like title or description.",
+    nl_prompt="Infer the manufacturer from relevant product-related attributes like title or description. Please use only fast and efficient methods like regex or rules-based approaches to infer the manufacturer.",
     impute_with_existing_values_only=True,
 )
-
-# TODO Maybe string pre-processing or spell checker on make column
 
 unique_brands = products[["make"]].drop_duplicates().reset_index(drop=True)
 
 brand_risk_info = unique_brands.sem_extract_features(
     nl_prompt="""
-    Use your intrinsic knowledge about manufacturers/brands from column `make` to extract features that are useful for the fraudulent shopping baskets prediction.
+    Use your intrinsic knowledge about manufacturers/brands from column `make` to extract features that are useful for the fraudulent shopping baskets prediction. Please use only fast and efficient methods to extract the features, no pre-trained models.
     """,
     name="brand_risk_features",
     input_columns=["make"],
@@ -63,7 +53,6 @@ kept_products = kept_products.sem_gen_features(
     how_many=5,
 )
 
-print("\n> Vectorizing and Aggregating Basket Data...")
 vectorizer = skrub.TableVectorizer()
 vectorized_products = kept_products.skb.apply(
     vectorizer,
@@ -79,7 +68,6 @@ augmented_baskets = basket_ids.merge(
     how="left"
 ).drop(columns=["ID", "basket_ID"])
 
-print("\n> Building and Optimizing Fraud Detector...")
 catboost_regressor = CatBoostClassifier()
 
 fraud_detector = augmented_baskets.skb.apply(
@@ -88,4 +76,3 @@ fraud_detector = augmented_baskets.skb.apply(
 )
 
 res = fraud_detector.skb.cross_validate(cv=2)
-test_scores = res["test_score"]
