@@ -145,7 +145,7 @@ result = products.skb.eval()
         nodes, _ = extract_nodes_with_ranges(self.SIMPLE_PIPELINE)
 
         labels = [n.label for n in nodes]
-        assert "products" in labels  # skrub.var
+        assert any("products" in l for l in labels)  # skrub.var: "products" or "<Var 'products'>"
         assert "skb.subsample" in labels
         assert "sem_gen_features" in labels
         assert "skb.eval" in labels
@@ -154,7 +154,7 @@ result = products.skb.eval()
     def test_simple_pipeline_var_line(self):
         """skrub.var should be on line 8."""
         nodes, _ = extract_nodes_with_ranges(self.SIMPLE_PIPELINE)
-        var_node = next(n for n in nodes if n.label == "products")
+        var_node = next(n for n in nodes if (n.label or "") == "products" or (n.label or "").startswith("<Var ") and "products" in (n.label or ""))
 
         assert var_node.source_range.start_line == 8
 
@@ -192,7 +192,7 @@ result = products.skb.eval()
     def test_simple_pipeline_var_column(self):
         """skrub.var column position should match 'skrub.var(' in the line."""
         nodes, _ = extract_nodes_with_ranges(self.SIMPLE_PIPELINE)
-        var_node = next(n for n in nodes if n.label == "products")
+        var_node = next(n for n in nodes if (n.label or "") == "products" or (n.label or "").startswith("<Var ") and "products" in (n.label or ""))
 
         # Line 8: "products = skrub.var("products", dataset.products)"
         # "products = " is 11 chars, "skrub.var(" starts at column 12
@@ -301,12 +301,12 @@ class TestRawEntryParsing:
     """Tests for the low-level _find_call_ranges function."""
 
     def test_skrub_var_captures_name(self):
-        """skrub.var should capture the variable name from the string argument."""
+        """skrub.var should produce label in skrub format <Var 'name'>."""
         code = 'products = skrub.var("products", data)'
         raw = _find_call_ranges(code)
 
         assert len(raw) == 1
-        assert raw[0].label == "products"
+        assert raw[0].label == "<Var 'products'>"
         assert raw[0].node_type == "input"
 
     def test_subsample_has_correct_label(self):
@@ -372,6 +372,13 @@ class TestSourceRangeAccuracyForHighlighting:
         operators = [
             ('x.sem_fillna()', "sem_fillna"),
             ('x.sem_gen_features()', "sem_gen_features"),
+            ('x.sem_extract_features()', "sem_extract_features"),
+            ('x.sem_clean()', "sem_clean"),
+            ('x.sem_augment()', "sem_augment"),
+            ('x.sem_agg_features()', "sem_agg_features"),
+            ('x.sem_refine()', "sem_refine"),
+            ('x.sem_select()', "sem_select"),
+            ('x.sem_distill()', "sem_distill"),
             ('x.skb.subsample()', "skb.subsample"),
             ('x.skb.apply()', "skb.apply"),
             ('x.skb.eval()', "skb.eval"),
@@ -505,6 +512,101 @@ class TestColumnIndexingConsistency:
         assert highlighted == ".skb.eval(", f"Expected '.skb.eval(', got '{highlighted}'"
 
 
+class TestSempipesOperatorSourceRanges:
+    """Explicit test per sempipes operator: node exists, has source_range, highlighting covers call."""
+
+    def test_sem_extract_features_node_and_highlighting(self):
+        """sem_extract_features: one node, source_range present, highlighted span covers .sem_extract_features(."""
+        code = "y = x.sem_extract_features(columns=['a'])"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1, "expected one node"
+        node = nodes[0]
+        assert node.label == "sem_extract_features"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_extract_features(" in highlighted or highlighted.startswith(".sem_extract_features")
+
+    def test_sem_clean_node_and_highlighting(self):
+        """sem_clean: one node, source_range present, highlighted span covers .sem_clean(."""
+        code = "y = x.sem_clean(nl_prompt='clean', columns=['a'])"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_clean"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_clean(" in highlighted or highlighted.startswith(".sem_clean")
+
+    def test_sem_augment_node_and_highlighting(self):
+        """sem_augment: one node, source_range present, highlighted span covers .sem_augment(."""
+        code = "y = x.sem_augment(nl_prompt='augment')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_augment"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_augment(" in highlighted or highlighted.startswith(".sem_augment")
+
+    def test_sem_agg_features_node_and_highlighting(self):
+        """sem_agg_features: one node, source_range present, highlighted span covers .sem_agg_features(."""
+        code = "y = x.sem_agg_features(nl_prompt='agg')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_agg_features"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_agg_features(" in highlighted or highlighted.startswith(".sem_agg_features")
+
+    def test_sem_refine_node_and_highlighting(self):
+        """sem_refine: one node, source_range present, highlighted span covers .sem_refine(."""
+        code = "y = x.sem_refine(target_column='a', nl_prompt='refine')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_refine"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_refine(" in highlighted or highlighted.startswith(".sem_refine")
+
+    def test_sem_select_node_and_highlighting(self):
+        """sem_select: one node, source_range present, highlighted span covers .sem_select(."""
+        code = "y = x.sem_select(nl_prompt='select')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_select"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_select(" in highlighted or highlighted.startswith(".sem_select")
+
+    def test_sem_distill_node_and_highlighting(self):
+        """sem_distill: one node, source_range present, highlighted span covers .sem_distill(."""
+        code = "y = x.sem_distill(nl_prompt='distill')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert node.label == "sem_distill"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_distill(" in highlighted or highlighted.startswith(".sem_distill")
+
+
 class TestNodeToLineMapping:
     """
     Tests for verifying correct node-to-line association.
@@ -541,8 +643,8 @@ result = products.skb.eval()"""
         # Sort by start_line
         sorted_nodes = sorted(nodes, key=lambda n: n.source_range.start_line)
 
-        # Should be: var, subsample, sem_gen_features, eval
-        expected_labels = ["products", "skb.subsample", "sem_gen_features", "skb.eval"]
+        # Should be: var, subsample, sem_gen_features, eval (var in skrub format <Var 'name'>)
+        expected_labels = ["<Var 'products'>", "skb.subsample", "sem_gen_features", "skb.eval"]
         actual_labels = [n.label for n in sorted_nodes]
         assert actual_labels == expected_labels
 
@@ -647,7 +749,7 @@ result = products.skb.eval()
         # Line 11: sem_gen_features (multi-line)
         # Line 17: skb.eval
 
-        var_node = next(n for n in nodes if n.label == "products")
+        var_node = next(n for n in nodes if (n.label or "") == "products" or (n.label or "").startswith("<Var ") and "products" in (n.label or ""))
         subsample_node = next(n for n in nodes if n.label == "skb.subsample")
         gen_features_node = next(n for n in nodes if n.label == "sem_gen_features")
         eval_node = next(n for n in nodes if n.label == "skb.eval")
