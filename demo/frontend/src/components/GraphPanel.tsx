@@ -5,7 +5,10 @@
  */
 import { useEffect, useRef } from "react";
 import cytoscape, { type Core, type NodeSingular } from "cytoscape";
+import dagre from "cytoscape-dagre";
 import type { SkrubGraphDict } from "../api/client";
+
+cytoscape.use(dagre);
 import { toSkrubId } from "../utils/graphCodeSync";
 
 export interface GraphNode {
@@ -250,12 +253,14 @@ export function GraphPanel({
         },
       ],
       layout: {
-        name: "breadthfirst",
-        directed: true,
-        spacingFactor: 1.3,
-        avoidOverlap: true,
+        name: "dagre",
+        rankDir: "TB",
+        nodeSep: 60,
+        rankSep: 50,
         nodeDimensionsIncludeLabels: true,
-      },
+        fit: true,
+        padding: 30,
+      } as import("cytoscape").LayoutOptions,
       userZoomingEnabled: true,
       userPanningEnabled: true,
       boxSelectionEnabled: false,

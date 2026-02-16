@@ -61,6 +61,9 @@ export interface CompileEdge {
 export interface CompileResponse {
   nodes: CompileNode[];
   edges?: CompileEdge[];
+  validation_errors?: string[];
+  /** Present when request included X-Compile-Timing: 1 and use_dynamic was true */
+  compile_timings_ms?: Record<string, number>;
 }
 
 export interface CompileOptions {

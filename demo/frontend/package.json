@@ -23,6 +23,7 @@
     "@tanstack/react-virtual": "^3.0.1",
     "@types/cytoscape": "^3.21.9",
     "cytoscape": "^3.33.1",
+    "cytoscape-dagre": "^2.5.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "shiki": "^1.0.0"

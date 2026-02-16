@@ -40,7 +40,9 @@ vi.mock("cytoscape", () => {
     })),
   };
 
+  const cyCtor = vi.fn(() => mockCy);
+  cyCtor.use = vi.fn();
   return {
-    default: vi.fn(() => mockCy),
+    default: cyCtor,
   };
 });
