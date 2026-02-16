@@ -433,7 +433,7 @@ class TestIntegrationWithRealPipelines:
             assert "sempipes__choices" not in label
 
     def test_simple_pipeline_with_fusion(self):
-        """Simple pipeline should work with fusion (even if no sempipes nodes)."""
+        """Simple pipeline should work with fusion when dataset is defined."""
         try:
             import skrub
         except ImportError:
@@ -441,12 +441,14 @@ class TestIntegrationWithRealPipelines:
 
         from services.graph_api import compile_script_to_graph_dynamic
 
-        script = '''
+        script = """
+import skrub
+dataset = skrub.datasets.fetch_credit_fraud()
 products = skrub.var("products", dataset.products)
 products = products.skb.subsample(n=100)
-'''
+"""
         result = compile_script_to_graph_dynamic(script)
 
-        assert len(result.nodes) >= 2
+        assert len(result.nodes) >= 2, f"expected >=2 nodes, got {result.validation_errors}"
         labels = {n.label for n in result.nodes}
         assert any("products" in l.lower() for l in labels)
