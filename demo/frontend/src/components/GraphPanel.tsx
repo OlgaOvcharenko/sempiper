@@ -264,6 +264,8 @@ export function GraphPanel({
       userZoomingEnabled: true,
       userPanningEnabled: true,
       boxSelectionEnabled: false,
+      minZoom: 0.4, // Minimum and aximum zoom
+      maxZoom: 3,
     });
 
     // Node click handler
@@ -277,6 +279,44 @@ export function GraphPanel({
     cy.on("tap", (evt) => {
       if (evt.target === cy) {
         onSelectNode(null);
+      }
+    });
+
+    // Limit panning to keep graph always in view
+    cy.on("viewport", () => {
+      const zoom = cy.zoom();
+      const pan = cy.pan();
+      const width = cy.width();
+      const height = cy.height();
+      const bb = cy.elements().boundingBox();
+
+      const graphWidth = bb.w * zoom;
+      const graphHeight = bb.h * zoom;
+
+      const graphX = bb.x1 * zoom + pan.x;
+      const graphY = bb.y1 * zoom + pan.y;
+
+      const minVisible = 200;
+
+      let newPanX = pan.x;
+      let newPanY = pan.y;
+
+      if (graphX + graphWidth < minVisible) {
+        newPanX = minVisible - graphWidth - bb.x1 * zoom;
+      }
+      if (graphX > width - minVisible) {
+        newPanX = width - minVisible - bb.x1 * zoom;
+      }
+
+      if (graphY + graphHeight < minVisible) {
+        newPanY = minVisible - graphHeight - bb.y1 * zoom;
+      }
+      if (graphY > height - minVisible) {
+        newPanY = height - minVisible - bb.y1 * zoom;
+      }
+
+      if (newPanX !== pan.x || newPanY !== pan.y) {
+        cy.pan({ x: newPanX, y: newPanY });
       }
     });
 
