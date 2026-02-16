@@ -46,6 +46,13 @@ _NODE_PATTERNS = (
     r"sempipes\.as_y\s*\(",
     r"\.sem_fillna\s*\(",
     r"\.sem_gen_features\s*\(",
+    r"\.sem_extract_features\s*\(",
+    r"\.sem_clean\s*\(",
+    r"\.sem_augment\s*\(",
+    r"\.sem_agg_features\s*\(",
+    r"\.sem_refine\s*\(",
+    r"\.sem_select\s*\(",
+    r"\.sem_distill\s*\(",
     r"\.skb\.apply\s*\(",
     r"\.skb\.apply_with_sem_choose\s*\(",
     r"\.skb\.eval\s*\(",
@@ -72,6 +79,13 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     as_y_pat = re.compile(r"\bas_y\s*\(")
     sem_fillna_pat = re.compile(r"\.sem_fillna\s*\(")
     sem_gen_features_pat = re.compile(r"\.sem_gen_features\s*\(")
+    sem_extract_features_pat = re.compile(r"\.sem_extract_features\s*\(")
+    sem_clean_pat = re.compile(r"\.sem_clean\s*\(")
+    sem_augment_pat = re.compile(r"\.sem_augment\s*\(")
+    sem_agg_features_pat = re.compile(r"\.sem_agg_features\s*\(")
+    sem_refine_pat = re.compile(r"\.sem_refine\s*\(")
+    sem_select_pat = re.compile(r"\.sem_select\s*\(")
+    sem_distill_pat = re.compile(r"\.sem_distill\s*\(")
     apply_with_sem_choose_pat = re.compile(r"\.skb\.apply_with_sem_choose\s*\(")
     skb_apply_pat = re.compile(r"\.skb\.apply\s*\(")
     skb_eval_pat = re.compile(r"\.skb\.eval\s*\(")
@@ -89,10 +103,11 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
         comment_start = line.find("#")
         search_line = line[:comment_start] if comment_start >= 0 else line
         for m in skrub_var_pat.finditer(search_line):
-            # skrub.var("name", ...) or skrub.var('name', ...) -> capture name
+            # skrub.var("name", ...) or skrub.var('name', ...) -> capture name; label like skrub: <Var 'name'>
             name_match = re.search(r'skrub\.var\s*\(\s*["\']([^"\']*)["\']', search_line[m.start() :])
-            label = name_match.group(1) if name_match else "var"
-            add(one_indexed_line, m.start(), m.end(), f"var_{label}_{one_indexed_line}", "input", label)
+            name = name_match.group(1) if name_match else "var"
+            label = f"<Var '{name}'>"
+            add(one_indexed_line, m.start(), m.end(), f"var_{name}_{one_indexed_line}", "input", label)
         for m in skb_subsample_pat.finditer(search_line):
             # products.skb.subsample -> receiver is "products"
             rec_match = re.search(r"(\w+)\.skb\.subsample", search_line[: m.end()])
@@ -113,6 +128,34 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
                 "operator",
                 "sem_gen_features",
             )
+        for m in sem_extract_features_pat.finditer(search_line):
+            add(
+                one_indexed_line,
+                m.start(),
+                m.end(),
+                f"sem_extract_features_{one_indexed_line}",
+                "operator",
+                "sem_extract_features",
+            )
+        for m in sem_clean_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"sem_clean_{one_indexed_line}", "operator", "sem_clean")
+        for m in sem_augment_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"sem_augment_{one_indexed_line}", "operator", "sem_augment")
+        for m in sem_agg_features_pat.finditer(search_line):
+            add(
+                one_indexed_line,
+                m.start(),
+                m.end(),
+                f"sem_agg_features_{one_indexed_line}",
+                "operator",
+                "sem_agg_features",
+            )
+        for m in sem_refine_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"sem_refine_{one_indexed_line}", "operator", "sem_refine")
+        for m in sem_select_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"sem_select_{one_indexed_line}", "operator", "sem_select")
+        for m in sem_distill_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"sem_distill_{one_indexed_line}", "operator", "sem_distill")
         for m in apply_with_sem_choose_pat.finditer(search_line):
             add(
                 one_indexed_line,
@@ -164,7 +207,7 @@ def _extract_produces_consumes(
         return produces, consumes
     # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample)
     receiver_match = re.search(
-        r"(\w+)\.(?:sem_fillna|sem_gen_features|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample)\s*\(", line
+        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample)\s*\(", line
     )
     if receiver_match:
         consumes.append(receiver_match.group(1))
