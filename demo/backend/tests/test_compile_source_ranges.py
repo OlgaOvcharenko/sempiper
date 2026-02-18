@@ -515,6 +515,32 @@ class TestColumnIndexingConsistency:
 class TestSempipesOperatorSourceRanges:
     """Explicit test per sempipes operator: node exists, has source_range, highlighting covers call."""
 
+    def test_sem_fillna_node_and_highlighting(self):
+        """sem_fillna: one node, source_range present, highlighted span covers .sem_fillna(."""
+        code = "y = x.sem_fillna(target_column='a')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1, "expected one node"
+        node = nodes[0]
+        assert node.label == "sem_fillna"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_fillna(" in highlighted or highlighted.startswith(".sem_fillna")
+
+    def test_sem_gen_features_node_and_highlighting(self):
+        """sem_gen_features: one node, source_range present, highlighted span covers .sem_gen_features(."""
+        code = "y = x.sem_gen_features(nl_prompt='gen')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1, "expected one node"
+        node = nodes[0]
+        assert node.label == "sem_gen_features"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert ".sem_gen_features(" in highlighted or highlighted.startswith(".sem_gen_features")
+
     def test_sem_extract_features_node_and_highlighting(self):
         """sem_extract_features: one node, source_range present, highlighted span covers .sem_extract_features(."""
         code = "y = x.sem_extract_features(columns=['a'])"
@@ -605,6 +631,59 @@ class TestSempipesOperatorSourceRanges:
         line = code.split("\n")[r.start_line - 1]
         highlighted = line[r.start_column - 1 : r.end_column - 1]
         assert ".sem_distill(" in highlighted or highlighted.startswith(".sem_distill")
+
+    def test_sem_choose_node_and_highlighting(self):
+        """sem_choose: one node, source_range present, highlighted span covers sem_choose(."""
+        code = "choices = sem_choose(name='x')"
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1, "expected one node"
+        node = nodes[0]
+        assert node.label == "sem_choose"
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert "sem_choose(" in highlighted or highlighted.startswith("sem_choose")
+
+
+class TestMultipleInstancesAndMultiline:
+    """Multiple instances of the same operator and multi-line call edge cases."""
+
+    def test_two_sem_extract_features_static_correct_lines(self):
+        """Two .sem_extract_features(...) on different lines: two nodes, source_range.start_line matches each call."""
+        code = """x = df.sem_extract_features(columns=['a'], nl_prompt='first')
+y = x.sem_extract_features(columns=['b'], nl_prompt='second')"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        sem_extract = [n for n in nodes if n.label == "sem_extract_features"]
+        assert len(sem_extract) == 2
+        by_line = sorted(sem_extract, key=lambda n: n.source_range.start_line)
+        assert by_line[0].source_range.start_line == 1
+        assert by_line[1].source_range.start_line == 2
+
+    def test_two_sem_gen_features_static_correct_lines(self):
+        """Two .sem_gen_features(...) on different lines: two nodes, source_range.start_line matches each call."""
+        code = """x = df.sem_gen_features(nl_prompt='first')
+y = x.sem_gen_features(nl_prompt='second')"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        sem_gen = [n for n in nodes if n.label == "sem_gen_features"]
+        assert len(sem_gen) == 2
+        by_line = sorted(sem_gen, key=lambda n: n.source_range.start_line)
+        assert by_line[0].source_range.start_line == 1
+        assert by_line[1].source_range.start_line == 2
+
+    def test_sem_extract_features_multiline_user_style(self):
+        """sem_extract_features multi-line (opening paren on one line, args below): start_line is line of .sem_extract_features(."""
+        code = """unique_brands = products[["make"]].drop_duplicates()
+brand_risk_info = unique_brands.sem_extract_features(
+    nl_prompt="Extract features from make.",
+    name="brand_risk_features",
+    input_columns=["make"],
+    generate_via_code=True,
+)"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        sem_extract = [n for n in nodes if n.label == "sem_extract_features"]
+        assert len(sem_extract) == 1
+        assert sem_extract[0].source_range.start_line == 2, "start_line should be the line with .sem_extract_features("
 
 
 class TestNodeToLineMapping:

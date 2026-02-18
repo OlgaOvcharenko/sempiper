@@ -18,11 +18,13 @@ from services.graph_api import (
     compile_script_to_graph_dynamic,
     extract_skrub_graph,
     rewrite_script_for_graph_extraction,
+    _merge_source_ranges,
     _rewrite_var_calls,
     _remove_eval_calls,
     _remove_skrub_datasets_fetches,
     _infer_node_type,
 )
+from models.schemas import CompileNode, SourceRange
 
 
 class TestCompileScriptToGraph:
@@ -285,6 +287,100 @@ x = sempipes.as_X(b[["id"]], "X")
         assert subsample_id and as_x_id
         edge_pairs = {(e.source, e.target) for e in result.edges}
         assert (subsample_id, as_x_id) in edge_pairs
+
+
+# Minimal scripts and expected substring for each of the 10 SemPipes operators (node extraction + highlighting).
+_SEMPIPES_OPERATOR_COMPILE_CASES = [
+    ("sem_fillna", "x = sempipes.as_X(df,'X')\ny = x.sem_fillna(target_column='a')", ".sem_fillna("),
+    ("sem_gen_features", "x = sempipes.as_X(df,'X')\ny = x.sem_gen_features(nl_prompt='gen')", ".sem_gen_features("),
+    ("sem_extract_features", "x = sempipes.as_X(df,'X')\ny = x.sem_extract_features(columns=['a'])", ".sem_extract_features("),
+    ("sem_clean", "x = sempipes.as_X(df,'X')\ny = x.sem_clean(nl_prompt='c')", ".sem_clean("),
+    ("sem_augment", "x = sempipes.as_X(df,'X')\ny = x.sem_augment(nl_prompt='a')", ".sem_augment("),
+    ("sem_agg_features", "x = sempipes.as_X(df,'X')\ny = x.sem_agg_features(nl_prompt='a')", ".sem_agg_features("),
+    ("sem_refine", "x = sempipes.as_X(df,'X')\ny = x.sem_refine(target_column='a')", ".sem_refine("),
+    ("sem_select", "x = sempipes.as_X(df,'X')\ny = x.sem_select(nl_prompt='s')", ".sem_select("),
+    ("sem_distill", "x = sempipes.as_X(df,'X')\ny = x.sem_distill(nl_prompt='d')", ".sem_distill("),
+    ("sem_choose", "x = sempipes.as_X(df,'X')\nchoices = sem_choose(name='c')", "sem_choose("),
+]
+
+
+class TestCompileScriptToGraphPerOperator:
+    """Parametrized test: each SemPipes operator gets correct node extraction and source_range for highlighting."""
+
+    @pytest.mark.parametrize("operator_name,minimal_script,expected_substring", _SEMPIPES_OPERATOR_COMPILE_CASES)
+    def test_each_operator_node_extraction_and_highlighting(
+        self, operator_name: str, minimal_script: str, expected_substring: str
+    ) -> None:
+        """For each operator: one node with correct label, type, and source_range spanning the call."""
+        result = compile_script_to_graph(minimal_script)
+        assert result.is_valid, result.validation_errors
+
+        op_nodes = [n for n in result.nodes if n.label == operator_name]
+        assert len(op_nodes) == 1, f"expected exactly one node with label {operator_name}, got {[n.label for n in result.nodes]}"
+        node = op_nodes[0]
+        assert (node.type or "").lower() == "operator"
+        assert node.source_range is not None, f"node {operator_name} must have source_range for highlighting"
+
+        lines = minimal_script.split("\n")
+        r = node.source_range
+        start_line = max(1, min(r.start_line, len(lines)))
+        line = lines[start_line - 1]
+        # Column is 1-based; extract span
+        start_col = max(1, min(r.start_column, len(line) + 1))
+        end_col = max(start_col, min(r.end_column, len(line) + 1))
+        highlighted = line[start_col - 1 : end_col - 1]
+        assert expected_substring in highlighted or highlighted.startswith(
+            expected_substring.rstrip("(")
+        ), f"highlighted span {repr(highlighted)} should contain {repr(expected_substring)}"
+
+
+class TestMergeSourceRanges:
+    """Unit tests for _merge_source_ranges: label and source_range from static when skrub node could be ambiguous."""
+
+    def test_merge_sem_extract_features_only_in_static(self):
+        """Static has only sem_extract_features; skrub node (fused as sem_gen_features) must get label sem_extract_features and range."""
+        sr = SourceRange(start_line=2, start_column=1, end_line=2, end_column=35)
+        skrub_nodes = [
+            CompileNode(id="op1", type="operator", label="sem_gen_features", source_range=None),
+        ]
+        static_nodes = [
+            CompileNode(id="sem_extract_features_2", type="operator", label="sem_extract_features", source_range=sr),
+        ]
+        result = _merge_source_ranges(skrub_nodes, static_nodes, script="")
+        assert len(result) == 1
+        assert result[0].label == "sem_extract_features"
+        assert result[0].source_range == sr
+
+    def test_merge_sem_gen_features_only_in_static(self):
+        """Static has only sem_gen_features; skrub node must get label sem_gen_features and range."""
+        sr = SourceRange(start_line=3, start_column=1, end_line=3, end_column=40)
+        skrub_nodes = [
+            CompileNode(id="op1", type="operator", label="sem_gen_features", source_range=None),
+        ]
+        static_nodes = [
+            CompileNode(id="sem_gen_features_3", type="operator", label="sem_gen_features", source_range=sr),
+        ]
+        result = _merge_source_ranges(skrub_nodes, static_nodes, script="")
+        assert len(result) == 1
+        assert result[0].label == "sem_gen_features"
+        assert result[0].source_range == sr
+
+    def test_merge_both_in_static_two_skrub_nodes(self):
+        """Static has sem_extract_features then sem_gen_features; two skrub nodes (both fused as sem_gen_features) get correct label and range each."""
+        sr1 = SourceRange(start_line=3, start_column=1, end_line=3, end_column=50)
+        sr2 = SourceRange(start_line=4, start_column=1, end_line=4, end_column=45)
+        skrub_nodes = [
+            CompileNode(id="op1", type="operator", label="sem_gen_features", source_range=None),
+            CompileNode(id="op2", type="operator", label="sem_gen_features", source_range=None),
+        ]
+        static_nodes = [
+            CompileNode(id="sem_extract_features_3", type="operator", label="sem_extract_features", source_range=sr1),
+            CompileNode(id="sem_gen_features_4", type="operator", label="sem_gen_features", source_range=sr2),
+        ]
+        result = _merge_source_ranges(skrub_nodes, static_nodes, script="")
+        assert len(result) == 2
+        assert result[0].label == "sem_extract_features" and result[0].source_range == sr1
+        assert result[1].label == "sem_gen_features" and result[1].source_range == sr2
 
 
 class TestGraphResult:
@@ -725,6 +821,109 @@ class TestExtractSkrubGraphWithPipelineScripts:
         if as_y_id:
             edge_pairs = {(e.source, e.target) for e in result.edges}
             assert (as_y_id, apply_id) in edge_pairs, "as_y should have edge to apply_with_sem_choose"
+
+    def test_sem_extract_features_code_path_gets_highlight_and_label(self):
+        """sem_extract_features with generate_via_code=True uses CodeBasedFeatureExtractor; merge must attach source_range and label sem_extract_features."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        # Minimal pipeline like user's: var then sem_extract_features (code path) on same pattern
+        script = """
+import skrub
+products = skrub.var("products", None)
+brand_risk_info = products.sem_extract_features(
+    nl_prompt="Extract features from make.",
+    name="brand_risk_features",
+    input_columns=["make"],
+    generate_via_code=True,
+)
+"""
+        result = compile_script_to_graph_dynamic(script)
+        assert result.is_valid, result.validation_errors
+        op_nodes = [n for n in result.nodes if (n.type or "").lower() == "operator"]
+        assert op_nodes, "expected at least one operator node"
+        # CodeBasedFeatureExtractor is fused to sem_gen_features; merge should fix label and range to sem_extract_features
+        sem_extract_nodes = [n for n in result.nodes if n.label == "sem_extract_features"]
+        assert sem_extract_nodes, "expected one node with label sem_extract_features after merge"
+        node = sem_extract_nodes[0]
+        assert node.source_range is not None, "sem_extract_features node must have source_range for highlighting"
+
+    def test_sem_gen_features_only_gets_label_and_highlight(self):
+        """When code has only sem_gen_features (no sem_extract_features), node must be sem_gen_features with source_range."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        script = """
+import skrub
+products = skrub.var("products", None)
+products = products.sem_gen_features(nl_prompt="Gen features.", name="feat", how_many=2)
+"""
+        result = compile_script_to_graph_dynamic(script)
+        assert result.is_valid, result.validation_errors
+        sem_gen_nodes = [n for n in result.nodes if n.label == "sem_gen_features"]
+        assert len(sem_gen_nodes) == 1, "expected exactly one sem_gen_features node"
+        node = sem_gen_nodes[0]
+        assert node.source_range is not None, "sem_gen_features node must have source_range"
+        lines = script.split("\n")
+        r = node.source_range
+        line = lines[r.start_line - 1] if 1 <= r.start_line <= len(lines) else ""
+        span = line[r.start_column - 1 : r.end_column - 1] if line else ""
+        assert ".sem_gen_features(" in span or "sem_gen_features(" in span, "source_range should span the call"
+
+    def test_pipeline_with_both_sem_extract_features_and_sem_gen_features(self):
+        """When code has both sem_extract_features and sem_gen_features, each node gets correct label and source_range."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        script = """
+import skrub
+x = skrub.var("x", None)
+x = x.sem_extract_features(nl_prompt="Extract.", name="a", input_columns=["c"], generate_via_code=True)
+x = x.sem_gen_features(nl_prompt="Gen.", name="b", how_many=1)
+"""
+        result = compile_script_to_graph_dynamic(script)
+        assert result.is_valid, result.validation_errors
+        sem_extract = [n for n in result.nodes if n.label == "sem_extract_features"]
+        sem_gen = [n for n in result.nodes if n.label == "sem_gen_features"]
+        assert len(sem_extract) == 1, "expected one sem_extract_features node"
+        assert len(sem_gen) == 1, "expected one sem_gen_features node"
+        assert sem_extract[0].source_range is not None
+        assert sem_gen[0].source_range is not None
+        lines = script.strip().split("\n")
+        # Script has leading newline: line 1 blank, 2 import, 3 var, 4 sem_extract_features, 5 sem_gen_features (1-based)
+        assert sem_extract[0].source_range.start_line == 4, "sem_extract_features range should match its call line"
+        assert sem_gen[0].source_range.start_line == 5, "sem_gen_features range should match its call line"
+
+    def test_two_sem_extract_features_dynamic_correct_ranges_by_order(self):
+        """Two sem_extract_features calls: two nodes, each with source_range; first node = first call line, second = second call line."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        script = """
+import skrub
+x = skrub.var("x", None)
+x = x.sem_extract_features(nl_prompt="First", name="a", input_columns=["c"], generate_via_code=True)
+x = x.sem_extract_features(nl_prompt="Second", name="b", input_columns=["d"], generate_via_code=True)
+"""
+        result = compile_script_to_graph_dynamic(script)
+        assert result.is_valid, result.validation_errors
+        sem_extract = [n for n in result.nodes if n.label == "sem_extract_features"]
+        assert len(sem_extract) >= 2, "expected at least two sem_extract_features nodes"
+        # Order by source_range.start_line (document order)
+        with_range = [n for n in sem_extract if n.source_range is not None]
+        assert len(with_range) >= 2
+        by_line = sorted(with_range, key=lambda n: n.source_range.start_line)
+        # Script has leading newline: line 2 import, 3 var, 4 first sem_extract_features, 5 second (1-based)
+        assert by_line[0].source_range.start_line == 4, "first call on line 4"
+        assert by_line[1].source_range.start_line == 5, "second call on line 5"
 
     def test_extract_skrub_graph_medium_exec_ms_bounded(self):
         """Medium script exec phase stays fast (no real LLM); catches regression."""
