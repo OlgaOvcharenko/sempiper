@@ -18,6 +18,8 @@ dist/
 node_modules/
 *.tsbuildinfo
 coverage/
+playwright-report/
+test-results/
 
 # Environment
 .env
@@ -39,6 +41,7 @@ coverage/
 target/
 build/
 demo/graph_svgs/
+**/graph_svgs*/
 *.log
 .demo.pids
 
@@ -50,3 +53,8 @@ demo/backend/autogluon**
 
 autogluon**
 AutogluonModels**
+
+
+demo/backend/catboost_info
+
+.cache/
