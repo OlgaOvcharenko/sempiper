@@ -60,6 +60,10 @@ _NODE_PATTERNS = (
     r"\bsource\s*\(",
     r"\bop\s*\(",
     r"\bpipeline\s*\(",
+    # Pandas DataFrame operations
+    r"\.groupby\s*\(",
+    r"\.merge\s*\(",
+    r"\.drop\s*\(",
 )
 _HAS_NODE_RE = re.compile("|".join(f"({p})" for p in _NODE_PATTERNS))
 
@@ -93,6 +97,10 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     source_pat = re.compile(r'\bsource\s*\(\s*["\']([^"\']*)["\']\s*\)')
     op_pat = re.compile(r'\bop\s*\(\s*["\']([^"\']*)["\']\s*\)')
     pipeline_pat = re.compile(r"\bpipeline\s*\(")
+    # Pandas DataFrame operations
+    groupby_pat = re.compile(r"\.groupby\s*\(")
+    merge_pat = re.compile(r"\.merge\s*\(")
+    drop_pat = re.compile(r"\.drop\s*\(")
 
     def add(line_no: int, start: int, end: int, node_id: str, node_type: str, label: str) -> None:
         # Both start and end are 0-indexed from regex match; convert to 1-indexed for Monaco
@@ -171,6 +179,22 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
             add(one_indexed_line, m.start(), m.end(), f"skb_eval_{one_indexed_line}", "operator", "skb.eval")
         for m in sem_choose_pat.finditer(search_line):
             add(one_indexed_line, m.start(), m.end(), f"sem_choose_{one_indexed_line}", "operator", "sem_choose")
+        # Pandas DataFrame operations
+        for m in groupby_pat.finditer(search_line):
+            # df.groupby(...) -> extract receiver name
+            rec_match = re.search(r"(\w+)\.groupby", search_line[: m.end()])
+            label = rec_match.group(1) if rec_match else "groupby"
+            add(one_indexed_line, m.start(), m.end(), f"groupby_{one_indexed_line}", "operator", "groupby")
+        for m in merge_pat.finditer(search_line):
+            # df.merge(...) -> extract receiver name
+            rec_match = re.search(r"(\w+)\.merge", search_line[: m.end()])
+            label = rec_match.group(1) if rec_match else "merge"
+            add(one_indexed_line, m.start(), m.end(), f"merge_{one_indexed_line}", "operator", "merge")
+        for m in drop_pat.finditer(search_line):
+            # df.drop(...) -> extract receiver name
+            rec_match = re.search(r"(\w+)\.drop", search_line[: m.end()])
+            label = rec_match.group(1) if rec_match else "drop"
+            add(one_indexed_line, m.start(), m.end(), f"drop_{one_indexed_line}", "operator", "drop")
         for m in source_pat.finditer(search_line):
             label = m.group(1) if m.lastindex else "input"
             add(one_indexed_line, m.start(), m.end(), f"input_{label}", "input", label)
@@ -205,12 +229,18 @@ def _extract_produces_consumes(
         if first_arg_match:
             consumes.append(first_arg_match.group(1))
         return produces, consumes
-    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample)
+    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample|groupby|merge|drop)
     receiver_match = re.search(
-        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample)\s*\(", line
+        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample|groupby|merge|drop)\s*\(", line
     )
     if receiver_match:
         consumes.append(receiver_match.group(1))
+    # For merge, also consume the first argument (the other dataframe being merged)
+    if node_label == "merge":
+        search_text = (line_context or line)
+        merge_arg_match = re.search(r"\.merge\s*\(\s*(\w+)", search_text)
+        if merge_arg_match and merge_arg_match.group(1) not in consumes:
+            consumes.append(merge_arg_match.group(1))
     if node_label == "apply_with_sem_choose":
         # y= may be on same line or next few lines (multi-line call)
         search_text = (line_context or line)

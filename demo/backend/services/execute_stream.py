@@ -210,7 +210,7 @@ def _merge_compile_inputs_into_skrub_graph(
         missing_ids[n.id] = nid
         label = getattr(n, "label", n.id) or str(n.id)
         t = (getattr(n, "type", "") or "").lower()
-        is_sem = t == "operator"
+        is_sem = t == "operator" and _is_semantic_operator(label)
         new_nodes.append({"id": nid, "label": label, "is_sempipes_semantic": is_sem})
         parents[nid] = []
         children[nid] = []
@@ -276,7 +276,7 @@ def _build_fallback_graph_from_compile(
         nid = str(i)
         t = (getattr(n, "type", "") or "").lower()
         label = getattr(n, "label", n.id) or str(n.id)
-        is_sem = t == "operator"
+        is_sem = t == "operator" and _is_semantic_operator(label)
         skrub_nodes.append({"id": nid, "label": label, "is_sempipes_semantic": is_sem})
         if is_sem:
             sempipes_node_ids.append(nid)
@@ -305,6 +305,10 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
     may differ from document order, so we cannot use numeric index mapping.
     Handles multiple nodes with the same label by matching Nth occurrence in skrub graph
     to Nth occurrence in compile nodes (sorted by source_range.start_line for document order).
+
+    Special case: GetItem nodes in skrub graph should map to as_X/as_y nodes in compile graph.
+    When sempipes.as_X(df[cols]) is called, skrub creates a GetItem node, but compile parser
+    creates an as_X node. We map these together by position.
     """
     if not graph or not runnable:
         return {}
@@ -328,8 +332,21 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
             label_to_compile_ids[label] = []
         label_to_compile_ids[label].append(node_id)
 
+    # Build reverse mapping for as_X and as_y (we'll use these for GetItem mapping)
+    as_x_ids = label_to_compile_ids.get("as_x", [])
+    as_y_ids = label_to_compile_ids.get("as_y", [])
+    as_x_usage = 0
+    as_y_usage = 0
+
+    # Build mapping for pandas operations that might have chained methods
+    groupby_ids = label_to_compile_ids.get("groupby", [])
+    groupby_usage = 0
+
     # Track which occurrence of each label we've used
     label_usage: dict[str, int] = {}
+
+    # Track the last mapped node for chained operations
+    last_mapped_id: str | None = None
 
     # Match by label, handling duplicates by tracking occurrences
     for sn in nodes:
@@ -337,14 +354,81 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
         if not skid:
             continue
         label = (sn.get("label", "") or "").lower()
+
+        # Special case: Map GetItem nodes to as_X/as_y nodes
+        # GetItem nodes are created by skrub for df[cols] operations inside as_X/as_y
+        if label.startswith("<getitem"):
+            # Try to map to as_X first, then as_y
+            if as_x_usage < len(as_x_ids):
+                result[skid] = as_x_ids[as_x_usage]
+                last_mapped_id = as_x_ids[as_x_usage]
+                as_x_usage += 1
+                continue
+            elif as_y_usage < len(as_y_ids):
+                result[skid] = as_y_ids[as_y_usage]
+                last_mapped_id = as_y_ids[as_y_usage]
+                as_y_usage += 1
+                continue
+
+        # Special case: Map pandas chained methods to their parent operation
+        # e.g., .agg() and .reset_index() after .groupby() should map to groupby node
+        if label in ("<callmethod 'agg'>", "<callmethod 'reset_index'>", "<callmethod 'mean'>", "<callmethod 'sum'>"):
+            # If we have a groupby node and haven't used it yet, map to it
+            if groupby_usage < len(groupby_ids):
+                result[skid] = groupby_ids[groupby_usage]
+                last_mapped_id = groupby_ids[groupby_usage]
+                # Don't increment groupby_usage - allow multiple chained methods to map to same groupby
+                continue
+            # Otherwise, map to the last mapped node if available
+            elif last_mapped_id:
+                result[skid] = last_mapped_id
+                continue
+
+        # Special case: Map .isin() method calls to nearby operations
+        # .isin() is often used in filtering: df[df['col'].isin(values)]
+        if label == "<callmethod 'isin'>":
+            # Map to the last mapped node if available (likely a GetItem or variable)
+            if last_mapped_id:
+                result[skid] = last_mapped_id
+                continue
+
         occurrence = label_usage.get(label, 0)
         compile_ids = label_to_compile_ids.get(label, [])
 
         if occurrence < len(compile_ids):
             result[skid] = compile_ids[occurrence]
+            last_mapped_id = compile_ids[occurrence]
             label_usage[label] = occurrence + 1
+            # Track groupby usage for chained methods
+            if label == "groupby":
+                groupby_usage += 1
 
     return result
+
+
+def _is_semantic_operator(label: str) -> bool:
+    """
+    Return True if this operator generates code via LLM.
+    Matches logic from skrub_graph_runner._is_sempipes_semantic_label.
+
+    Semantic operators (code-generating):
+    - sem_* operators (sem_fillna, sem_gen_features, etc.)
+    - apply_with_sem_choose, sem_choose, apply
+    - Apply nodes from skrub (label starts with "apply ")
+
+    Non-semantic operators (data operations only):
+    - skb.subsample, skb.eval, etc.
+    """
+    if not label:
+        return False
+    low = label.strip().lower()
+    if low.startswith("sem_"):
+        return True
+    if low in ("apply_with_sem_choose", "sem_choose", "apply"):
+        return True
+    if low.startswith("apply "):  # Raw Apply nodes from skrub
+        return True
+    return False
 
 
 def _mock_generated_code_for_node(node_id: str, label: str, node_type: str) -> str:
@@ -382,31 +466,40 @@ def _extract_single_svg_document(s: str) -> str:
     return s[start : end + len(end_tag)]
 
 
-def _save_skrub_svg_to_disk(svg: str, script_id: str) -> None:
-    """Save native skrub SVG to demo/graph_svgs/{script_id}.svg, replacing existing file."""
-    if not script_id or not svg:
+def _save_skrub_svg_to_cache(svg: str, cache_key: str | None) -> None:
+    """Save native skrub SVG to cache."""
+    if not cache_key or not svg:
         return
     svg = _sanitize_svg_for_save(svg)
     svg = _extract_single_svg_document(svg)
     if not svg.startswith("<svg") or "</svg>" not in svg:
         return
-    # Sanitize script_id to avoid path traversal
-    safe_id = "".join(c for c in script_id if c.isalnum() or c in "-_") or "custom"
-    os.makedirs(_GRAPH_SVGS_DIR, exist_ok=True)
-    path = os.path.join(_GRAPH_SVGS_DIR, f"{safe_id}.svg")
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(svg)
-        logger.info(f"Saved skrub native graph SVG to {path}")
-    except OSError as e:
-        logger.warning(f"Could not save SVG to {path}: {e}")
+        from services.cache import cache_service
+        cache_service.set(cache_key, "svg", {"svg": svg})
+        logger.info(f"Saved skrub SVG to cache (key: {cache_key[:8]}...)")
+    except Exception as e:
+        logger.warning(f"Could not save SVG to cache: {e}")
 
 
-def stream_execute_events(input_code: str, script_id: str | None = None):
+def stream_execute_events(
+    input_code: str,
+    script_id: str | None = None,
+    llm_name: str | None = None,
+    temperature: float | None = None,
+    cache_key: str | None = None,
+):
     """
     Yield SSE-formatted events: terminal, node_code (from pipeline run), input_summary, skrub_graph, cost, done.
     Operator-generated code comes from running the pipeline in a subprocess; we parse
     ##SEMPIPES_NODE_CODE## blocks from stdout. We do not call the LLM directly.
+
+    Args:
+        input_code: The pipeline code to execute.
+        script_id: Script id (unused, kept for backward compatibility).
+        llm_name: LLM model name (passed to subprocess for sempipes config).
+        temperature: LLM temperature (passed to subprocess for sempipes config).
+        cache_key: Cache key for storing SVG (hash of script+temp+model).
     """
     total_cost_usd = 0.0
     duration_ms = 0.0
@@ -434,17 +527,23 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
         subprocess_env = os.environ.copy()
         if not e2e_mode:
             # Prepare environment: pass sempipes config to subprocess
-            try:
-                from services.engine import get_sempipes_config
-                cfg = get_sempipes_config()
-                if cfg and "llm_for_code_generation" in cfg:
-                    llm_cfg = cfg["llm_for_code_generation"]
-                    subprocess_env["SEMPIPES_LLM_NAME"] = llm_cfg.get("name", "")
-                    temp = llm_cfg.get("parameters", {}).get("temperature", 0.0)
-                    subprocess_env["SEMPIPES_LLM_TEMP"] = str(temp)
-                    logger.info(f"Passing sempipes config to subprocess: {llm_cfg.get('name')} (temp={temp})")
-            except Exception as e:
-                logger.warning(f"Could not get sempipes config for subprocess: {e}")
+            # Priority: explicit llm_name/temperature params > global sempipes config
+            if llm_name is not None and temperature is not None:
+                subprocess_env["SEMPIPES_LLM_NAME"] = llm_name
+                subprocess_env["SEMPIPES_LLM_TEMP"] = str(temperature)
+                logger.info(f"Using explicit config for subprocess: {llm_name} (temp={temperature})")
+            else:
+                try:
+                    from services.engine import get_sempipes_config
+                    cfg = get_sempipes_config()
+                    if cfg and "llm_for_code_generation" in cfg:
+                        llm_cfg = cfg["llm_for_code_generation"]
+                        subprocess_env["SEMPIPES_LLM_NAME"] = llm_cfg.get("name", "")
+                        temp = llm_cfg.get("parameters", {}).get("temperature", 0.0)
+                        subprocess_env["SEMPIPES_LLM_TEMP"] = str(temp)
+                        logger.info(f"Passing sempipes config to subprocess: {llm_cfg.get('name')} (temp={temp})")
+                except Exception as e:
+                    logger.warning(f"Could not get sempipes config for subprocess: {e}")
         
         if not e2e_mode:
             try:
@@ -504,9 +603,9 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                             svg_from_run = extracted if (extracted and extracted.startswith("<svg")) else None
                     if not graph_from_run:
                         graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
-                    # Save native skrub SVG to disk, keyed by script name
-                    if svg_from_run and script_id:
-                        _save_skrub_svg_to_disk(svg_from_run, script_id)
+                    # Save native skrub SVG to cache
+                    if svg_from_run and cache_key:
+                        _save_skrub_svg_to_cache(svg_from_run, cache_key)
             except (FileNotFoundError, Exception) as e:
                 logger.error(f"Subprocess exception: {type(e).__name__}: {e}")
                 exec_failed = True
@@ -533,7 +632,13 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
         yield f"data: {json.dumps({'type': 'terminal', 'line': 'Starting pipeline execution...'})}\n\n".encode()
         time.sleep(0.3)
 
-        op_index = 0
+        # Code assignment logic:
+        # 1. Primary: Use skrub_node_id from runner (when available)
+        # 2. Fallback: Use semantic_op_index to match code to semantic operators only
+        #    - semantic_op_index only increments for operators that generate code (sem_*, apply, etc.)
+        #    - Non-semantic operators (subsample, eval, etc.) receive mock code
+        # 3. Mock: If no code available or non-semantic operator, use placeholder
+        semantic_op_index = 0
         for node in runnable:
             yield f"data: {json.dumps({'type': 'terminal', 'line': f'Running {node.label} ({node.id})...'})}\n\n".encode()
             time.sleep(0.4)
@@ -548,22 +653,28 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
             else:
                 skid = compile_to_skrub.get(node.id) if compile_to_skrub else None
                 if skid is not None and skid in code_by_skrub:
+                    # Primary path: use skrub_node_id mapping (no change)
                     code = code_by_skrub[skid]["code"]
                     node_cost = code_by_skrub[skid]["cost_usd"]
                     node_retries = code_by_skrub[skid]["attempts"]
                     is_fallback = False
                 else:
-                    if op_index < len(captured_codes):
-                        code = captured_codes[op_index]
-                        node_cost = captured_costs[op_index] if op_index < len(captured_costs) else 0.0
-                        node_retries = captured_attempts[op_index] if op_index < len(captured_attempts) else 1
+                    # Check if this operator is semantic (code-generating)
+                    is_semantic = _is_semantic_operator(node.label)
+
+                    if is_semantic and semantic_op_index < len(captured_codes):
+                        # Fallback: use semantic operator index
+                        code = captured_codes[semantic_op_index]
+                        node_cost = captured_costs[semantic_op_index] if semantic_op_index < len(captured_costs) else 0.0
+                        node_retries = captured_attempts[semantic_op_index] if semantic_op_index < len(captured_attempts) else 1
                         is_fallback = False
+                        semantic_op_index += 1  # Only increment for semantic operators
                     else:
+                        # Non-semantic operator or out of bounds: use mock code
                         code = _mock_generated_code_for_node(node.id, node.label, node.type)
                         node_cost = 0.0
-                        node_retries = 1
+                        node_retries = 0 if not is_semantic else 1
                         is_fallback = True
-                    op_index += 1
             payload = {
                 "type": "node_code",
                 "node_id": node.id,
@@ -596,15 +707,17 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                     time.sleep(0.1)
         else:
             # Fallback: match by label and occurrence (document vs topo order may differ).
-            label_to_op_index: dict[str, list[int]] = {}
-            op_idx = 0
+            # Only count semantic operators since captured_codes only contains semantic operator code.
+            label_to_semantic_op_index: dict[str, list[int]] = {}
+            semantic_op_idx = 0
             for node in runnable:
                 if (node.type or "").lower() != "input":
-                    label = (node.label or "").lower()
-                    if label not in label_to_op_index:
-                        label_to_op_index[label] = []
-                    label_to_op_index[label].append(op_idx)
-                    op_idx += 1
+                    if _is_semantic_operator(node.label):  # Only count semantic operators
+                        label = (node.label or "").lower()
+                        if label not in label_to_semantic_op_index:
+                            label_to_semantic_op_index[label] = []
+                        label_to_semantic_op_index[label].append(semantic_op_idx)
+                        semantic_op_idx += 1
             label_usage: dict[str, int] = {}
             for skid in sempipes_node_ids:
                 skrub_node = next((sn for sn in runner_nodes if sn.get("id") == skid), None)
@@ -612,7 +725,7 @@ def stream_execute_events(input_code: str, script_id: str | None = None):
                     continue
                 label = (skrub_node.get("label", "") or "").lower()
                 occurrence = label_usage.get(label, 0)
-                op_indices = label_to_op_index.get(label, [])
+                op_indices = label_to_semantic_op_index.get(label, [])
                 if occurrence < len(op_indices):
                     code_idx = op_indices[occurrence]
                     label_usage[label] = occurrence + 1

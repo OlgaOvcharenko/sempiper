@@ -18,11 +18,14 @@ Usage:
     skrub_result = extract_skrub_graph(script_code)
 """
 
+import logging
+import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 
-from models.schemas import CompileEdge, CompileNode
+from models.schemas import CompileEdge, CompileNode, SourceRange
 from services.compile_parse import extract_nodes_with_ranges
 from services.graph_validate import validate_graph_json
 
@@ -70,6 +73,9 @@ def _infer_node_type(label: str, is_sempipes_semantic: bool) -> str:
         return "operator"
     if "subsample" in low:  # Handle raw skrub <SubsamplePreviews>
         return "operator"
+    # Pandas DataFrame operations
+    if low in ("groupby", "merge", "drop"):
+        return "operator"
     # Default to operator for unknown
     return "operator"
 
@@ -84,6 +90,7 @@ class SkrubGraphResult:
     rewritten_script: str  # The script that was executed
     error: str | None = None  # Error message if extraction failed
     raw_graph: dict = field(default_factory=dict)  # Raw graph dict from skrub
+    svg: str | None = None  # Native skrub SVG (from draw_graph)
 
     @property
     def is_valid(self) -> bool:
@@ -434,6 +441,20 @@ def _is_sempipes_semantic_label(label: str) -> bool:
     return False
 
 
+def _extract_svg_from_dataop(data_op) -> str | None:
+    """Extract SVG string from DataOp using skb.draw_graph().svg."""
+    try:
+        graph_obj = data_op.skb.draw_graph()
+        if graph_obj is None:
+            return None
+        svg = getattr(graph_obj, "svg", None)
+        if svg is None:
+            return None
+        return svg.decode("utf-8") if isinstance(svg, bytes) else str(svg)
+    except Exception:
+        return None
+
+
 def _graph_to_result(raw: dict, rewritten_script: str) -> SkrubGraphResult:
     """Convert raw skrub graph dict to SkrubGraphResult."""
     nodes_raw = raw.get("nodes") or {}
@@ -638,14 +659,18 @@ def extract_skrub_graph(script: str, timings_out: dict[str, float] | None = None
             raw = skrub_graph(data_op)
             if timings_out is not None:
                 timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
-            return _graph_to_result(raw, rewritten)
+            result = _graph_to_result(raw, rewritten)
+            result.svg = _extract_svg_from_dataop(data_op)
+            return result
         except ImportError:
             try:
                 from skrub._data_ops._evaluation import _Graph
                 raw = _Graph().run(data_op)
                 if timings_out is not None:
                     timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
-                return _graph_to_result(raw, rewritten)
+                result = _graph_to_result(raw, rewritten)
+                result.svg = _extract_svg_from_dataop(data_op)
+                return result
             except Exception as e:
                 if timings_out is not None:
                     timings_out["skrub_graph_ms"] = (time.perf_counter() - t0) * 1000
@@ -745,9 +770,108 @@ def _extract_key_from_skrub_label(label: str) -> str:
     return low
 
 
+def _extract_column_from_getitem_label(label: str) -> str | None:
+    """Extract column name from a GetItem label.
+
+    Examples:
+        <GetItem 'col'> -> col
+        <GetItem ['col']> -> col
+        <GetItem 'basket_ID'> -> basket_ID
+        <GetItem ['ID']> -> ID
+        <GetItem <CallMethod 'isin'>> -> None (nested, no simple column)
+    """
+    if not label or not label.startswith("<GetItem"):
+        return None
+
+    # Try to extract 'colname' or ['colname']
+    # Pattern: <GetItem 'X'> or <GetItem ['X']> or <GetItem ["X"]>
+    match = re.search(r"<GetItem\s+\[?['\"]([^'\"]+)['\"]", label)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_getitem_columns_from_code(code: str, line_number: int) -> set[str]:
+    """Extract column names from GetItem operations (df["col"] or df[["col"]]) on a specific line.
+
+    Returns a set of column names found on that line.
+    """
+    lines = code.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return set()
+
+    line = lines[line_number - 1]
+    columns = set()
+
+    # Match df["col"] or df[["col", "col2"]]
+    # Pattern: [["col"]] or ["col"]
+    for match in re.finditer(r'\[+["\']([^"\']+)["\']', line):
+        columns.add(match.group(1))
+
+    return columns
+
+
+def _find_getitem_position_in_line(code: str, line_number: int, column_name: str) -> tuple[int, int] | None:
+    """Find the start and end column positions of a GetItem operation for a specific column.
+
+    Captures the variable name and brackets: df["col"] not just ["col"].
+    Returns (start_column, end_column) 1-indexed, or None if not found.
+    """
+    lines = code.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return None
+
+    line = lines[line_number - 1]
+
+    # Look for patterns like var[["col"]] or var["col"] with the specific column name
+    # We want to capture the variable name and the brackets
+    patterns = [
+        rf'(\w+\[\["{column_name}"\]\])',  # var[["col"]]
+        rf"(\w+\[\['{column_name}'\]\])",  # var[['col']]
+        rf'(\w+\["{column_name}"\])',      # var["col"]
+        rf"(\w+\['{column_name}'\])",      # var['col']
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, line)
+        if match:
+            start_col = match.start(1) + 1  # +1 for 1-indexed
+            end_col = match.end(1)
+            return (start_col, end_col)
+
+    return None
+
+
+def _find_method_call_position(code: str, line_number: int, method_name: str, occurrence: int = 0) -> tuple[int, int] | None:
+    """Find the position of a method call (e.g., .agg(), .reset_index()) on a line.
+
+    Returns (start_column, end_column) 1-indexed for the method call, or None if not found.
+    occurrence: which occurrence of the method to find (0-indexed).
+    """
+    lines = code.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return None
+
+    line = lines[line_number - 1]
+
+    # Pattern: .method_name(
+    pattern = rf'\.{method_name}\s*\('
+
+    matches = list(re.finditer(pattern, line))
+    if occurrence < len(matches):
+        match = matches[occurrence]
+        start_col = match.start() + 1  # +1 for 1-indexed (starts at the dot)
+        # End at the opening paren
+        end_col = match.end()
+        return (start_col, end_col)
+
+    return None
+
+
 def _merge_source_ranges(
     skrub_nodes: list[CompileNode],
     static_nodes: list[CompileNode],
+    script: str,
 ) -> list[CompileNode]:
     """
     Merge source_range information from static parsing into skrub nodes.
@@ -758,6 +882,11 @@ def _merge_source_ranges(
     BUG FIX: Uses a list to track all occurrences of each label, so that
     pipelines with multiple calls to the same operator (e.g., two sem_gen_features)
     can each get their correct source_range.
+
+    Args:
+        skrub_nodes: Nodes from dynamic skrub graph extraction (no source ranges yet).
+        static_nodes: Nodes from static parsing (have source ranges).
+        script: The original source code (used for column name extraction for GetItem matching).
     """
     # Build label -> list of source_ranges mapping from static nodes (in document order)
     # This handles duplicate labels correctly - the Nth occurrence of a label in skrub
@@ -769,6 +898,16 @@ def _merge_source_ranges(
             if key not in label_to_ranges:
                 label_to_ranges[key] = []
             label_to_ranges[key].append(node.source_range)
+
+    # Extract column names from as_X and as_y lines in the code
+    as_x_columns = set()
+    as_y_columns = set()
+    if "as_x" in label_to_ranges:
+        for sr in label_to_ranges["as_x"]:
+            as_x_columns.update(_extract_getitem_columns_from_code(script, sr.start_line))
+    if "as_y" in label_to_ranges:
+        for sr in label_to_ranges["as_y"]:
+            as_y_columns.update(_extract_getitem_columns_from_code(script, sr.start_line))
 
     # Track which occurrence of each label we've used
     label_usage: dict[str, int] = {}
@@ -784,18 +923,164 @@ def _merge_source_ranges(
             # Try extracting key from raw skrub label
             key = _extract_key_from_skrub_label(node.label)
 
-        if key in label_to_ranges:
+        # Special case: GetItem nodes from skrub should match with as_X/as_y from static parse
+        # When sempipes.as_X(df[cols]) is called, skrub creates a GetItem node, but static parser
+        # creates an as_X node. Map these together ONLY if GetItem hasn't been matched yet.
+        # NOTE: We defer GetItem matching until after we try normal label matching, because
+        # many GetItem nodes (e.g., df["col"] in filters) should NOT map to as_X/as_y.
+        getitem_needs_matching = (key == "getitem")
+
+        # Special case: TableVectorizer maps to skb.apply
+        # When skb.apply(TableVectorizer()) is called, skrub creates <Apply TableVectorizer>,
+        # but static parse creates skb.apply node.
+        if key == "tablevectorizer" and "skb.apply" in label_to_ranges:
+            occurrence = label_usage.get("tablevectorizer_to_skb_apply", 0)
+            ranges = label_to_ranges["skb.apply"]
+            if occurrence < len(ranges):
+                source_range = ranges[occurrence]
+                label_usage["tablevectorizer_to_skb_apply"] = occurrence + 1
+                effective_label = node.label
+                key = "tablevectorizer_matched"
+                getitem_needs_matching = False  # Already matched
+
+        # Special case: Chained pandas methods (agg, reset_index) map to their parent operation
+        # e.g., .agg() and .reset_index() after .groupby() should use groupby's LINE,
+        # but with corrected CHARACTER positions for the specific method call
+        # NOTE: isin is NOT included here because it can appear in filter contexts (not just groupby)
+        if key in ("agg", "reset_index", "mean", "sum"):
+            # Try to match with groupby first (most common for agg/reset_index)
+            if "groupby" in label_to_ranges:
+                occurrence = label_usage.get(f"{key}_to_groupby", 0)
+                ranges = label_to_ranges["groupby"]
+                if occurrence < len(ranges):
+                    base_range = ranges[occurrence]
+                    # Find the actual character position of this method call on the same line
+                    method_pos = _find_method_call_position(script, base_range.start_line, key, occurrence)
+                    if method_pos:
+                        # Use the method's actual position
+                        source_range = SourceRange(
+                            start_line=base_range.start_line,
+                            start_column=method_pos[0],
+                            end_line=base_range.start_line,
+                            end_column=method_pos[1],
+                        )
+                    else:
+                        # Fallback to groupby's range if we can't find the method
+                        source_range = base_range
+                    label_usage[f"{key}_to_groupby"] = occurrence + 1
+                    effective_label = node.label
+                    key = f"{key}_matched_groupby"
+                    getitem_needs_matching = False  # Already matched
+
+        # CodeBasedFeatureExtractor is used by both sem_gen_features and sem_extract_features.
+        # Fusion maps it to sem_gen_features. Prefer sem_extract_features when it appears in static
+        # (no fallback to sem_gen_features when only sem_extract_features in code). When both
+        # appear in static, assign in document order: first skrub node gets sem_extract_features
+        # range if available, then sem_gen_features.
+        effective_label = node.label
+        if key == "sem_gen_features":
+            if "sem_extract_features" in label_to_ranges:
+                occurrence = label_usage.get("sem_extract_features", 0)
+                ranges = label_to_ranges["sem_extract_features"]
+                if occurrence < len(ranges):
+                    source_range = ranges[occurrence]
+                    label_usage["sem_extract_features"] = occurrence + 1
+                    effective_label = "sem_extract_features"
+                    getitem_needs_matching = False
+            if source_range is None and key in label_to_ranges:
+                occurrence = label_usage.get(key, 0)
+                ranges = label_to_ranges[key]
+                if occurrence < len(ranges):
+                    source_range = ranges[occurrence]
+                    label_usage[key] = occurrence + 1
+                    getitem_needs_matching = False
+        elif key in label_to_ranges:
             # Get the Nth occurrence of this label's source_range
             occurrence = label_usage.get(key, 0)
             ranges = label_to_ranges[key]
             if occurrence < len(ranges):
                 source_range = ranges[occurrence]
                 label_usage[key] = occurrence + 1
+                getitem_needs_matching = False
+
+        # Deferred GetItem matching: Only match GetItem to as_X/as_y if no other match was found
+        # AND the column name in the GetItem matches the expected column for as_X/as_y.
+        # This prevents non-as_X/as_y GetItem nodes (e.g., df["col"] in filters) from consuming
+        # the as_X/as_y mappings.
+        # Also corrects character positions to point to the actual GetItem expression.
+        if getitem_needs_matching and source_range is None:
+            getitem_col = _extract_column_from_getitem_label(node.label)
+
+            # Try to match with as_X first (if column matches), then as_y
+            for candidate_key, candidate_columns in [("as_x", as_x_columns), ("as_y", as_y_columns)]:
+                if candidate_key in label_to_ranges:
+                    # Only match if the GetItem column is in the expected columns for this as_X/as_y
+                    if getitem_col and getitem_col in candidate_columns:
+                        occurrence = label_usage.get(f"getitem_to_{candidate_key}", 0)
+                        ranges = label_to_ranges[candidate_key]
+                        if occurrence < len(ranges):
+                            base_range = ranges[occurrence]
+                            # Find the actual character position of the GetItem on this line
+                            getitem_pos = _find_getitem_position_in_line(script, base_range.start_line, getitem_col)
+                            if getitem_pos:
+                                # Use the GetItem's actual position
+                                source_range = SourceRange(
+                                    start_line=base_range.start_line,
+                                    start_column=getitem_pos[0],
+                                    end_line=base_range.start_line,
+                                    end_column=getitem_pos[1],
+                                )
+                            else:
+                                # Fallback to as_X/as_y range if we can't find the GetItem
+                                source_range = base_range
+                            label_usage[f"getitem_to_{candidate_key}"] = occurrence + 1
+                            # Also mark this position as used to prevent other GetItem nodes from using it
+                            label_usage[f"getitem_{getitem_col}_line_{base_range.start_line}"] = 1
+                            effective_label = node.label  # Keep original GetItem label
+                            break
+
+        # Final fallback: For GetItem and CallMethod nodes that still don't have source_range,
+        # try to find them in the source code (for intermediate operations like line 27)
+        if source_range is None and (key == "getitem" or key in ("isin",)):
+            # Extract column name or method name from the label
+            if key == "getitem":
+                getitem_col = _extract_column_from_getitem_label(node.label)
+                if getitem_col:
+                    # Search for this GetItem in all lines
+                    for line_num in range(1, len(script.splitlines()) + 1):
+                        pos = _find_getitem_position_in_line(script, line_num, getitem_col)
+                        if pos:
+                            # Check if this line hasn't been used for this column yet
+                            usage_key = f"getitem_{getitem_col}_line_{line_num}"
+                            if label_usage.get(usage_key, 0) == 0:
+                                source_range = SourceRange(
+                                    start_line=line_num,
+                                    start_column=pos[0],
+                                    end_line=line_num,
+                                    end_column=pos[1],
+                                )
+                                label_usage[usage_key] = 1
+                                break
+            elif key == "isin":
+                # Search for .isin( in all lines
+                for line_num in range(1, len(script.splitlines()) + 1):
+                    pos = _find_method_call_position(script, line_num, "isin", 0)
+                    if pos:
+                        usage_key = f"isin_line_{line_num}"
+                        if label_usage.get(usage_key, 0) == 0:
+                            source_range = SourceRange(
+                                start_line=line_num,
+                                start_column=pos[0],
+                                end_line=line_num,
+                                end_column=pos[1],
+                            )
+                            label_usage[usage_key] = 1
+                            break
 
         result.append(CompileNode(
             id=node.id,
             type=node.type,
-            label=node.label,
+            label=effective_label,
             source_range=source_range,
         ))
     return result
@@ -804,6 +1089,7 @@ def _merge_source_ranges(
 def compile_script_to_graph_dynamic(
     script: str,
     timings_out: dict[str, float] | None = None,
+    svg_out: list[str] | None = None,
 ) -> GraphResult:
     """
     Compile a pipeline script using dynamic extraction (real skrub graph).
@@ -820,6 +1106,7 @@ def compile_script_to_graph_dynamic(
         timings_out: If provided, filled with extract_ms, fuse_ms, static_ms, merge_ms
             (and extract_skrub_graph sub-timings: rewrite_ms, exec_globals_ms, exec_ms,
             get_last_dataop_ms, skrub_graph_ms) for profiling.
+        svg_out: If provided (as empty list), the native skrub SVG is appended.
 
     Returns:
         GraphResult with nodes, edges, and validation_errors.
@@ -842,6 +1129,10 @@ def compile_script_to_graph_dynamic(
             validation_errors=[skrub_result.error] if skrub_result.error else [],
         )
 
+    # Capture SVG if requested
+    if svg_out is not None and skrub_result.svg:
+        svg_out.append(skrub_result.svg)
+
     # Get base result from skrub
     result = skrub_result.to_graph_result()
 
@@ -853,8 +1144,51 @@ def compile_script_to_graph_dynamic(
 
     t0 = time.perf_counter()
     if static_nodes:
-        result.nodes = _merge_source_ranges(result.nodes, static_nodes)
+        result.nodes = _merge_source_ranges(result.nodes, static_nodes, script)
     if timings_out is not None:
         timings_out["merge_ms"] = (time.perf_counter() - t0) * 1000
 
     return result
+
+
+_svg_save_logger = logging.getLogger(__name__)
+
+
+def _extract_single_svg_document(s: str) -> str:
+    """Return the first complete SVG document (first <svg to last </svg> inclusive)."""
+    start = s.find("<svg")
+    if start < 0:
+        return s
+    end_tag = "</svg>"
+    end = s.rfind(end_tag)
+    if end < 0 or end < start:
+        return s
+    return s[start : end + len(end_tag)]
+
+
+def save_svg_to_cache_async(svg: str | None, cache_key: str | None) -> None:
+    """
+    Save SVG to cache asynchronously.
+
+    This is called during compile to save the native skrub graph SVG. Runs in a
+    background thread to avoid slowing down the compile response.
+
+    Args:
+        svg: The SVG string to save.
+        cache_key: The cache key (hash of script+temp+model).
+    """
+    if not svg or not cache_key:
+        return
+
+    def _save():
+        try:
+            from services.cache import cache_service, CacheFormat
+            clean_svg = _extract_single_svg_document(svg)
+            if not clean_svg.startswith("<svg") or "</svg>" not in clean_svg:
+                return
+            cache_service.set(cache_key, "svg", clean_svg, format=CacheFormat.SVG)
+            _svg_save_logger.info(f"Saved SVG to cache (key: {cache_key[:8]}...)")
+        except Exception as e:
+            _svg_save_logger.warning(f"Could not save SVG to cache: {e}")
+
+    threading.Thread(target=_save, daemon=True).start()
