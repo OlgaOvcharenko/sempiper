@@ -6,6 +6,7 @@ import {
   getPipelineScriptContent,
   updateSempipesConfig,
   compileToSkrubGraph,
+  clearCache,
   type CompileNode,
   type CompileEdge,
   type InputSummary,
@@ -101,7 +102,13 @@ export function CodeGenDemo() {
     compileAbortRef.current = controller;
     setCompileError(null);
     try {
-      const res = await compilePipeline(pipelineCode, { signal: controller.signal });
+      const tempValue = parseFloat(temperature);
+      const res = await compilePipeline(pipelineCode, {
+        signal: controller.signal,
+        scriptId: loadedScriptId,
+        llmName,
+        temperature: isNaN(tempValue) ? undefined : tempValue,
+      });
       if (compileAbortRef.current !== controller) return;
       setCompileNodes(res.nodes);
       setCompileEdges(res.edges ?? []);
@@ -113,7 +120,7 @@ export function CodeGenDemo() {
     } finally {
       if (compileAbortRef.current === controller) compileAbortRef.current = null;
     }
-  }, [pipelineCode]);
+  }, [pipelineCode, loadedScriptId, llmName, temperature]);
 
   const handleLoadScript = useCallback(async (id: string) => {
     setLoadedScriptId(id);
@@ -267,7 +274,7 @@ export function CodeGenDemo() {
         } else if (event.type === "cost") {
           setLastRunCostUsd(event.total_usd);
         } else if (event.type === "skrub_graph") {
-          // Store skrubToCompileId mapping for code-graph sync; graph display uses compile preview.
+          // Store the skrub to compile mapping for node code lookup
           if (event.graph) {
             setSkrubToCompileId(event.skrubToCompileId ?? {});
             // Copy input summaries to skrub node ids so selecting skrub_0 shows data when backend
@@ -301,9 +308,28 @@ export function CodeGenDemo() {
         setIsExecuting(false);
         executeAbortRef.current = null;
       }
-    }, loadedScriptId);
+    }, {
+      scriptId: loadedScriptId,
+      llmName,
+      temperature: parseFloat(temperature),
+    });
     executeAbortRef.current = controller;
   }, [pipelineCode, isExecuting, llmName, temperature, validateTemperature, loadedScriptId]);
+
+  const handleClearCache = useCallback(async () => {
+    if (isExecuting) return;
+    try {
+      await clearCache();
+      setLastRunError(null);
+      // Show brief success message
+      setLastRunError("✓ Cache cleared");
+      setTimeout(() => {
+        if (!isExecuting) setLastRunError(null);
+      }, 2000);
+    } catch (e) {
+      setLastRunError(`Failed to clear cache: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [isExecuting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -353,7 +379,7 @@ export function CodeGenDemo() {
     return () => clearTimeout(t);
   }, [refreshCompileGraph]);
 
-  // Always use compile graph (same flow as skrub, from code only). Do not replace with skrub graph after run.
+  // Use the compile preview graph as the canonical graph structure
   const compilePreviewGraph = compileToSkrubGraph(compileNodes, compileEdges ?? []);
   const displayGraph = compilePreviewGraph;
   const isPreviewGraph = !!compilePreviewGraph?.nodes?.length;
@@ -388,7 +414,9 @@ export function CodeGenDemo() {
         // Determine node type from compile nodes (not just sempipesNodeIds).
         // sempipesNodeIds only contains sem_* operators, but we want to show
         // generated code for ALL operators (skb.apply, skb.eval, etc.)
-        const compileNode = compileNodes.find((n) => n.id === nid);
+        // Use skrubToCompileId mapping to find the correct compile node
+        const compileNodeId = skrubToCompileId[nid];
+        const compileNode = compileNodeId ? compileNodes.find((n) => n.id === compileNodeId) : undefined;
         const compileType = (compileNode?.type ?? "").toLowerCase();
         const isOperator = compileType === "operator" || compileType === "pipeline" ||
           Boolean(displayGraph.sempipesNodeIds?.includes(nid));
@@ -545,6 +573,18 @@ export function CodeGenDemo() {
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <rect x="6" y="6" width="12" height="12" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearCache}
+                  disabled={isExecuting}
+                  className="p-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-600"
+                  title="Clear all cache"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
                 </button>
               </div>
