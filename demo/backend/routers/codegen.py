@@ -13,7 +13,8 @@ from models.schemas import (
     StageTiming,
 )
 from pydantic import BaseModel, Field
-from services.graph_api import compile_script_to_graph, compile_script_to_graph_dynamic
+from services.cache import CacheFormat, cache_service, make_cache_key
+from services.graph_api import compile_script_to_graph, compile_script_to_graph_dynamic, save_svg_to_cache_async
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 from services.execute_stream import stream_execute_events
 
@@ -75,11 +76,18 @@ def get_script_content(name: str) -> dict:
 class CompileRequest(BaseModel):
     input_code: str
     use_dynamic: bool = True  # Use dynamic skrub graph extraction by default
+    script_id: str | None = None  # Script id for SVG caching (simple, medium, full)
+    llm_name: str | None = None  # LLM model name for caching
+    temperature: float | None = None  # LLM temperature for caching (0-2)
+    use_cache: bool = True  # Whether to use caching
 
 
 class ExecuteRequest(BaseModel):
     input_code: str
     script_id: str | None = None  # Loaded script id (simple, medium, full); used to save SVG by name
+    llm_name: str | None = None  # LLM model name for caching
+    temperature: float | None = None  # LLM temperature for caching (0-2)
+    use_cache: bool = True  # Whether to use caching
 
 
 class UpdateConfigRequest(BaseModel):
@@ -119,6 +127,11 @@ def _compile_timing_enabled(request: Request) -> bool:
     return request.headers.get("X-Compile-Timing") == "1" or os.environ.get("DEBUG")
 
 
+def _can_use_cache(req_use_cache: bool, llm_name: str | None, temperature: float | None) -> bool:
+    """Check if caching can be used (requires all cache key components)."""
+    return req_use_cache and llm_name is not None and temperature is not None
+
+
 @router.post("/compile", response_model=CompileResponse)
 def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
     """
@@ -129,22 +142,85 @@ def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
     be slow for large scripts; send use_dynamic=false for fast static parsing when
     you only need the graph structure from code.
     Send X-Compile-Timing: 1 (or set DEBUG) to log compile timing breakdown.
+    If script_id is provided, saves the native skrub SVG asynchronously.
+    Caching: If llm_name and temperature are provided, results are cached.
     """
+    # Check cache first
+    cache_key = None
+    if _can_use_cache(req.use_cache, req.llm_name, req.temperature):
+        cache_key = make_cache_key(req.input_code, req.temperature, req.llm_name)
+        cached = cache_service.get(cache_key, "compile")
+        if cached:
+            return CompileResponse(**cached)
+
     timings: dict[str, float] | None = (
         {} if (_compile_timing_enabled(request) and req.use_dynamic) else None
     )
+    svg_out: list[str] = []
     if req.use_dynamic:
-        result = compile_script_to_graph_dynamic(req.input_code, timings_out=timings)
+        result = compile_script_to_graph_dynamic(req.input_code, timings_out=timings, svg_out=svg_out)
+        # Save SVG to cache asynchronously if cache_key is available
+        if cache_key and svg_out:
+            save_svg_to_cache_async(svg_out[0], cache_key)
     else:
         result = compile_script_to_graph(req.input_code)
     if timings and len(timings) > 0:
         logging.getLogger(__name__).info("compile_timings_ms: %s", timings)
-    return CompileResponse(
+
+    response = CompileResponse(
         nodes=result.nodes,
         edges=result.edges,
         validation_errors=result.validation_errors,
         compile_timings_ms=timings if timings else None,
     )
+
+    # Store in cache
+    if cache_key:
+        cache_service.set(cache_key, "compile", response.model_dump())
+
+    return response
+
+
+def _replay_cached_events(cached_events: list[dict]):
+    """Generator that replays cached SSE events."""
+    for event in cached_events:
+        yield f"data: {json.dumps(event)}\n\n"
+
+
+def _stream_and_cache_events(
+    input_code: str,
+    script_id: str | None,
+    cache_key: str | None,
+    llm_name: str | None,
+    temperature: float | None,
+):
+    """Stream execute events while collecting them for caching."""
+    collected_events: list[dict] = []
+
+    for event_bytes in stream_execute_events(
+        input_code,
+        script_id=script_id,
+        llm_name=llm_name,
+        temperature=temperature,
+        cache_key=cache_key,
+    ):
+        # Parse event to collect for caching
+        # stream_execute_events yields bytes
+        event_str = event_bytes.decode("utf-8") if isinstance(event_bytes, bytes) else event_bytes
+        if event_str.startswith("data: "):
+            try:
+                # Remove "data: " prefix and trailing newlines
+                json_str = event_str[6:].rstrip("\n")
+                event_data = json.loads(json_str)
+                collected_events.append(event_data)
+            except json.JSONDecodeError:
+                pass
+
+        yield event_bytes
+
+    # Store in cache after streaming completes
+    if cache_key and collected_events:
+        cache_service.set(cache_key, "execute", {"events": collected_events})
 
 
 @router.post("/execute")
@@ -152,9 +228,28 @@ def execute_pipeline(req: ExecuteRequest):
     """
     Execute the pipeline and stream SSE events: terminal (line) and node_code (node_id, generated_code).
     Frontend shows live terminal output and live-updating code blocks per node.
+    Caching: If llm_name and temperature are provided, results are cached.
     """
+    # Check cache first
+    cache_key = None
+    if _can_use_cache(req.use_cache, req.llm_name, req.temperature):
+        cache_key = make_cache_key(req.input_code, req.temperature, req.llm_name)
+        cached = cache_service.get(cache_key, "execute")
+        if cached and "events" in cached:
+            return StreamingResponse(
+                _replay_cached_events(cached["events"]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
     return StreamingResponse(
-        stream_execute_events(req.input_code, script_id=req.script_id),
+        _stream_and_cache_events(
+            req.input_code,
+            script_id=req.script_id,
+            cache_key=cache_key,
+            llm_name=req.llm_name,
+            temperature=req.temperature,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -177,3 +272,31 @@ def generate(req: GenerateRequest) -> GenerateResponse:
             sempipes_llm=meta.get("sempipes_llm"),
         ),
     )
+
+
+class CacheSvgRequest(BaseModel):
+    """Request to retrieve cached SVG."""
+    input_code: str
+    llm_name: str
+    temperature: float
+
+
+@router.post("/cache/svg")
+def get_cached_svg(req: CacheSvgRequest):
+    """
+    Retrieve cached SVG for a given configuration.
+
+    Returns the SVG string if cached, or 404 if not found.
+    """
+    cache_key = make_cache_key(req.input_code, req.temperature, req.llm_name)
+    cached = cache_service.get(cache_key, "svg", format=CacheFormat.SVG)
+    if cached:
+        return {"svg": cached, "cache_key": cache_key}
+    raise HTTPException(status_code=404, detail="SVG not found in cache")
+
+
+@router.delete("/cache")
+def clear_cache():
+    """Clear all cached data (compile, execute, svg)."""
+    cache_service.clear()
+    return {"status": "cleared"}
