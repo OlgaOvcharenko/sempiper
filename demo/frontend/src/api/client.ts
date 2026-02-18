@@ -68,16 +68,35 @@ export interface CompileResponse {
 
 export interface CompileOptions {
   signal?: AbortSignal;
+  /** Script id for SVG caching (simple, medium, full). */
+  scriptId?: string | null;
+  /** LLM model name for caching. */
+  llmName?: string;
+  /** LLM temperature for caching (0-2). */
+  temperature?: number;
+  /** Whether to use caching (default: true). */
+  useCache?: boolean;
 }
 
 export async function compilePipeline(
   inputCode: string,
   options?: CompileOptions
 ): Promise<CompileResponse> {
+  const body: {
+    input_code: string;
+    script_id?: string;
+    llm_name?: string;
+    temperature?: number;
+    use_cache?: boolean;
+  } = { input_code: inputCode };
+  if (options?.scriptId) body.script_id = options.scriptId;
+  if (options?.llmName !== undefined) body.llm_name = options.llmName;
+  if (options?.temperature !== undefined) body.temperature = options.temperature;
+  if (options?.useCache !== undefined) body.use_cache = options.useCache;
   const res = await fetch(`${API_BASE}/compile`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input_code: inputCode }),
+    body: JSON.stringify(body),
     signal: options?.signal,
   });
   if (!res.ok) {
@@ -262,17 +281,28 @@ export async function updateSempipesConfig(req: UpdateConfigRequest): Promise<Up
   }
 }
 
+/** Options for executePipelineStream. */
+export interface ExecuteOptions {
+  /** Loaded script id (simple, medium, full); backend saves native skrub SVG to disk by this name. */
+  scriptId?: string | null;
+  /** LLM model name for caching. */
+  llmName?: string;
+  /** LLM temperature for caching (0-2). */
+  temperature?: number;
+  /** Whether to use caching (default: true). */
+  useCache?: boolean;
+}
+
 /**
  * Execute pipeline and stream events. Calls onEvent for each SSE event (terminal, node_code, done).
  * Returns an AbortController so the caller can abort the request.
  * All onEvent calls are wrapped in try/catch so exceptions from the callback do not crash the app;
  * on exception we emit error + done and stop.
- * @param scriptId - Loaded script id (simple, medium, full); backend saves native skrub SVG to disk by this name.
  */
 export function executePipelineStream(
   inputCode: string,
   onEvent: (event: ExecuteEvent) => void,
-  scriptId?: string | null
+  options?: ExecuteOptions
 ): AbortController {
   const controller = new AbortController();
 
@@ -294,8 +324,17 @@ export function executePipelineStream(
     }
   }
 
-  const body: { input_code: string; script_id?: string } = { input_code: inputCode };
-  if (scriptId) body.script_id = scriptId;
+  const body: {
+    input_code: string;
+    script_id?: string;
+    llm_name?: string;
+    temperature?: number;
+    use_cache?: boolean;
+  } = { input_code: inputCode };
+  if (options?.scriptId) body.script_id = options.scriptId;
+  if (options?.llmName !== undefined) body.llm_name = options.llmName;
+  if (options?.temperature !== undefined) body.temperature = options.temperature;
+  if (options?.useCache !== undefined) body.use_cache = options.useCache;
 
   const res = fetch(`${API_BASE}/execute`, {
     method: "POST",
@@ -347,4 +386,16 @@ export function executePipelineStream(
       }
     });
   return controller;
+}
+
+/**
+ * Clear all cached data (compile, execute, svg).
+ */
+export async function clearCache(): Promise<void> {
+  const resp = await fetch("/api/cache", {
+    method: "DELETE",
+  });
+  if (!resp.ok) {
+    throw new Error(`Failed to clear cache: ${resp.statusText}`);
+  }
 }
