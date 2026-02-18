@@ -206,5 +206,42 @@ describe("api/client (pipeline scripts)", () => {
       const productsChildIdx = Math.min(...(result!.children["var_products_13"] ?? []).map((c) => nodeIndex.get(c) ?? 999));
       expect(basketsChildIdx).toBeLessThan(productsChildIdx);
     });
+
+    it("marks all 10 SemPipes operators as sempipes for highlighting (sempipesNodeIds and is_sempipes_semantic)", () => {
+      const sempipesOperatorLabels = [
+        "sem_fillna",
+        "sem_gen_features",
+        "sem_extract_features",
+        "sem_clean",
+        "sem_augment",
+        "sem_agg_features",
+        "sem_refine",
+        "sem_select",
+        "sem_distill",
+        "sem_choose",
+      ];
+      const nodes = [
+        { id: "as_X_1", type: "input", label: "as_X", source_range: null },
+        ...sempipesOperatorLabels.map((label, i) => ({
+          id: `op_${i}`,
+          type: "operator" as const,
+          label,
+          source_range: null as null,
+        })),
+      ];
+      const edges = sempipesOperatorLabels.map((_, i) => ({
+        source: i === 0 ? "as_X_1" : `op_${i - 1}`,
+        target: `op_${i}`,
+      }));
+      const result = compileToSkrubGraph(nodes, edges);
+      expect(result).not.toBeNull();
+      expect(result!.sempipesNodeIds).toHaveLength(10);
+      expect(result!.sempipesNodeIds).toEqual(expect.arrayContaining(nodes.slice(1).map((n) => n.id)));
+      for (const node of result!.nodes) {
+        if (sempipesOperatorLabels.includes(node.label)) {
+          expect(node.is_sempipes_semantic).toBe(true);
+        }
+      }
+    });
   });
 });
