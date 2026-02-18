@@ -1,0 +1,23 @@
+# Demo tests: no real LLM calls
+
+**Always apply this rule**
+
+Demo backend tests must not call real LLMs; use mocks/monkey patching.
+
+Backend tests should stay **close to using sempipes** (e.g. call sempipes code paths) but **must not call real LLMs**. Tests must run fast and without API keys or network.
+
+## How to enforce
+
+- **Monkey patch / mock** LLM entry points so tests get fixed responses:
+  - **conftest.py** (demo/backend/tests): patches `litellm.completion` and `litellm.batch_completion` when litellm is available so any code that calls litellm directly gets a fake response.
+  - **Tests that use sempipes code generation**: explicitly patch `sempipes.llm.llm._generate_code_from_messages` (or call under a context that mocks it) so the LLM returns fixed code without hitting the network. See `test_sempipes_code_generation_uses_mock_no_llm_call` in test_codegen.py.
+
+## Adding new tests that touch sempipes
+
+When adding tests that invoke sempipes code that would trigger LLM calls (e.g. `generate_python_code_from_messages`, operators that use the LLM):
+
+1. Use `unittest.mock.patch` (or pytest monkeypatch) to replace the LLM call with a function that returns fixed code/JSON.
+2. Patch at the right level: `sempipes.llm.llm._generate_code_from_messages` for code generation; or patch `litellm.completion` / `batch_completion` if you want to mock at the litellm boundary.
+3. Skip the test if sempipes (or its optional deps) are not importable, rather than failing or calling the real API.
+
+This keeps tests close to sempipes behaviour while ensuring no real LLM is ever called during test runs.
