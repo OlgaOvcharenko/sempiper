@@ -63,7 +63,7 @@ def mock_litellm_if_available(monkeypatch):
     yield
 
 
-def _default_runner_stdout_with_captured_codes(*, num_operator_codes: int = 2) -> list[bytes]:
+def _default_runner_stdout_with_captured_codes(*, num_operator_codes: int = 1) -> list[bytes]:
     """Stdout lines that include ##SEMPIPES_NODE_CODE## blocks so execute_stream gets operator code from run."""
     import json
 
@@ -83,10 +83,31 @@ def mock_skrub_graph_runner(monkeypatch):
     Patch subprocess.Popen in execute_stream so we never run the real
     skrub_graph_runner subprocess. Default stdout includes ##SEMPIPES_NODE_CODE##
     blocks so operator nodes get mock code from "pipeline run" (no direct LLM call).
+
+    NOTE: Only mocks calls that include 'skrub_graph_runner' in the command.
+    Other subprocess calls (like data summary extraction) use real subprocess.
     """
     from unittest.mock import MagicMock
+    import subprocess
+
+    # Save reference to real Popen BEFORE any patching
+    _real_popen = subprocess.Popen
 
     def _fake_popen(*args, **kwargs):
+        # Check if this is a skrub_graph_runner call
+        # skrub_graph_runner calls use: [sys.executable, "-m", "services.skrub_graph_runner"]
+        is_graph_runner = False
+        if args and len(args) > 0:
+            cmd = args[0]
+            if isinstance(cmd, list) and len(cmd) >= 3:
+                if "skrub_graph_runner" in " ".join(cmd):
+                    is_graph_runner = True
+
+        # If not a graph runner call, use real subprocess
+        if not is_graph_runner:
+            return _real_popen(*args, **kwargs)
+
+        # Mock graph runner calls
         proc = MagicMock()
         proc.stdin = MagicMock()
         proc.stdout.readline.side_effect = _default_runner_stdout_with_captured_codes()

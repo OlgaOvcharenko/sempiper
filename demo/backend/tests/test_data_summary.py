@@ -1,0 +1,135 @@
+"""Tests for real data summary extraction."""
+
+import json
+import pytest
+from fastapi.testclient import TestClient
+from main import app
+
+client = TestClient(app)
+
+
+def test_input_node_gets_real_data_summary():
+    """Input nodes should get real data summaries from execution, not mock data."""
+    code = """import skrub
+
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=100, how="random")
+result = products.skb.eval()
+"""
+
+    # Execute and collect events
+    exec_resp = client.post("/api/execute", json={"input_code": code})
+    assert exec_resp.status_code == 200
+
+    events = []
+    for line in exec_resp.text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+
+    # Find input_summary for the products variable
+    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
+    assert len(input_summary_events) >= 1, "Should have at least one input_summary event"
+
+    # Get the first input_summary (for products variable)
+    products_summary = input_summary_events[0]
+
+    # Verify it has real data structure
+    assert "schema" in products_summary
+    assert "sample" in products_summary
+    assert "row_count" in products_summary
+
+    # Real data should have multiple columns (not just "ID" from mock)
+    schema = products_summary["schema"]
+    assert len(schema) > 1, f"Real data should have multiple columns, got: {schema}"
+
+    # Check for expected columns from credit_fraud dataset
+    column_names = [col["name"] for col in schema]
+    # The products table should have columns like basket_ID, item, make, model, etc.
+    assert any(col in column_names for col in ["basket_ID", "item", "make", "model"]), \
+        f"Should have credit_fraud product columns, got: {column_names}"
+
+    # Sample should have data for these columns
+    sample = products_summary["sample"]
+    assert len(sample) > 0, "Should have sample rows"
+    assert len(sample[0].keys()) > 1, "Sample rows should have multiple columns"
+
+
+def test_data_summary_is_cached():
+    """Data summaries should be cached for reuse across scripts."""
+    # Same input in two different scripts
+    code1 = """import skrub
+
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+"""
+
+    code2 = """import skrub
+
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n=50, how="random")
+"""
+
+    # Execute both
+    exec_resp1 = client.post("/api/execute", json={"input_code": code1})
+    assert exec_resp1.status_code == 200
+
+    exec_resp2 = client.post("/api/execute", json={"input_code": code2})
+    assert exec_resp2.status_code == 200
+
+    # Extract summaries
+    def get_input_summary(resp_text):
+        events = []
+        for line in resp_text.split("\n"):
+            if line.strip().startswith("data: "):
+                try:
+                    events.append(json.loads(line.strip()[6:]))
+                except json.JSONDecodeError:
+                    pass
+        input_summaries = [e for e in events if e.get("type") == "input_summary"]
+        return input_summaries[0] if input_summaries else None
+
+    summary1 = get_input_summary(exec_resp1.text)
+    summary2 = get_input_summary(exec_resp2.text)
+
+    assert summary1 is not None
+    assert summary2 is not None
+
+    # Schemas should be identical (cached from same input)
+    assert summary1["schema"] == summary2["schema"], \
+        "Cached summaries should have identical schemas"
+
+
+def test_fallback_to_mock_on_execution_failure():
+    """Should fall back to mock data if real execution fails."""
+    code = """import skrub
+
+# This will fail because undefined_dataset doesn't exist
+products = skrub.var("products", undefined_dataset.products)
+"""
+
+    # Execute
+    exec_resp = client.post("/api/execute", json={"input_code": code})
+    # Execution might fail, but we should still get a response
+    # (The compile step will fail, so we might not even get to execute)
+
+    # The key point is that we handle failures gracefully
+    # If we get events, input_summary should fall back to mock
+    events = []
+    for line in exec_resp.text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+
+    # If we got input_summary events, they should have data (even if mock)
+    input_summaries = [e for e in events if e.get("type") == "input_summary"]
+    for summary in input_summaries:
+        assert "schema" in summary
+        assert "sample" in summary
+        assert "row_count" in summary

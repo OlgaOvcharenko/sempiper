@@ -16,6 +16,7 @@ import threading
 import time
 
 from services.compile_parse import extract_nodes_with_ranges
+from services.data_summary_extractor import get_data_summary
 
 logger = logging.getLogger(__name__)
 
@@ -298,17 +299,29 @@ def _build_fallback_graph_from_compile(
 
 def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
     """
-    Build mapping from skrub graph node id to compile node id.
-    Used by frontend to highlight code when user clicks a graph node.
+    Build mapping from runtime skrub node IDs to static compile node IDs.
 
-    IMPORTANT: Matches by label ONLY. The skrub graph node order (from _Graph().run())
-    may differ from document order, so we cannot use numeric index mapping.
-    Handles multiple nodes with the same label by matching Nth occurrence in skrub graph
-    to Nth occurrence in compile nodes (sorted by source_range.start_line for document order).
+    WHY THIS MAPPING EXISTS:
+    ───────────────────────────────────────────────────────────────────────────────
+    - Skrub graph (runtime) has numeric IDs: "0", "1", "2"
+    - Compile nodes (static parsing) have semantic IDs: "var_products_4", "subsample_5"
+    - Frontend may need to map between these for debugging or backward compatibility
+    - Sent to frontend in skrubToCompileId field of skrub_graph event
 
-    Special case: GetItem nodes in skrub graph should map to as_X/as_y nodes in compile graph.
-    When sempipes.as_X(df[cols]) is called, skrub creates a GetItem node, but compile parser
-    creates an as_X node. We map these together by position.
+    MATCHING STRATEGY:
+    ───────────────────────────────────────────────────────────────────────────────
+    - Match by label ONLY (not by position/index)
+    - Skrub graph node order (topological from _Graph().run()) may differ from document order
+    - For nodes with same label, match Nth occurrence in runtime graph to Nth occurrence
+      in compile nodes (sorted by source_range.start_line for document order)
+
+    SPECIAL CASES:
+    ───────────────────────────────────────────────────────────────────────────────
+    - GetItem nodes in skrub → as_X/as_y nodes in compile (sempipes.as_X(df[cols]) creates GetItem)
+    - Mapping is best-effort; mismatches possible if labels are ambiguous or change between runs
+
+    CRITICAL: This mapping is ESSENTIAL for dynamic compilation! Runtime and compile-time
+    graphs have DIFFERENT numeric IDs (separate runs). Frontend needs this to display generated code.
     """
     if not graph or not runnable:
         return {}
@@ -475,8 +488,8 @@ def _save_skrub_svg_to_cache(svg: str, cache_key: str | None) -> None:
     if not svg.startswith("<svg") or "</svg>" not in svg:
         return
     try:
-        from services.cache import cache_service
-        cache_service.set(cache_key, "svg", {"svg": svg})
+        from services.cache import cache_service, CacheFormat
+        cache_service.set(cache_key, "svg", {"svg": svg}, format=CacheFormat.SVG)
         logger.info(f"Saved skrub SVG to cache (key: {cache_key[:8]}...)")
     except Exception as e:
         logger.warning(f"Could not save SVG to cache: {e}")
@@ -505,7 +518,37 @@ def stream_execute_events(
     duration_ms = 0.0
     exec_failed = False
     try:
-        nodes, compile_edges = extract_nodes_with_ranges(input_code)
+        # Get compile graph nodes with correct IDs (from cache or dynamic compilation)
+        # Don't use static parse here - it creates different IDs (e.g. "sem_fillna_20")
+        # than dynamic compile (e.g. "4"), causing skrubToCompileId mapping to break.
+        from services.cache import cache_service, make_cache_key
+
+        compile_result = None
+        if cache_key:
+            # Try to get from cache first
+            cached = cache_service.get(cache_key, "compile")
+            if cached and "nodes" in cached:
+                from models.schemas import CompileNode, CompileEdge
+                nodes = [CompileNode(**n) for n in cached["nodes"]]
+                compile_edges = [CompileEdge(**e) for e in cached["edges"]]
+                compile_result = (nodes, compile_edges)
+
+        if not compile_result:
+            # No cache - compile dynamically to get correct IDs
+            from services.graph_api import compile_script_to_graph_dynamic
+            result = compile_script_to_graph_dynamic(input_code)
+            # Fall back to static parsing if dynamic fails (e.g., script has undefined variables)
+            if len(result.nodes) == 0 and len(result.validation_errors) > 0:
+                logger.warning(f"Dynamic compilation failed ({result.validation_errors[0]}), falling back to static parse")
+                from services.compile_parse import extract_nodes_with_ranges
+                static_nodes, static_edges = extract_nodes_with_ranges(input_code)
+                # extract_nodes_with_ranges returns CompileNode and CompileEdge objects directly
+                nodes = static_nodes
+                compile_edges = static_edges
+            else:
+                nodes = result.nodes
+                compile_edges = result.edges
+
         runnable = [n for n in nodes if n.type in ("input", "operator")]
         operator_nodes = [n for n in runnable if n.type == "operator"]
         runnable_ids = {n.id for n in runnable}
@@ -638,53 +681,148 @@ def stream_execute_events(
         #    - semantic_op_index only increments for operators that generate code (sem_*, apply, etc.)
         #    - Non-semantic operators (subsample, eval, etc.) receive mock code
         # 3. Mock: If no code available or non-semantic operator, use placeholder
+        #
+        # ID CONSISTENCY: When skrub graph is available AND we have valid compile graph, use skrub IDs (from runtime)
+        #                 When NO skrub graph OR we fell back to static parse, use compile IDs
+        # Check if nodes came from dynamic compile (have numeric IDs like "0", "1") or static parse (have semantic IDs like "as_X_1")
+        has_dynamic_compile = nodes and all(n.id.isdigit() for n in nodes if n.id)
+        use_skrub_ids = graph_from_run is not None and has_dynamic_compile
+
+        # Track which node IDs have already received node_code events to prevent duplicates
+        emitted_node_code_ids: set[str] = set()
+
         semantic_op_index = 0
         for node in runnable:
-            yield f"data: {json.dumps({'type': 'terminal', 'line': f'Running {node.label} ({node.id})...'})}\n\n".encode()
+            # Use skrub ID when runtime graph is available, compile ID otherwise
+            display_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
+            yield f"data: {json.dumps({'type': 'terminal', 'line': f'Running {node.label} ({display_id})...'})}\n\n".encode()
             time.sleep(0.4)
-            if node.type == "input":
-                summary = _mock_input_summary(node.id, node.label)
+
+            # Determine if this is a semantic (code-generating) operator
+            is_semantic = node.type != "input" and _is_semantic_operator(node.label)
+
+            if node.type == "input" or not is_semantic:
+                # Input nodes and non-semantic operators: emit data summary
+                # Try to get real data summary by executing script up to this point
+                summary = None
+                if node.source_range and node.source_range.end_line:
+                    # Extract variable name from label (e.g., "<Var 'products'>" -> "products")
+                    var_name = None
+                    if node.type == "input" and "<Var '" in node.label:
+                        # Extract from "<Var 'products'>" format
+                        import re
+                        match = re.search(r"<Var '([^']+)'>", node.label)
+                        if match:
+                            var_name = match.group(1)
+
+                    if var_name:
+                        # Get real data summary from execution
+                        cache_dir = os.path.join(_BACKEND_ROOT, ".cache") if cache_key else None
+                        try:
+                            summary = get_data_summary(
+                                input_code,
+                                var_name,
+                                node.source_range.end_line,
+                                cache_dir=cache_dir
+                            )
+                            summary["node_id"] = display_id
+                        except Exception as e:
+                            logger.warning(f"Failed to get real data summary for {var_name}: {e}")
+                            summary = None
+
+                # Fall back to mock if real data extraction failed
+                if summary is None:
+                    summary = _mock_input_summary(display_id, node.label)
+
                 yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
                 time.sleep(0.1)
-                code = _mock_generated_code_for_node(node.id, node.label, node.type)
-                is_fallback = True
-                node_cost = 0.0
-                node_retries = 0
             else:
+                # Semantic operators: emit generated code
                 skid = compile_to_skrub.get(node.id) if compile_to_skrub else None
                 if skid is not None and skid in code_by_skrub:
-                    # Primary path: use skrub_node_id mapping (no change)
+                    # Primary path: use skrub_node_id mapping
                     code = code_by_skrub[skid]["code"]
                     node_cost = code_by_skrub[skid]["cost_usd"]
                     node_retries = code_by_skrub[skid]["attempts"]
                     is_fallback = False
+                elif semantic_op_index < len(captured_codes):
+                    # Fallback: use semantic operator index
+                    code = captured_codes[semantic_op_index]
+                    node_cost = captured_costs[semantic_op_index] if semantic_op_index < len(captured_costs) else 0.0
+                    node_retries = captured_attempts[semantic_op_index] if semantic_op_index < len(captured_attempts) else 1
+                    is_fallback = False
+                    semantic_op_index += 1  # Only increment when we consume a captured code
                 else:
-                    # Check if this operator is semantic (code-generating)
-                    is_semantic = _is_semantic_operator(node.label)
+                    # Out of bounds: use mock code
+                    code = _mock_generated_code_for_node(display_id, node.label, node.type)
+                    node_cost = 0.0
+                    node_retries = 1
+                    is_fallback = True
 
-                    if is_semantic and semantic_op_index < len(captured_codes):
-                        # Fallback: use semantic operator index
-                        code = captured_codes[semantic_op_index]
-                        node_cost = captured_costs[semantic_op_index] if semantic_op_index < len(captured_costs) else 0.0
-                        node_retries = captured_attempts[semantic_op_index] if semantic_op_index < len(captured_attempts) else 1
-                        is_fallback = False
-                        semantic_op_index += 1  # Only increment for semantic operators
-                    else:
-                        # Non-semantic operator or out of bounds: use mock code
-                        code = _mock_generated_code_for_node(node.id, node.label, node.type)
-                        node_cost = 0.0
-                        node_retries = 0 if not is_semantic else 1
-                        is_fallback = True
-            payload = {
-                "type": "node_code",
-                "node_id": node.id,
-                "generated_code": code,
-                "retries": node_retries,
-                "cost_usd": node_cost,
-                "is_fallback": is_fallback,
-            }
-            yield f"data: {json.dumps(payload)}\n\n".encode()
-            time.sleep(0.2)
+                # CRITICAL: Use consistent ID system with terminal/input_summary events
+                emit_node_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
+                payload = {
+                    "type": "node_code",
+                    "node_id": emit_node_id,
+                    "generated_code": code,
+                    "retries": node_retries,
+                    "cost_usd": node_cost,
+                    "is_fallback": is_fallback,
+                }
+                yield f"data: {json.dumps(payload)}\n\n".encode()
+                emitted_node_code_ids.add(emit_node_id)  # Track to prevent duplicate emissions
+                time.sleep(0.2)
+
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # ID Matching System — Why We Need to Map Node IDs
+        # ═══════════════════════════════════════════════════════════════════════════════
+        #
+        # PROBLEM: Three ID systems that need to work together
+        # ────────────────────────────────────────────────────────────────────────────────
+        # 1. Static compile IDs (from parsing source code):
+        #    - Semantic names like "var_products_4", "subsample_5", "sem_gen_features_6"
+        #    - Fast to generate (no pipeline execution)
+        #    - Assigned by document order (line numbers)
+        #    - Used by 'runnable' nodes below
+        #
+        # 2. Dynamic compile IDs (from running pipeline to get skrub graph):
+        #    - Numeric IDs like "0", "1", "2" (assigned by skrub at runtime)
+        #    - Accurate graph structure (captures all operations: groupby -> agg -> reset_index)
+        #    - Frontend receives these in compile response when use_dynamic=True
+        #
+        # 3. Runtime execution IDs (from this execute stream):
+        #    - Numeric IDs like "0", "1", "2", "3" (assigned by skrub during execution)
+        #    - MAY DIFFER from dynamic compile IDs because pipeline runs twice!
+        #    - This is the source of truth for matching node_code events to graph nodes
+        #
+        # WHY THE PROBLEM EXISTS:
+        # ────────────────────────────────────────────────────────────────────────────────
+        # - When use_dynamic=True (default for accurate graphs), both compile and execute
+        #   run the pipeline separately
+        # - Skrub assigns numeric node IDs during each run
+        # - Different runs can produce different IDs (e.g., compile: {0,1,7}, execute: {0,1,2,3})
+        # - Frontend displays compile graph but receives node_code events from execute
+        # - IDs must match or frontend can't show code when user clicks a node!
+        #
+        # OUR SOLUTION:
+        # ────────────────────────────────────────────────────────────────────────────────
+        # 1. Execute emits skrub_graph event with the ACTUAL runtime graph used
+        # 2. Frontend uses this runtime graph (not compile preview) for node ID lookups
+        # 3. Build skrub_to_compile mapping for backward compatibility / debugging
+        # 4. Emit node_code events with runtime skrub IDs (numeric)
+        # 5. Frontend matches events to runtime graph nodes by ID
+        #
+        # KEY INSIGHT:
+        # ────────────────────────────────────────────────────────────────────────────────
+        # The runtime graph from execute is the single source of truth for node IDs.
+        # Compile preview graph is for initial visualization only.
+        # Once execution starts, frontend switches to using runtime graph for all ID matching.
+        #
+        # ═══════════════════════════════════════════════════════════════════════════════
+
+        # Build skrub to compile mapping (used for skrubToCompileId in skrub_graph event)
+        skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
+        compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
 
         # Emit node_code for skrub semantic nodes so clicking them in the graph shows generated code.
         # When runner sent skrub_node_id with each block, use code_by_skrub; else fall back to label/occurrence.
@@ -693,17 +831,20 @@ def stream_execute_events(
 
         if code_by_skrub:
             for skid in sempipes_node_ids:
-                if skid in code_by_skrub:
+                if skid in code_by_skrub and skid not in emitted_node_code_ids:
                     info = code_by_skrub[skid]
+                    # Emit skrub node ID directly (runtime ID from graph_from_run)
+                    # This matches the graph node IDs in the skrub_graph event sent to frontend
                     payload = {
                         "type": "node_code",
-                        "node_id": f"skrub_{skid}",
+                        "node_id": skid,
                         "generated_code": info["code"],
                         "retries": info["attempts"],
                         "cost_usd": info["cost_usd"],
                         "is_fallback": False,
                     }
                     yield f"data: {json.dumps(payload)}\n\n".encode()
+                    emitted_node_code_ids.add(skid)  # Track to prevent duplicates
                     time.sleep(0.1)
         else:
             # Fallback: match by label and occurrence (document vs topo order may differ).
@@ -720,6 +861,9 @@ def stream_execute_events(
                         semantic_op_idx += 1
             label_usage: dict[str, int] = {}
             for skid in sempipes_node_ids:
+                # Skip if already emitted in main loop
+                if skid in emitted_node_code_ids:
+                    continue
                 skrub_node = next((sn for sn in runner_nodes if sn.get("id") == skid), None)
                 if not skrub_node:
                     continue
@@ -733,54 +877,28 @@ def stream_execute_events(
                         code_str = captured_codes[code_idx]
                         cost_usd = captured_costs[code_idx] if code_idx < len(captured_costs) else 0.0
                         retries = captured_attempts[code_idx] if code_idx < len(captured_attempts) else 1
+                        # Emit skrub node ID directly (matches the graph node IDs from dynamic compilation)
                         payload = {
                             "type": "node_code",
-                            "node_id": f"skrub_{skid}",
+                            "node_id": skid,
                             "generated_code": code_str,
                             "retries": retries,
                             "cost_usd": cost_usd,
                             "is_fallback": False,
                         }
                         yield f"data: {json.dumps(payload)}\n\n".encode()
+                        emitted_node_code_ids.add(skid)  # Track to prevent duplicates
                         time.sleep(0.1)
 
-        # Emit node_code for skrub input/non-semantic nodes so they get "done" status in the graph
-        runner_nodes = (graph_from_run or {}).get("nodes") or []
-        for sn in runner_nodes:
-            skid = sn.get("id")
-            if not skid or skid in sempipes_node_ids:
-                continue
-            label = sn.get("label", "")
-            compile_node = next((n for n in runnable if (getattr(n, "label", n.id) or "") == label), None)
-            if compile_node:
-                node_type = (getattr(compile_node, "type", "") or "operator").lower()
-                code = _mock_generated_code_for_node(
-                    getattr(compile_node, "id", ""), label, node_type
-                )
-                payload = {
-                    "type": "node_code",
-                    "node_id": f"skrub_{skid}",
-                    "generated_code": code,
-                    "retries": 0,
-                    "cost_usd": 0.0,
-                    "is_fallback": True,
-                }
-                yield f"data: {json.dumps(payload)}\n\n".encode()
-                time.sleep(0.05)
+        # Note: input_summary events for non-semantic nodes already emitted during main loop (lines 700-704)
+        # Semantic nodes get node_code events above; non-semantic nodes only get input_summary (not node_code)
 
         # Emit graph when we have nodes (from runner ##SKRUB_GRAPH## or fallback from compile)
         if graph_from_run and len(runner_nodes) > 0:
-            skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
+            # skrub_to_compile already built earlier for node_code events
             yield f"data: {json.dumps({'type': 'skrub_graph', 'graph': graph_from_run, 'skrubToCompileId': skrub_to_compile})}\n\n".encode()
-            # Emit input_summary with skrub node ids so frontend can show data when user selects input nodes
-            for sn in runner_nodes:
-                skid = sn.get("id")
-                if not skid or skid in sempipes_node_ids:
-                    continue
-                compile_node = next((n for n in runnable if (getattr(n, "label", n.id) or "") == sn.get("label", "")), None)
-                if compile_node and (getattr(compile_node, "type", "") or "").lower() == "input":
-                    summary = _mock_input_summary(f"skrub_{skid}", sn.get("label", ""))
-                    yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
+            # Note: input_summary events already emitted during node processing loop (lines 700-704)
+            # No need to emit them again here
 
         # Emit node_data for each node preview (intermediate data from .skb.preview())
         for preview in node_previews:
