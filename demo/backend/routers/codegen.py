@@ -14,6 +14,7 @@ from models.schemas import (
 )
 from pydantic import BaseModel, Field
 from services.cache import CacheFormat, cache_service, make_cache_key
+from services.cache.utils import _normalize_script
 from services.graph_api import compile_script_to_graph, compile_script_to_graph_dynamic, save_svg_to_cache_async
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 from services.execute_stream import stream_execute_events
@@ -75,7 +76,7 @@ def get_script_content(name: str) -> dict:
 
 class CompileRequest(BaseModel):
     input_code: str
-    use_dynamic: bool = True  # Use dynamic skrub graph extraction by default
+    use_dynamic: bool = True  # Use dynamic skrub graph for accurate full DAG with all operations
     script_id: str | None = None  # Script id for SVG caching (simple, medium, full)
     llm_name: str | None = None  # LLM model name for caching
     temperature: float | None = None  # LLM temperature for caching (0-2)
@@ -174,9 +175,16 @@ def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
         compile_timings_ms=timings if timings else None,
     )
 
-    # Store in cache
+    # Store in cache with metadata (normalized script, model, temperature)
     if cache_key:
-        cache_service.set(cache_key, "compile", response.model_dump())
+        metadata = {
+            "script": _normalize_script(req.input_code),  # Store normalized version
+            "llm_name": req.llm_name,
+            "temperature": req.temperature,
+            "script_id": req.script_id,
+            "use_dynamic": req.use_dynamic,
+        }
+        cache_service.set(cache_key, "compile", response.model_dump(), metadata=metadata)
 
     return response
 
@@ -218,9 +226,15 @@ def _stream_and_cache_events(
 
         yield event_bytes
 
-    # Store in cache after streaming completes
+    # Store in cache after streaming completes with metadata (normalized script)
     if cache_key and collected_events:
-        cache_service.set(cache_key, "execute", {"events": collected_events})
+        metadata = {
+            "script": _normalize_script(input_code),  # Store normalized version
+            "llm_name": llm_name,
+            "temperature": temperature,
+            "script_id": script_id,
+        }
+        cache_service.set(cache_key, "execute", {"events": collected_events}, metadata=metadata)
 
 
 @router.post("/execute")
