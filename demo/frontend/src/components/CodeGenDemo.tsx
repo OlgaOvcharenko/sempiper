@@ -11,6 +11,7 @@ import {
   type CompileEdge,
   type InputSummary,
   type PipelineScriptEntry,
+  type SkrubGraphDict,
 } from "../api/client";
 import {
   graphNodeToCompileIds,
@@ -84,6 +85,7 @@ export function CodeGenDemo() {
   const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
+  const [skrubGraphFromRun, setSkrubGraphFromRun] = useState<SkrubGraphDict | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
   const [temperature, setTemperature] = useState<string>("0.0");
@@ -195,6 +197,8 @@ export function CodeGenDemo() {
     setInputSummaryByNode({});
     setNodeDataByNode({});
     setLastRunCostUsd(null);
+    setSkrubGraphFromRun(null);  // Clear previous skrub graph
+    setSkrubToCompileId({});      // Clear previous mapping
     setLastRunDurationMs(null);
     setLastRunError(null);
     setSkrubToCompileId({});
@@ -276,6 +280,7 @@ export function CodeGenDemo() {
         } else if (event.type === "skrub_graph") {
           // Store the skrub to compile mapping for node code lookup
           if (event.graph) {
+            setSkrubGraphFromRun(event.graph);
             setSkrubToCompileId(event.skrubToCompileId ?? {});
             // Copy input summaries to skrub node ids so selecting skrub_0 shows data when backend
             // emitted input_summary with compile node id (e.g. as_X_1).
@@ -381,8 +386,9 @@ export function CodeGenDemo() {
 
   // Use the compile preview graph as the canonical graph structure
   const compilePreviewGraph = compileToSkrubGraph(compileNodes, compileEdges ?? []);
-  const displayGraph = compilePreviewGraph;
-  const isPreviewGraph = !!compilePreviewGraph?.nodes?.length;
+  // After execution, use actual skrub graph from run; before execution, use compile preview
+  const displayGraph = skrubGraphFromRun ?? compilePreviewGraph;
+  const isPreviewGraph = !!compilePreviewGraph?.nodes?.length && !skrubGraphFromRun;
 
   const nodes: GraphNode[] =
     compileNodes.length > 0
@@ -435,7 +441,7 @@ export function CodeGenDemo() {
     highlightedNodeIds,
     displayGraph?.nodes ?? [],
     compileNodes,
-    false
+    !!skrubGraphFromRun  // true when we have actual skrub graph from execution
   );
 
   // Input summary for selected input node: map skrub_X → compile node by id or label → inputSummaryByNode
@@ -750,6 +756,7 @@ export function CodeGenDemo() {
             nodeDataByNode={nodeDataByNode}
             isExecuting={isExecuting}
             nodeMetadata={null}
+            skrubToCompileId={skrubToCompileId}
             isExpanded={expandedPanel === 'right'}
             expandButton={
               <button

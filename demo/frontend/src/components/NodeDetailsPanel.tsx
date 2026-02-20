@@ -93,6 +93,8 @@ interface NodeDetailsPanelProps {
   expandButton?: React.ReactNode;
   /** Whether the panel is expanded (controls word wrap). */
   isExpanded?: boolean;
+  /** Mapping from skrub runtime IDs to compile IDs (for dynamic compilation). */
+  skrubToCompileId?: Record<string, string>;
 }
 
 export function NodeDetailsPanel({
@@ -110,35 +112,55 @@ export function NodeDetailsPanel({
   nodeMetadata = null,
   expandButton = null,
   isExpanded = false,
+  skrubToCompileId = {},
 }: NodeDetailsPanelProps) {
-  // Try both the full selectedNodeId and the version without "skrub_" prefix
-  // This handles the case where node_code events use compile IDs but the UI uses skrub_ prefixed IDs
+  // Try multiple ID formats to find code:
+  // 1. selectedNodeId (e.g., "skrub_1")
+  // 2. rawNodeId (e.g., "1")
+  // 3. compileId from mapping (e.g., "subsample_5")
+  // 4. skrub-prefixed compileId (e.g., "skrub_subsample_5")
   const rawNodeId = selectedNodeId?.startsWith("skrub_") ? selectedNodeId.slice(6) : selectedNodeId;
+  const compileId = rawNodeId ? skrubToCompileId[rawNodeId] : undefined;
 
-  // Direct lookups trying both ID formats
+  // Direct lookups trying all ID formats
   const liveMap = liveGeneratedCodeByNode ?? {};
-  const liveCodeForNode = (selectedNodeId && liveMap[selectedNodeId]) || (rawNodeId && liveMap[rawNodeId]) || undefined;
+  const liveCodeForNode = liveMap[selectedNodeId] ||
+                          liveMap[rawNodeId] ||
+                          (compileId && liveMap[compileId]) ||
+                          (compileId && liveMap[`skrub_${compileId}`]) ||
+                          undefined;
   const effectiveCode =
     liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode ?? null : null);
   const isLive = liveCodeForNode !== undefined;
   const waitingForCode = isExecuting && selectedNode?.type === "operator" && liveCodeForNode === undefined;
   const hasCodeToShow = (effectiveCode != null && effectiveCode !== "") || waitingForCode;
 
-  // Look up other per-node data using both ID formats
+  // Look up other per-node data using all ID formats (including compile ID from mapping)
   const retriesMap = liveRetriesByNode ?? {};
-  const nodeRetries = (selectedNodeId && retriesMap[selectedNodeId]) ?? (rawNodeId && retriesMap[rawNodeId]) ?? undefined;
+  const nodeRetries = retriesMap[selectedNodeId] ?? retriesMap[rawNodeId] ??
+                     (compileId && retriesMap[compileId]) ??
+                     (compileId && retriesMap[`skrub_${compileId}`]) ?? undefined;
 
   const fallbackMap = liveFallbackByNode ?? {};
-  const nodeFallback = (selectedNodeId && fallbackMap[selectedNodeId]) ?? (rawNodeId && fallbackMap[rawNodeId]) ?? undefined;
+  const nodeFallback = fallbackMap[selectedNodeId] ?? fallbackMap[rawNodeId] ??
+                      (compileId && fallbackMap[compileId]) ??
+                      (compileId && fallbackMap[`skrub_${compileId}`]) ?? undefined;
 
   const costMap = liveCostUsdByNode ?? {};
-  const nodeCostUsd = (selectedNodeId && costMap[selectedNodeId]) ?? (rawNodeId && costMap[rawNodeId]) ?? undefined;
+  const nodeCostUsd = costMap[selectedNodeId] ?? costMap[rawNodeId] ??
+                     (compileId && costMap[compileId]) ??
+                     (compileId && costMap[`skrub_${compileId}`]) ?? undefined;
 
   const dataMap = nodeDataByNode ?? {};
-  const nodeData = (selectedNodeId && dataMap[selectedNodeId]) || (rawNodeId && dataMap[rawNodeId]) || undefined;
+  const nodeData = dataMap[selectedNodeId] || dataMap[rawNodeId] ||
+                  (compileId && dataMap[compileId]) ||
+                  (compileId && dataMap[`skrub_${compileId}`]) || undefined;
 
   const summaryMap = inputSummaryByNode ?? {};
-  const inputSummary = inputSummaryForSelectedNode ?? (selectedNodeId && summaryMap[selectedNodeId]) ?? (rawNodeId && summaryMap[rawNodeId]) ?? undefined;
+  const inputSummary = inputSummaryForSelectedNode ??
+                      summaryMap[selectedNodeId] ?? summaryMap[rawNodeId] ??
+                      (compileId && summaryMap[compileId]) ??
+                      (compileId && summaryMap[`skrub_${compileId}`]) ?? undefined;
   if (!selectedNodeId || !selectedNode) {
     return (
       <div className="h-full flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md">
