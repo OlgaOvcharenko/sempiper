@@ -775,10 +775,18 @@ def test_execute_stream_emits_skrub_graph_only_when_runner_prints_marker():
     assert graph.get("nodes") == real_skrub_graph["nodes"]
     assert "n1" in (graph.get("parents") or {})
 
-    # Input nodes get node_code with skrub_<id> so graph shows "done" status
+    # Input nodes get input_summary (data summary), not node_code
+    # Semantic operators get node_code
+    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
     node_code_events = [e for e in events if e.get("type") == "node_code"]
-    skrub_input_codes = [e for e in node_code_events if e.get("node_id") == "skrub_n1"]
-    assert len(skrub_input_codes) >= 1, "input nodes should get node_code with skrub_<id> for status badges"
+
+    # Check that we got input_summary for input nodes
+    input_summaries = [e for e in input_summary_events if "as_X" in str(e.get("node_id", "")) or "n1" in str(e.get("node_id", ""))]
+    assert len(input_summaries) >= 1, "input nodes should get input_summary events"
+
+    # Check that semantic operators got node_code
+    semantic_codes = [e for e in node_code_events if "sem_fillna" in str(e.get("node_id", "")) or "n2" in str(e.get("node_id", ""))]
+    assert len(semantic_codes) >= 1, "semantic operators should get node_code events"
 
 
 def test_skrub_runner_treats_apply_nodes_as_semantic_and_maps_to_sempipes():
@@ -867,8 +875,14 @@ def test_execute_stream_handles_llm_failure_gracefully():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
+    # With the new behavior: semantic operators get node_code, inputs get input_summary
     node_code_events = [e for e in events if e.get("type") == "node_code"]
-    assert len(node_code_events) >= 2
+    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
+
+    # Only semantic operators (sem_fillna) get node_code; input (as_X) gets input_summary
+    assert len(node_code_events) >= 1, "semantic operator should get node_code"
+    assert len(input_summary_events) >= 1, "input should get input_summary"
+
     operator_events = [e for e in node_code_events if e.get("node_id", "").startswith("sem_")]
     assert len(operator_events) >= 1
     for e in operator_events:
@@ -1092,7 +1106,7 @@ def test_compile_exact_nodes_and_edge_chain_for_snippet():
 
 
 def test_execute_node_code_ids_match_compile_runnable_nodes():
-    """Execute stream emits node_code for every compile runnable node (may also emit skrub_<id> for graph)."""
+    """Execute stream emits events (node_code or input_summary) for every compile runnable node."""
     import json
 
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
@@ -1111,8 +1125,11 @@ def test_execute_node_code_ids_match_compile_runnable_nodes():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
+    # Collect both node_code and input_summary event IDs
     node_code_ids = {e["node_id"] for e in events if e.get("type") == "node_code"}
-    assert runnable_ids <= node_code_ids, "execute must emit node_code for every compile runnable node"
+    input_summary_ids = {e["node_id"] for e in events if e.get("type") == "input_summary"}
+    all_node_event_ids = node_code_ids | input_summary_ids
+    assert runnable_ids <= all_node_event_ids, "execute must emit node_code or input_summary for every compile runnable node"
 
 
 def test_execute_stream_does_not_call_sempipes_llm_directly():
