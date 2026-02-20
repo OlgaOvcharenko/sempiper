@@ -96,7 +96,7 @@ class CacheService:
                     value = json.load(f)
             elif format == CacheFormat.SVG:
                 with open(cache_path, "r", encoding="utf-8") as f:
-                    value = json.load(f)  # SVG is stored as {"svg": "..."}
+                    value = f.read()  # SVG is stored as plain text
             else:
                 with open(cache_path, "rb") as f:
                     value = f.read()
@@ -135,9 +135,12 @@ class CacheService:
             # Create directory if it doesn't exist
             cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if format == CacheFormat.JSON or format == CacheFormat.SVG:
+            if format == CacheFormat.JSON:
                 with open(cache_path, "w", encoding="utf-8") as f:
                     json.dump(value, f, indent=2)
+            elif format == CacheFormat.SVG:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    f.write(value)  # Write SVG as plain text
             else:
                 with open(cache_path, "wb") as f:
                     f.write(value if isinstance(value, bytes) else str(value).encode())
