@@ -151,6 +151,31 @@ The demo must use **sempipes API and operators** as the pipeline code does.
 **Tests:**
 - `test_execute_stream_does_not_call_sempipes_llm_directly` verifies this rule
 
+### 9. Cache Design
+
+See: `.claude/rules/cache-design.md`
+
+Two-tier caching system (memory + file) for pipeline results.
+
+**Architecture:**
+- **Memory cache**: Fast, single-key only (bounded memory)
+- **File cache**: Persistent in `.cache/` directory
+
+**Single-key memory constraint:**
+- Memory only holds entries for ONE cache key (hash) at a time
+- Switching to a different key clears all memory entries
+- Files remain on disk until explicitly cleared
+
+**Cache key**: `SHA256(script + "|" + temperature + "|" + llm_name)[:16]`
+
+**Operations:**
+- `compile` → compiled graph JSON
+- `execute` → execution events JSON
+- `svg` → native skrub graph SVG
+
+**Endpoints:**
+- `DELETE /api/cache` → clears both memory and files
+
 ---
 
 ## Project Structure
