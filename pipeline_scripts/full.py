@@ -11,8 +11,7 @@ dataset = skrub.datasets.fetch_credit_fraud()
 products = skrub.var("products", dataset.products)
 baskets = skrub.var("baskets", dataset.baskets)
 
-# products = products.skb.subsample(n=1000, how="random")
-baskets = baskets.skb.subsample(n=1000, how="random")
+baskets = baskets.skb.subsample(n=500, how="random")
 
 fraud_flags = sempipes.as_y(
     baskets["fraud_flag"],
