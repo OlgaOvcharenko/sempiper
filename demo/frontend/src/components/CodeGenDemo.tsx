@@ -122,7 +122,7 @@ export function CodeGenDemo() {
     } finally {
       if (compileAbortRef.current === controller) compileAbortRef.current = null;
     }
-  }, [pipelineCode, loadedScriptId, llmName, temperature]);
+  }, [pipelineCode, llmName, temperature]);
 
   const handleLoadScript = useCallback(async (id: string) => {
     setLoadedScriptId(id);
