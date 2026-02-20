@@ -393,8 +393,11 @@ class TestCacheServiceCore:
         result1 = test_cache.get("key1", "compile")
         assert result1 == {"data": 1}
 
-        # Memory should now be populated
-        assert test_cache.memory_cache.get("key1", "compile") == {"data": 1}
+        # Second get should hit memory (verify by checking operation exists)
+        # Memory stores with format suffix: "compile:json"
+        assert test_cache.memory_cache.has_operation("compile:json")
+        result2 = test_cache.get("key1", "compile")
+        assert result2 == {"data": 1}
 
 
 # ============================================================================
@@ -406,30 +409,32 @@ class TestCacheFileStructure:
     """Tests for file storage structure."""
 
     def test_creates_operation_subdirectories(self, test_cache):
-        """Setting creates compile/ or execute/ subdirectory."""
+        """Setting creates cache_key subdirectories with operation files."""
         test_cache.set("key1", "compile", {"data": 1})
         test_cache.set("key2", "execute", {"data": 2})
 
-        compile_dir = test_cache.cache_dir / "compile"
-        execute_dir = test_cache.cache_dir / "execute"
+        # New structure: .cache/{cache_key}/{operation}.json
+        key1_dir = test_cache.cache_dir / "key1"
+        key2_dir = test_cache.cache_dir / "key2"
 
-        assert compile_dir.is_dir()
-        assert execute_dir.is_dir()
+        assert key1_dir.is_dir()
+        assert (key1_dir / "compile.json").is_file()
+        assert key2_dir.is_dir()
+        assert (key2_dir / "execute.json").is_file()
 
     def test_cache_entry_is_valid_json(self, test_cache):
-        """Stored file is valid JSON with expected structure."""
+        """Stored file is valid JSON with data stored directly."""
         test_cache.set("key1", "compile", {"test": "data"})
 
-        file_path = test_cache.cache_dir / "compile" / "key1.json"
+        # New structure: .cache/key1/compile.json
+        file_path = test_cache.cache_dir / "key1" / "compile.json"
         assert file_path.is_file()
 
         with open(file_path, "r") as f:
-            entry = json.load(f)
+            data = json.load(f)
 
-        assert "created_at" in entry
-        assert "data" in entry
-        assert entry["data"] == {"test": "data"}
-        assert isinstance(entry["created_at"], float)
+        # Data is stored directly (no wrapper)
+        assert data == {"test": "data"}
 
     def test_handles_special_characters_in_data(self, test_cache):
         """Can cache data with unicode, newlines, etc."""
@@ -455,10 +460,10 @@ class TestCacheErrorHandling:
 
     def test_get_corrupted_file_returns_none(self, test_cache):
         """Corrupted JSON file returns None (graceful degradation)."""
-        # Create a corrupted cache file
-        compile_dir = test_cache.cache_dir / "compile"
-        compile_dir.mkdir(parents=True, exist_ok=True)
-        corrupted_file = compile_dir / "corrupted.json"
+        # Create a corrupted cache file using new structure
+        key_dir = test_cache.cache_dir / "corrupted"
+        key_dir.mkdir(parents=True, exist_ok=True)
+        corrupted_file = key_dir / "compile.json"
         corrupted_file.write_text("not valid json {{{")
 
         # Should return None, not raise
