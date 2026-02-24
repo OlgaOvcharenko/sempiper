@@ -247,20 +247,42 @@ def fuse_sempipes_nodes(
         if edge.source in outgoing_edges:
             outgoing_edges[edge.source].append(edge.target)
 
-    # For each removed node, redirect its edges
-    # If A -> removed -> B, create A -> B
+    # For each removed node, redirect its edges transitively.
+    # If A -> r1 -> r2 -> B (r1, r2 removed), create A -> B.
     redirected_edges: set[tuple[str, str]] = set()
 
-    for removed_id in nodes_to_remove:
-        sources = incoming_edges.get(removed_id, [])
-        targets = outgoing_edges.get(removed_id, [])
-
-        # Connect all sources to all targets (skip if source or target is also removed)
-        for src in sources:
+    def _reachable_non_removed_sources(node_id: str, visited: set[str]) -> set[str]:
+        """All non-removed nodes that can reach node_id through chains of removed nodes."""
+        result: set[str] = set()
+        for src in incoming_edges.get(node_id, []):
+            if src in visited:
+                continue
+            visited.add(src)
             if src not in nodes_to_remove:
-                for tgt in targets:
-                    if tgt not in nodes_to_remove:
-                        redirected_edges.add((src, tgt))
+                result.add(src)
+            else:
+                result |= _reachable_non_removed_sources(src, visited)
+        return result
+
+    def _reachable_non_removed_targets(node_id: str, visited: set[str]) -> set[str]:
+        """All non-removed nodes reachable from node_id through chains of removed nodes."""
+        result: set[str] = set()
+        for tgt in outgoing_edges.get(node_id, []):
+            if tgt in visited:
+                continue
+            visited.add(tgt)
+            if tgt not in nodes_to_remove:
+                result.add(tgt)
+            else:
+                result |= _reachable_non_removed_targets(tgt, visited)
+        return result
+
+    for removed_id in nodes_to_remove:
+        sources = _reachable_non_removed_sources(removed_id, {removed_id})
+        targets = _reachable_non_removed_targets(removed_id, {removed_id})
+        for src in sources:
+            for tgt in targets:
+                redirected_edges.add((src, tgt))
 
     # Build new node list (excluding removed nodes, with renamed labels)
     new_nodes = []

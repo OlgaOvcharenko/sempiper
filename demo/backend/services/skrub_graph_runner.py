@@ -431,14 +431,29 @@ def _graph_to_serializable(raw):
                 result.append(str(obj_to_idx.get(id(x), x)))
         return result
 
+    def _safe_graph_lookup(d, int_idx, node_ref):
+        """Look up a value in a graph dict that may use int or unhashable (DataOp) keys."""
+        try:
+            val = d.get(int_idx)
+            if val:
+                return val
+        except Exception:
+            pass
+        # Scan by object identity (handles DataOp-keyed dicts where DataOp is unhashable)
+        ref_id = id(node_ref)
+        for key, val in d.items():
+            if id(key) == ref_id:
+                return val or []
+        return []
+
     n = len(node_list)
     parents = {}
     children = {}
     for i in range(n):
         si = str(i)
         node_ref = node_list[i] if i < len(node_list) else i
-        p = parents_raw.get(i) or parents_raw.get(node_ref, [])
-        c = children_raw.get(i) or children_raw.get(node_ref, [])
+        p = _safe_graph_lookup(parents_raw, i, node_ref)
+        c = _safe_graph_lookup(children_raw, i, node_ref)
         parents[si] = to_id_list(p, n)
         children[si] = to_id_list(c, n)
 
@@ -554,17 +569,23 @@ def _get_skrub_dag_dict(code, globals_dict):
     previews = []
     raw_graph = None
 
-    # Try _Graph().run() for interactive DAG
+    # Try _Graph().run() for interactive DAG; separate try/except so preview extraction
+    # still runs even if graph serialization fails (e.g. unhashable DataOp keys).
     try:
         from skrub._data_ops._evaluation import _Graph
         raw_graph = _Graph().run(result)
-        if raw_graph and isinstance(raw_graph, dict) and "nodes" in raw_graph:
-            graph_dict = _graph_to_serializable(raw_graph)
-            # Note: Preview extraction disabled for now - calling .skb.preview() can be slow
-            # and may interfere with subprocess output. TODO: re-enable with better isolation.
-            # previews = _extract_all_previews(raw_graph)
     except Exception:
-        pass
+        raw_graph = None
+
+    if raw_graph and isinstance(raw_graph, dict) and "nodes" in raw_graph:
+        try:
+            graph_dict = _graph_to_serializable(raw_graph)
+        except Exception:
+            pass
+        try:
+            previews = _extract_all_previews(raw_graph)
+        except Exception:
+            pass
 
     # Always try draw_graph() for native skrub SVG (for saving to disk)
     try:

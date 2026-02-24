@@ -6,6 +6,7 @@ we parse ##SEMPIPES_NODE_CODE## blocks from stdout. We do not call the LLM direc
 If we get skrub's computation graph (DataOp.skb.draw_graph) we emit skrub_graph.
 Cost is tracked only when LLM is called in-process (subprocess LLM calls are not tracked).
 """
+import concurrent.futures
 import json
 import logging
 import os
@@ -68,9 +69,9 @@ def _parse_skrub_graph_from_stdout(stdout_str: str) -> dict | None:
     Parse ##SKRUB_GRAPH##\\n{json}\\n##END## block from runner stdout.
     Returns graph dict with keys nodes, parents, children, or None.
     """
-    # Use greedy (.*) so we capture the full JSON (single- or multi-line) up to \\n##END##
+    # Use non-greedy (.*?) so we stop at the FIRST ##END## (not the last one)
     pattern = re.compile(
-        re.escape(_SKRUB_GRAPH_MARKER) + r"\s*\n(.*)\n" + re.escape(_SKRUB_GRAPH_END),
+        re.escape(_SKRUB_GRAPH_MARKER) + r"\s*\n(.*?)\n" + re.escape(_SKRUB_GRAPH_END),
         re.DOTALL,
     )
     m = pattern.search(stdout_str)
@@ -615,7 +616,21 @@ def stream_execute_events(
                 try:
                     proc.stdin.write(input_code.encode("utf-8"))
                     proc.stdin.close()
-                    proc.wait()  # No timeout - let operators run as long as needed
+                    # Run proc.wait() in a thread so GeneratorExit (client disconnect) propagates
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        wait_future = pool.submit(proc.wait)
+                        try:
+                            while not wait_future.done():
+                                yield b""  # checkpoint: allows GeneratorExit to be thrown here
+                                time.sleep(0.1)
+                        except GeneratorExit:
+                            logger.info(f"Client disconnected, killing subprocess PID: {proc.pid}")
+                            proc.kill()
+                            try:
+                                wait_future.result(timeout=2.0)
+                            except Exception:
+                                pass
+                            raise  # close this generator
                 finally:
                     reader.join(timeout=1.0)
                 decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
