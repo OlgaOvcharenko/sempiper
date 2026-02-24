@@ -25,6 +25,7 @@ generator = CodeGenerator()
 # Pipeline scripts live in pipeline_scripts/ at repository root (parent of demo/).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _PIPELINE_SCRIPTS_DIR = _REPO_ROOT / "pipeline_scripts"
+_OPTIMIZER_SCRIPTS_DIR = _REPO_ROOT / "optimizer_scripts"
 
 
 def _get_pipeline_scripts_dir() -> Path:
@@ -39,8 +40,27 @@ def _get_pipeline_scripts_dir() -> Path:
     return _PIPELINE_SCRIPTS_DIR
 
 
-def _load_manifest() -> list[dict]:
-    scripts_dir = _get_pipeline_scripts_dir()
+def _get_optimizer_scripts_dir() -> Path:
+    """Return optimizer_scripts directory; try repo root first, then cwd."""
+    if (_OPTIMIZER_SCRIPTS_DIR / "manifest.json").is_file():
+        return _OPTIMIZER_SCRIPTS_DIR
+    cwd = Path.cwd()
+    for base in (cwd, cwd.parent):
+        candidate = base / "optimizer_scripts" / "manifest.json"
+        if candidate.is_file():
+            return candidate.parent
+    return _OPTIMIZER_SCRIPTS_DIR
+
+
+def _resolve_scripts_dir(mode: str) -> Path:
+    """Return the scripts directory for the given mode."""
+    if mode == "optimizer":
+        return _get_optimizer_scripts_dir()
+    return _get_pipeline_scripts_dir()
+
+
+def _load_manifest(mode: str = "normal") -> list[dict]:
+    scripts_dir = _resolve_scripts_dir(mode)
     manifest_path = scripts_dir / "manifest.json"
     if not manifest_path.is_file():
         return []
@@ -52,20 +72,29 @@ def _load_manifest() -> list[dict]:
 
 
 @router.get("/scripts")
-def list_scripts() -> dict:
-    """Return list of pipeline scripts (id, label) from pipeline_scripts/manifest.json."""
-    manifest = _load_manifest()
+def list_scripts(mode: str = "normal") -> dict:
+    """Return list of pipeline scripts (id, label) from the appropriate manifest.json.
+
+    Args:
+        mode: 'normal' (default) loads from pipeline_scripts/, 'optimizer' from optimizer_scripts/.
+    """
+    manifest = _load_manifest(mode)
     return {"scripts": [{"id": e["id"], "label": e["label"]} for e in manifest]}
 
 
 @router.get("/scripts/{name}")
-def get_script_content(name: str) -> dict:
-    """Return the content of a pipeline script by id (from pipeline_scripts/)."""
-    manifest = _load_manifest()
+def get_script_content(name: str, mode: str = "normal") -> dict:
+    """Return the content of a pipeline script by id.
+
+    Args:
+        name: Script id (e.g. 'simple', 'placeholder').
+        mode: 'normal' (default) reads from pipeline_scripts/, 'optimizer' from optimizer_scripts/.
+    """
+    manifest = _load_manifest(mode)
     entry = next((e for e in manifest if e["id"] == name), None)
     if not entry:
         raise HTTPException(status_code=404, detail=f"Script not found: {name}")
-    scripts_dir = _get_pipeline_scripts_dir()
+    scripts_dir = _resolve_scripts_dir(mode)
     path = scripts_dir / entry["file"]
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"Script file not found: {entry['file']}")
