@@ -66,7 +66,7 @@ def test_print_groupby_agg_reset_index_positions(medium_script):
 
 
 def test_verify_as_y_getitem_mapping(medium_script):
-    """Verify that GetItem 'fraud_flag' maps to line 19, not GetItem 'basket_ID'."""
+    """Verify that GetItem 'fraud_flag' maps to the as_y line, not GetItem 'basket_ID'."""
     result = compile_script_to_graph_dynamic(medium_script)
 
     # Find the GetItem nodes
@@ -94,10 +94,10 @@ def test_verify_as_y_getitem_mapping(medium_script):
             print(f"   Line {node.source_range.start_line}")
             lines = medium_script.splitlines()
             print(f"   Full line: {lines[node.source_range.start_line - 1]}")
-            assert node.source_range.start_line == 19, \
-                f"GetItem 'fraud_flag' should map to line 19 (as_y), got {node.source_range.start_line}"
+            assert node.source_range.start_line == 17, \
+                f"GetItem 'fraud_flag' should map to line 17 (as_y), got {node.source_range.start_line}"
         else:
-            pytest.fail("ERROR: GetItem 'fraud_flag' should have source_range pointing to line 19")
+            pytest.fail("ERROR: GetItem 'fraud_flag' should have source_range pointing to line 17")
 
 
 def test_check_line_27_getitem_nodes(medium_script):

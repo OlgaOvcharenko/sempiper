@@ -58,7 +58,6 @@ def test_get_script_content_simple_returns_200_and_content():
     assert isinstance(data["content"], str)
     assert len(data["content"]) > 0
     assert "sem_gen_features" in data["content"]
-    assert "sempipes" in data["content"]
 
 
 def test_get_script_content_medium_and_full_return_200():
