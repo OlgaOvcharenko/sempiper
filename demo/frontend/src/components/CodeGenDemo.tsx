@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useTheme } from "../hooks/useTheme";
 import {
   compilePipeline,
   executePipelineStream,
@@ -65,9 +66,17 @@ const formatDuration = (ms: number): string => {
 };
 
 export function CodeGenDemo() {
-  const [pipelineScripts, setPipelineScripts] = useState<PipelineScriptEntry[]>([]);
-  const [pipelineCode, setPipelineCode] = useState(INITIAL_PIPELINE_CODE);
-  const [loadedScriptId, setLoadedScriptId] = useState<string | null>(DEFAULT_SCRIPT_ID);
+  const [mode, setMode] = useState<'normal' | 'optimizer'>('normal');
+  const [normalScripts, setNormalScripts] = useState<PipelineScriptEntry[]>([]);
+  const [optimizerScripts, setOptimizerScripts] = useState<PipelineScriptEntry[]>([]);
+  const [normalCode, setNormalCode] = useState(INITIAL_PIPELINE_CODE);
+  const [optimizerCode, setOptimizerCode] = useState('');
+  const [normalLoadedScriptId, setNormalLoadedScriptId] = useState<string | null>(DEFAULT_SCRIPT_ID);
+  const [optimizerLoadedScriptId, setOptimizerLoadedScriptId] = useState<string | null>(null);
+  // Derived from current mode:
+  const pipelineScripts = mode === 'normal' ? normalScripts : optimizerScripts;
+  const pipelineCode = mode === 'normal' ? normalCode : optimizerCode;
+  const loadedScriptId = mode === 'normal' ? normalLoadedScriptId : optimizerLoadedScriptId;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const [cursorFocusNodeId, setCursorFocusNodeId] = useState<string | null>(null);
@@ -92,8 +101,11 @@ export function CodeGenDemo() {
   const [temperatureError, setTemperatureError] = useState(false);
   const [temperatureShake, setTemperatureShake] = useState(false);
   const [expandedPanel, setExpandedPanel] = useState<'left' | 'middle' | 'right' | null>(null);
+  const { isDark, toggle: toggleTheme } = useTheme();
   const executeAbortRef = useRef<AbortController | null>(null);
   const compileAbortRef = useRef<AbortController | null>(null);
+  const loadScriptAbortRef = useRef<AbortController | null>(null);
+  const loadScriptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const compileNodesRef = useRef<CompileNode[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   compileNodesRef.current = compileNodes;
@@ -124,31 +136,48 @@ export function CodeGenDemo() {
     }
   }, [pipelineCode, llmName, temperature]);
 
-  const handleLoadScript = useCallback(async (id: string) => {
-    setLoadedScriptId(id);
-    try {
-      const { content } = await getPipelineScriptContent(id);
-      setPipelineCode(content);
-    } catch {
-      setPipelineCode("# Failed to load script: " + id + "\n");
-    }
-  }, []);
+  const handleLoadScript = useCallback((id: string) => {
+    // Update UI immediately so the preset selection feels responsive
+    if (mode === 'normal') setNormalLoadedScriptId(id); else setOptimizerLoadedScriptId(id);
+    // Cancel any pending debounce timer and in-flight fetch for a previous script
+    if (loadScriptTimerRef.current !== null) clearTimeout(loadScriptTimerRef.current);
+    if (loadScriptAbortRef.current) loadScriptAbortRef.current.abort();
+    // Debounce: only fire the fetch after 200ms of inactivity (rapid clicks → only last one fires)
+    const capturedMode = mode;
+    loadScriptTimerRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      loadScriptAbortRef.current = controller;
+      try {
+        const { content } = await getPipelineScriptContent(id, capturedMode, { signal: controller.signal });
+        // Guard: if a newer request has superseded this one, discard the result
+        if (loadScriptAbortRef.current !== controller) return;
+        if (capturedMode === 'normal') setNormalCode(content); else setOptimizerCode(content);
+      } catch (err) {
+        if ((err as { name?: string })?.name === "AbortError") return;
+        const errMsg = "# Failed to load script: " + id + "\n";
+        if (capturedMode === 'normal') setNormalCode(errMsg); else setOptimizerCode(errMsg);
+      } finally {
+        if (loadScriptAbortRef.current === controller) loadScriptAbortRef.current = null;
+      }
+    }, 200);
+  }, [mode]);
 
   const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    const capturedMode = mode;
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = e.target?.result;
       if (typeof content === "string") {
-        setPipelineCode(content);
-        setLoadedScriptId(null); // Clear selection since this is a custom upload
+        if (capturedMode === 'normal') { setNormalCode(content); setNormalLoadedScriptId(null); }
+        else { setOptimizerCode(content); setOptimizerLoadedScriptId(null); }
       }
     };
     reader.readAsText(file);
     // Reset input so the same file can be uploaded again
     event.target.value = "";
-  }, []);
+  }, [mode]);
 
   const validateTemperature = useCallback((value: string): boolean => {
     if (value.trim() === "") return false;
@@ -321,6 +350,11 @@ export function CodeGenDemo() {
     executeAbortRef.current = controller;
   }, [pipelineCode, isExecuting, llmName, temperature, validateTemperature, loadedScriptId]);
 
+  const handleModeToggle = useCallback(() => {
+    setMode(prev => prev === 'normal' ? 'optimizer' : 'normal');
+    setExpandedPanel(null);
+  }, []);
+
   const handleClearCache = useCallback(async () => {
     if (isExecuting) return;
     try {
@@ -338,34 +372,60 @@ export function CodeGenDemo() {
 
   useEffect(() => {
     let cancelled = false;
-    listPipelineScripts()
+
+    // Load normal mode scripts
+    listPipelineScripts('normal')
       .then(({ scripts }) => {
         if (cancelled) return;
-        setPipelineScripts(scripts ?? []);
+        setNormalScripts(scripts ?? []);
         const defaultId = scripts?.some((s) => s.id === DEFAULT_SCRIPT_ID)
           ? DEFAULT_SCRIPT_ID
           : scripts?.[0]?.id;
         if (defaultId) {
-          if (!cancelled) setLoadedScriptId(defaultId);
-          return getPipelineScriptContent(defaultId)
+          if (!cancelled) setNormalLoadedScriptId(defaultId);
+          return getPipelineScriptContent(defaultId, 'normal')
             .then(({ content }) => {
-              if (!cancelled) setPipelineCode(content);
+              if (!cancelled) setNormalCode(content);
             })
             .catch(() => {
-              if (!cancelled) setPipelineCode("# Failed to load script: " + defaultId + "\n");
+              if (!cancelled) setNormalCode("# Failed to load script: " + defaultId + "\n");
             });
         }
       })
       .catch(() => {
-        if (!cancelled) setPipelineCode("# Failed to load scripts. Is the backend running?\n");
+        if (!cancelled) setNormalCode("# Failed to load scripts. Is the backend running?\n");
       });
+
+    // Load optimizer mode scripts
+    listPipelineScripts('optimizer')
+      .then(({ scripts }) => {
+        if (cancelled) return;
+        setOptimizerScripts(scripts ?? []);
+        const defaultId = scripts?.[0]?.id;
+        if (defaultId) {
+          if (!cancelled) setOptimizerLoadedScriptId(defaultId);
+          return getPipelineScriptContent(defaultId, 'optimizer')
+            .then(({ content }) => {
+              if (!cancelled) setOptimizerCode(content);
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // When pipeline code changes: clear selection and live run data so graph and details stay in sync.
+  // When pipeline code changes: abort any in-flight execution (stale events would corrupt new script's state),
+  // then clear selection and live run data so graph and details stay in sync.
   useEffect(() => {
+    if (executeAbortRef.current) {
+      executeAbortRef.current.abort();
+      executeAbortRef.current = null;
+      setIsExecuting(false);
+    }
     setSelectedNodeId(null);
     setHighlightedNodeIds([]);
     setLiveNodeCode({});
@@ -502,27 +562,69 @@ export function CodeGenDemo() {
   const rightWidth = expandedPanel === 'right' ? '80%' : expandedPanel === null ? '33%' : '10%';
 
   return (
-    <div className="flex flex-col h-screen bg-slate-200 text-zinc-900 font-sans min-w-[1280px]">
-      {/* Header with SemPipes logo */}
-      <header className="shrink-0 px-6 py-2 flex items-center justify-center">
+    <div className="flex flex-col h-screen bg-slate-200 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans min-w-[1280px]">
+      {/* Header with SemPipes logo and theme toggle */}
+      <header className="shrink-0 px-6 py-2 flex items-center justify-center relative">
+        <div className="absolute left-6 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            className="p-1.5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-slate-300 dark:hover:bg-zinc-800 transition-colors"
+          >
+          {isDark ? (
+            // Sun icon
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+          ) : (
+            // Moon icon
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+          </button>
+          <button
+            type="button"
+            onClick={handleModeToggle}
+            title={`Switch to ${mode === 'normal' ? 'Optimizer' : 'Normal'} Mode`}
+            aria-label={`Switch to ${mode === 'normal' ? 'Optimizer' : 'Normal'} Mode`}
+            className={`w-[112px] py-1 rounded text-xs font-medium border transition-colors ${
+              mode === 'optimizer'
+                ? 'border-violet-500 bg-violet-500 text-white hover:bg-violet-400 hover:border-violet-400'
+                : 'border-slate-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'
+            }`}
+          >
+            {mode === 'normal' ? 'Normal Mode' : 'Optimizer Mode'}
+          </button>
+        </div>
         <h1 className="text-2xl font-semibold tracking-tight" style={{ fontFamily: "'Outfit', sans-serif" }}>
           <span className="text-rose-400">Sem</span>
-          <span className="text-slate-500">Pipes</span>
+          <span className="text-slate-500 dark:text-slate-400">Pipes</span>
         </h1>
       </header>
       <div className="flex flex-1 min-h-0 gap-4 px-4 pb-4">
         {/* Left: Pipeline editor */}
-        <div className="min-w-[280px] flex flex-col min-h-0 rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md transition-all duration-300" style={{ width: leftWidth }}>
-          <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100 flex flex-col gap-2">
+        <div className="min-w-[280px] flex flex-col min-h-0 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md transition-all duration-300" style={{ width: leftWidth }}>
+          <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex flex-col gap-2">
             {/* Primary row: Script + Run */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                <span className="text-xs text-zinc-500">Pipeline:</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">Pipeline:</span>
                 <select
                   value={loadedScriptId ?? ""}
                   onChange={(e) => handleLoadScript(e.target.value)}
                   disabled={isExecuting}
-                  className="text-xs px-2 py-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-700 min-w-[140px]"
+                  className="text-xs px-2 py-1.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 disabled:opacity-50 text-zinc-700 dark:text-zinc-200 min-w-[140px]"
                   title="Select pipeline script"
                 >
                   {(pipelineScripts ?? []).length === 0 ? (
@@ -546,7 +648,7 @@ export function CodeGenDemo() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isExecuting}
-                  className="p-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-500"
+                  className="p-1.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 disabled:opacity-50 text-zinc-500 dark:text-zinc-400"
                   title="Upload script from file"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -573,7 +675,7 @@ export function CodeGenDemo() {
                   className={`p-1.5 rounded border transition-colors ${
                     isExecuting
                       ? "border-red-600 bg-red-600 hover:bg-red-500 hover:border-red-500 text-white"
-                      : "border-slate-300 bg-slate-100 text-slate-300 cursor-not-allowed"
+                      : "border-slate-300 dark:border-zinc-600 bg-slate-100 dark:bg-zinc-800 text-slate-300 dark:text-zinc-600 cursor-not-allowed"
                   }`}
                   title="Stop execution"
                 >
@@ -585,7 +687,7 @@ export function CodeGenDemo() {
                   type="button"
                   onClick={handleClearCache}
                   disabled={isExecuting}
-                  className="p-1.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-600"
+                  className="p-1.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-zinc-600 dark:text-zinc-400"
                   title="Clear all cache"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -597,7 +699,7 @@ export function CodeGenDemo() {
               <button
                 type="button"
                 onClick={() => setExpandedPanel(expandedPanel === 'left' ? null : 'left')}
-                className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 text-zinc-600 text-2xl transition-colors"
+                className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-400 text-2xl transition-colors"
                 title={expandedPanel === 'left' ? "Restore panel size" : "Expand panel"}
                 aria-label={expandedPanel === 'left' ? "Restore panel size" : "Expand panel"}
                 data-testid="expand-left-panel"
@@ -606,14 +708,14 @@ export function CodeGenDemo() {
               </button>
             </div>
             {/* Secondary row: Model settings */}
-            <div className="flex items-center gap-3 text-xs text-zinc-500">
+            <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400">
               <div className="flex items-center gap-1.5">
                 <span>Model:</span>
                 <select
                   value={llmName}
                   onChange={(e) => setLlmName(e.target.value)}
                   disabled={isExecuting}
-                  className="text-xs px-1.5 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 text-zinc-600"
+                  className="text-xs px-1.5 py-0.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 disabled:opacity-50 text-zinc-600 dark:text-zinc-200"
                   title="Select LLM model"
                 >
                   {AVAILABLE_LLMS.map((name) => (
@@ -630,10 +732,10 @@ export function CodeGenDemo() {
                   value={temperature}
                   onChange={(e) => handleTemperatureChange(e.target.value)}
                   disabled={isExecuting}
-                  className={`text-xs px-1.5 py-0.5 rounded border bg-white hover:bg-slate-100 disabled:opacity-50 w-12 transition-colors ${
+                  className={`text-xs px-1.5 py-0.5 rounded border bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 disabled:opacity-50 w-12 transition-colors ${
                     temperatureError
-                      ? "border-red-500 bg-red-50 text-red-900"
-                      : "border-slate-300 text-zinc-600"
+                      ? "border-red-500 bg-red-50 dark:bg-red-900/30 text-red-900 dark:text-red-300"
+                      : "border-slate-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-200"
                   } ${temperatureShake ? "animate-shake" : ""}`}
                   placeholder="0.0"
                   title="LLM temperature (0-2)"
@@ -645,12 +747,12 @@ export function CodeGenDemo() {
             </div>
             {/* Error messages */}
             {lastRunError != null && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1" role="alert">
+              <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-2 py-1" role="alert">
                 {lastRunError}
               </p>
             )}
             {compileError != null && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1" role="alert">
+              <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-2 py-1" role="alert">
                 {compileError}
               </p>
             )}
@@ -658,8 +760,9 @@ export function CodeGenDemo() {
           <div className="flex-1 min-h-0">
             <InputEditor
               value={pipelineCode}
-              onChange={setPipelineCode}
+              onChange={mode === 'normal' ? setNormalCode : setOptimizerCode}
               disabled={isExecuting}
+              isDark={isDark}
               nodeRanges={compileNodes.filter((n): n is CompileNode & { source_range: NonNullable<CompileNode["source_range"]> } => n.source_range != null)}
               onHighlightNodes={setHighlightedNodeIds}
               onSelectNode={(nodeId) => {
@@ -686,24 +789,24 @@ export function CodeGenDemo() {
           </div>
           {/* Stats panel - appears after execution */}
           {!isExecuting && lastRunDurationMs != null && (
-            <div className="shrink-0 px-3 py-2 border-t border-slate-300 bg-slate-50 flex items-center gap-3 text-xs">
+            <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 flex items-center gap-3 text-xs">
               {lastRunError ? (
-                <span className="text-red-600 flex items-center gap-1">
+                <span className="text-red-600 dark:text-red-400 flex items-center gap-1">
                   <span>✗</span> Failed
                 </span>
               ) : (
-                <span className="text-emerald-600 flex items-center gap-1">
+                <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                   <span>✓</span> Completed
                 </span>
               )}
-              <span className="text-zinc-400">·</span>
-              <span className="text-zinc-600" title="Execution time">
+              <span className="text-zinc-400 dark:text-zinc-500">·</span>
+              <span className="text-zinc-600 dark:text-zinc-300" title="Execution time">
                 {formatDuration(lastRunDurationMs)}
               </span>
               {lastRunCostUsd != null && lastRunCostUsd > 0 && (
                 <>
-                  <span className="text-zinc-400">·</span>
-                  <span className="text-zinc-600" title="LLM cost">
+                  <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                  <span className="text-zinc-600 dark:text-zinc-300" title="LLM cost">
                     ${lastRunCostUsd.toFixed(6)}
                   </span>
                 </>
@@ -712,65 +815,109 @@ export function CodeGenDemo() {
           )}
         </div>
 
-        {/* Middle: Computation graph */}
+        {/* Middle: Computation graph (Normal) / Optimizer placeholder */}
         <div className="min-w-[200px] flex flex-col min-h-0 transition-all duration-300" style={{ width: middleWidth }}>
-          <GraphPanel
-            selectedNodeId={selectedNodeId}
-            onSelectNode={handleGraphNodeSelect}
-            nodes={nodes}
-            edges={graphEdges}
-            skrubGraph={displayGraph}
-            runnableNodeIds={runnableNodeIds}
-            isLoading={isExecuting && !displayGraph}
-            highlightedNodeIds={highlightedSkrubIds}
-            showGraph={isExecuting || !!displayGraph}
-            isPreview={isPreviewGraph}
-            isExecuting={isExecuting}
-            expandButton={
-              <button
-                type="button"
-                onClick={() => setExpandedPanel(expandedPanel === 'middle' ? null : 'middle')}
-                className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 text-zinc-600 text-2xl transition-colors"
-                title={expandedPanel === 'middle' ? "Restore panel size" : "Expand panel"}
-                aria-label={expandedPanel === 'middle' ? "Restore panel size" : "Expand panel"}
-                data-testid="expand-middle-panel"
-              >
-                {expandedPanel === 'middle' ? '⤡' : '⤢'}
-              </button>
-            }
-          />
+          {mode === 'normal' ? (
+            <GraphPanel
+              selectedNodeId={selectedNodeId}
+              onSelectNode={handleGraphNodeSelect}
+              isDark={isDark}
+              nodes={nodes}
+              edges={graphEdges}
+              skrubGraph={displayGraph}
+              runnableNodeIds={runnableNodeIds}
+              isLoading={isExecuting && !displayGraph}
+              highlightedNodeIds={highlightedSkrubIds}
+              showGraph={isExecuting || !!displayGraph}
+              isPreview={isPreviewGraph}
+              isExecuting={isExecuting}
+              expandButton={
+                <button
+                  type="button"
+                  onClick={() => setExpandedPanel(expandedPanel === 'middle' ? null : 'middle')}
+                  className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-400 text-2xl transition-colors"
+                  title={expandedPanel === 'middle' ? "Restore panel size" : "Expand panel"}
+                  aria-label={expandedPanel === 'middle' ? "Restore panel size" : "Expand panel"}
+                  data-testid="expand-middle-panel"
+                >
+                  {expandedPanel === 'middle' ? '⤡' : '⤢'}
+                </button>
+              }
+            />
+          ) : (
+            <div className="flex flex-col h-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-md overflow-hidden">
+              <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Optimizer View</span>
+              </div>
+              <div className="flex-1 flex items-center justify-center p-6">
+                <div className="text-center space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-violet-500">
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
+                    </svg>
+                  </div>
+                  <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Optimizer Graph</p>
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500">Coming soon</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Right: Node details / results (live-updating during execution) */}
+        {/* Right: Node details (Normal) / Optimizer placeholder */}
         <div className="min-w-[280px] flex flex-col min-h-0 transition-all duration-300" style={{ width: rightWidth }}>
-          <NodeDetailsPanel
-            selectedNodeId={selectedNodeId}
-            selectedNode={selectedNode}
-            generatedCode={null}
-            liveGeneratedCodeByNode={liveNodeCode}
-            liveRetriesByNode={liveNodeRetries}
-            liveFallbackByNode={liveFallbackByNode}
-            liveCostUsdByNode={liveNodeCostUsd}
-            inputSummaryByNode={inputSummaryByNode}
-            inputSummaryForSelectedNode={inputSummaryForSelectedNode}
-            nodeDataByNode={nodeDataByNode}
-            isExecuting={isExecuting}
-            nodeMetadata={null}
-            skrubToCompileId={skrubToCompileId}
-            isExpanded={expandedPanel === 'right'}
-            expandButton={
-              <button
-                type="button"
-                onClick={() => setExpandedPanel(expandedPanel === 'right' ? null : 'right')}
-                className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 text-zinc-600 text-2xl transition-colors"
-                title={expandedPanel === 'right' ? "Restore panel size" : "Expand panel"}
-                aria-label={expandedPanel === 'right' ? "Restore panel size" : "Expand panel"}
-                data-testid="expand-right-panel"
-              >
-                {expandedPanel === 'right' ? '⤡' : '⤢'}
-              </button>
-            }
-          />
+          {mode === 'normal' ? (
+            <NodeDetailsPanel
+              selectedNodeId={selectedNodeId}
+              selectedNode={selectedNode}
+              generatedCode={null}
+              liveGeneratedCodeByNode={liveNodeCode}
+              liveRetriesByNode={liveNodeRetries}
+              liveFallbackByNode={liveFallbackByNode}
+              liveCostUsdByNode={liveNodeCostUsd}
+              inputSummaryByNode={inputSummaryByNode}
+              inputSummaryForSelectedNode={inputSummaryForSelectedNode}
+              nodeDataByNode={nodeDataByNode}
+              isExecuting={isExecuting}
+              nodeMetadata={null}
+              skrubToCompileId={skrubToCompileId}
+              isExpanded={expandedPanel === 'right'}
+              expandButton={
+                <button
+                  type="button"
+                  onClick={() => setExpandedPanel(expandedPanel === 'right' ? null : 'right')}
+                  className="shrink-0 px-3 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-400 text-2xl transition-colors"
+                  title={expandedPanel === 'right' ? "Restore panel size" : "Expand panel"}
+                  aria-label={expandedPanel === 'right' ? "Restore panel size" : "Expand panel"}
+                  data-testid="expand-right-panel"
+                >
+                  {expandedPanel === 'right' ? '⤡' : '⤢'}
+                </button>
+              }
+            />
+          ) : (
+            <div className="flex flex-col h-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-md overflow-hidden">
+              <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Optimizer Details</span>
+              </div>
+              <div className="flex-1 flex items-center justify-center p-6">
+                <div className="text-center space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-violet-500">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                      <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                  </div>
+                  <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Optimizer Details</p>
+                  <p className="text-xs text-zinc-400 dark:text-zinc-500">Coming soon</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

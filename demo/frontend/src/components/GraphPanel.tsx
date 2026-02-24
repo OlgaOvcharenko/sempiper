@@ -39,6 +39,7 @@ interface GraphPanelProps {
   /** True when pipeline is executing (show "Running pipeline…" in subtitle). */
   isExecuting?: boolean;
   expandButton?: React.ReactNode;
+  isDark?: boolean;
 }
 
 const MOCK_NODES: GraphNode[] = [
@@ -68,6 +69,7 @@ export function GraphPanel({
   isPreview: _isPreview = false,
   isExecuting = false,
   expandButton = null,
+  isDark = false,
 }: GraphPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
@@ -136,18 +138,55 @@ export function GraphPanel({
       }
     }
 
+    // Theme-aware colors
+    const colors = isDark
+      ? {
+          nodeBg: "#27272a",         // zinc-800
+          nodeBorder: "#52525b",     // zinc-600
+          nodeText: "#f4f4f5",       // zinc-100
+          canvasBg: "#09090b",       // zinc-950
+          inputBg: "#1e3a5f",        // dark blue
+          inputBorder: "#60a5fa",    // blue-400
+          operatorBg: "#27272a",     // zinc-800
+          operatorBorder: "#52525b", // zinc-600
+          semBg: "#14532d",          // dark green
+          semBorder: "#4ade80",      // green-400
+          selSemBg: "#831843",       // dark pink
+          selSemBorder: "#f472b6",   // pink-400
+          selBg: "#78350f",          // dark amber
+          selBorder: "#fbbf24",      // amber-400
+          edgeColor: "#94a3b8",      // slate-400
+        }
+      : {
+          nodeBg: "#ffffff",
+          nodeBorder: "#64748b",
+          nodeText: "#18181b",
+          canvasBg: "#fafafa",
+          inputBg: "#dbeafe",        // blue-100
+          inputBorder: "#3b82f6",    // blue-500
+          operatorBg: "#ffffff",
+          operatorBorder: "#94a3b8", // slate-400
+          semBg: "#dcfce7",          // green-100
+          semBorder: "#22c55e",      // green-500
+          selSemBg: "#fce7f3",       // pink-100
+          selSemBorder: "#ec4899",   // pink-500
+          selBg: "#fef9c3",          // yellow-100
+          selBorder: "#f59e0b",      // amber-500
+          edgeColor: "#64748b",      // slate-500
+        };
+
     // Initialize Cytoscape with proper selectors
     const cy = cytoscape({
       container: containerRef.current,
       elements: [...cyNodes, ...cyEdges],
       style: [
-        // Base node style - transparent background
+        // Base node style
         {
           selector: "node",
           style: {
-            "background-color": "#ffffff",
+            "background-color": colors.nodeBg,
             "background-opacity": 0.3,
-            "border-color": "#64748b",
+            "border-color": colors.nodeBorder,
             "border-width": 1.5,
             "border-style": "solid",
             label: "data(label)",
@@ -155,86 +194,86 @@ export function GraphPanel({
             "text-halign": "center",
             "font-size": 12,
             "font-family": "ui-sans-serif, system-ui, -apple-system, sans-serif",
-            color: "#18181b",
+            color: colors.nodeText,
             width: "data(nodeWidth)",
             height: 32,
             shape: "round-rectangle",
             "text-wrap": "none",
           },
         },
-        // Input nodes - light blue background, solid border
+        // Input nodes - blue background, solid border
         {
           selector: "node[nodeType = 'input']",
           style: {
-            "background-color": "#dbeafe", // Light blue (tailwind blue-100)
+            "background-color": colors.inputBg,
             "background-opacity": 0.6,
             "border-style": "solid",
-            "border-color": "#3b82f6", // Blue (tailwind blue-500)
+            "border-color": colors.inputBorder,
             "border-width": 1.5,
           },
         },
-        // Skrub operator nodes (non-sempipes) - white/transparent, dashed border
+        // Skrub operator nodes (non-sempipes) - dashed border
         {
           selector: "node[nodeType = 'operator'][isSempipesSemantic = 'false']",
           style: {
-            "background-color": "#ffffff",
+            "background-color": colors.operatorBg,
             "background-opacity": 0.9,
             "border-style": "dashed",
-            "border-color": "#94a3b8",
+            "border-color": colors.operatorBorder,
             "border-width": 1.5,
           },
         },
-        // Sempipes semantic operators - green background and border (matches code editor)
+        // Sempipes semantic operators - green background and border
         {
           selector: "node[isSempipesSemantic = 'true']",
           style: {
-            "background-color": "#dcfce7", // Light green (tailwind green-100)
+            "background-color": colors.semBg,
             "background-opacity": 0.7,
-            "border-color": "#22c55e", // Green (tailwind green-500)
+            "border-color": colors.semBorder,
             "border-width": 2,
             "border-style": "dashed",
           },
         },
-        // Selected sempipes node - light pink
+        // Selected sempipes node - pink
         {
           selector: "node.selected[isSempipesSemantic = 'true']",
           style: {
-            "background-color": "#fce7f3", // Light pink (tailwind pink-100)
+            "background-color": colors.selSemBg,
             "background-opacity": 1,
-            "border-color": "#ec4899", // Pink (tailwind pink-500)
+            "border-color": colors.selSemBorder,
             "border-width": 3,
             "border-style": "solid",
           },
         },
-        // Selected non-sempipes node - keep yellow
+        // Selected non-sempipes node - amber
         {
           selector: "node.selected[isSempipesSemantic = 'false']",
           style: {
-            "background-color": "#fef9c3", // Yellow (tailwind yellow-100)
+            "background-color": colors.selBg,
             "background-opacity": 1,
-            "border-color": "#f59e0b", // Amber (tailwind amber-500)
+            "border-color": colors.selBorder,
             "border-width": 3,
             "border-style": "solid",
           },
         },
-        // Highlighted sempipes node (from code hover) - light pink
+        // Highlighted sempipes node (from code hover) - pink
         {
           selector: "node.highlighted[isSempipesSemantic = 'true']",
           style: {
-            "background-color": "#fce7f3", // Light pink (tailwind pink-100)
+            "background-color": colors.selSemBg,
             "background-opacity": 1,
-            "border-color": "#ec4899", // Pink (tailwind pink-500)
+            "border-color": colors.selSemBorder,
             "border-width": 3,
             "border-style": "solid",
           },
         },
-        // Highlighted non-sempipes node (from code hover) - yellow
+        // Highlighted non-sempipes node (from code hover) - amber
         {
           selector: "node.highlighted[isSempipesSemantic = 'false']",
           style: {
-            "background-color": "#fef9c3", // Yellow (tailwind yellow-100)
+            "background-color": colors.selBg,
             "background-opacity": 1,
-            "border-color": "#f59e0b", // Amber (tailwind amber-500)
+            "border-color": colors.selBorder,
             "border-width": 3,
             "border-style": "solid",
           },
@@ -244,8 +283,8 @@ export function GraphPanel({
           selector: "edge",
           style: {
             width: 1.5,
-            "line-color": "#64748b",
-            "target-arrow-color": "#64748b",
+            "line-color": colors.edgeColor,
+            "target-arrow-color": colors.edgeColor,
             "target-arrow-shape": "triangle",
             "curve-style": "bezier",
             "arrow-scale": 0.8,
@@ -328,7 +367,7 @@ export function GraphPanel({
         cyRef.current = null;
       }
     };
-  }, [shouldShowSkrubDict, skrubGraph, onSelectNode]);
+  }, [shouldShowSkrubDict, skrubGraph, onSelectNode, isDark]);
 
   // Update selection and highlighting
   useEffect(() => {
@@ -356,12 +395,12 @@ export function GraphPanel({
   }, [selectedNodeId, highlightedNodeIds]);
 
   return (
-    <div className="h-full flex flex-col rounded-lg border border-slate-300 bg-white overflow-hidden shadow-md">
-      <div className="shrink-0 px-3 py-2 border-b border-slate-300 bg-slate-100">
+    <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
+      <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800">
         <div className="flex items-center justify-between gap-2">
           <div className="flex-1">
-            <h2 className="text-sm font-medium text-zinc-700">Computation graph</h2>
-            <p className="text-xs text-zinc-500 mt-0.5">
+            <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Computation graph</h2>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
               {isLoading || (isExecuting && shouldShowSkrubDict)
                 ? "Running pipeline…"
                 : shouldShowSkrubDict
@@ -378,24 +417,24 @@ export function GraphPanel({
             ref={containerRef}
             className="w-full h-full"
             data-testid="cytoscape-graph"
-            style={{ backgroundColor: "#fafafa" }}
+            style={{ backgroundColor: isDark ? "#09090b" : "#fafafa" }}
           />
         ) : isLoading ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 gap-3">
             <div
-              className="w-10 h-10 rounded-full border-2 border-slate-300 border-t-emerald-500 animate-spin"
+              className="w-10 h-10 rounded-full border-2 border-slate-300 dark:border-zinc-600 border-t-emerald-500 animate-spin"
               aria-label="Graph loading spinner"
             />
-            <div className="text-sm text-zinc-500 font-medium">Generating graph…</div>
-            <div className="text-xs text-zinc-400 max-w-xs">
+            <div className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Generating graph…</div>
+            <div className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
               The pipeline is running. The graph will appear when compilation completes.
             </div>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 gap-3">
-            <div className="text-6xl text-zinc-300">📊</div>
-            <div className="text-sm text-zinc-500 font-medium">No computation graph yet</div>
-            <div className="text-xs text-zinc-400 max-w-xs">
+            <div className="text-6xl text-zinc-300 dark:text-zinc-600">📊</div>
+            <div className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No computation graph yet</div>
+            <div className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
               Edit pipeline code to see the computation graph.
             </div>
           </div>

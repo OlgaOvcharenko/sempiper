@@ -18,8 +18,10 @@ export interface ScriptContentResponse {
   content: string;
 }
 
-export async function listPipelineScripts(): Promise<ListScriptsResponse> {
-  const res = await fetch(`${API_BASE}/scripts`);
+export async function listPipelineScripts(
+  mode: "normal" | "optimizer" = "normal"
+): Promise<ListScriptsResponse> {
+  const res = await fetch(`${API_BASE}/scripts?mode=${encodeURIComponent(mode)}`);
   if (!res.ok) throw new Error(res.statusText || "Failed to list scripts");
   try {
     return await res.json();
@@ -28,8 +30,15 @@ export async function listPipelineScripts(): Promise<ListScriptsResponse> {
   }
 }
 
-export async function getPipelineScriptContent(name: string): Promise<ScriptContentResponse> {
-  const res = await fetch(`${API_BASE}/scripts/${encodeURIComponent(name)}`);
+export async function getPipelineScriptContent(
+  name: string,
+  mode: "normal" | "optimizer" = "normal",
+  options?: { signal?: AbortSignal }
+): Promise<ScriptContentResponse> {
+  const res = await fetch(
+    `${API_BASE}/scripts/${encodeURIComponent(name)}?mode=${encodeURIComponent(mode)}`,
+    { signal: options?.signal }
+  );
   if (!res.ok) throw new Error(res.statusText || "Failed to load script");
   try {
     return await res.json();

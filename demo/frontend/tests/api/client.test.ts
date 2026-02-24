@@ -24,7 +24,7 @@ describe("api/client (pipeline scripts)", () => {
 
       const result = await listPipelineScripts();
 
-      expect(fetch).toHaveBeenCalledWith("/api/scripts");
+      expect(fetch).toHaveBeenCalledWith("/api/scripts?mode=normal");
       expect(result.scripts).toEqual(scripts);
       expect(result.scripts).toHaveLength(2);
       expect(result.scripts[0]).toEqual({ id: "simple", label: "Simple" });
@@ -56,7 +56,7 @@ describe("api/client (pipeline scripts)", () => {
 
       const result = await getPipelineScriptContent("simple");
 
-      expect(fetch).toHaveBeenCalledWith("/api/scripts/simple");
+      expect(fetch).toHaveBeenCalledWith("/api/scripts/simple?mode=normal", { signal: undefined });
       expect(result).toEqual(payload);
       expect(result.content).toContain("sempipes");
     });
@@ -74,7 +74,7 @@ describe("api/client (pipeline scripts)", () => {
 
       await getPipelineScriptContent("a+b");
 
-      expect(fetch).toHaveBeenCalledWith("/api/scripts/a%2Bb");
+      expect(fetch).toHaveBeenCalledWith("/api/scripts/a%2Bb?mode=normal", { signal: undefined });
     });
 
     it("throws when response is not ok", async () => {
@@ -86,6 +86,29 @@ describe("api/client (pipeline scripts)", () => {
       await expect(getPipelineScriptContent("missing")).rejects.toThrow(
         /Failed to load script|Not Found/
       );
+    });
+
+    it("passes AbortSignal to fetch when provided", async () => {
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: "simple", label: "Simple", content: "# code" }),
+      } as Response);
+
+      const controller = new AbortController();
+      await getPipelineScriptContent("simple", "normal", { signal: controller.signal });
+
+      expect(fetch).toHaveBeenCalledWith("/api/scripts/simple?mode=normal", { signal: controller.signal });
+    });
+
+    it("aborts in-flight fetch when signal is aborted", async () => {
+      const controller = new AbortController();
+      const abortError = Object.assign(new Error("AbortError"), { name: "AbortError" });
+      vi.mocked(fetch).mockRejectedValue(abortError);
+
+      controller.abort();
+      await expect(
+        getPipelineScriptContent("simple", "normal", { signal: controller.signal })
+      ).rejects.toMatchObject({ name: "AbortError" });
     });
   });
 

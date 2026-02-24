@@ -37,13 +37,15 @@ function mockFetchDefault(
 ) {
   vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
     const u = urlFromRequest(input);
-    if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+    // Match /api/scripts?mode=normal and /api/scripts?mode=optimizer (list endpoint)
+    if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(overrides.list ?? DEFAULT_SCRIPTS),
       } as Response);
     }
-    const match = u.match(/\/api\/scripts\/([^/]+)$/);
+    // Match /api/scripts/{name}?mode=... (content endpoint)
+    const match = u.match(/\/api\/scripts\/([^/?]+)/);
     if (match) {
       const name = decodeURIComponent(match[1]);
       const content = name === "simple" ? (overrides.simple ?? DEFAULT_SCRIPT_CONTENT) : { id: name, label: name, content: "# " + name + "\n" };
@@ -161,10 +163,10 @@ describe("CodeGenDemo", () => {
           headers: new Headers({ "content-type": "text/event-stream" }),
         } as Response);
       }
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -199,7 +201,8 @@ describe("CodeGenDemo", () => {
 
     await waitFor(
       () => {
-        expect(fetch).toHaveBeenCalledWith("/api/scripts");
+        const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls;
+        expect(calls.some((c) => String(c[0]).includes("/api/scripts") && !String(c[0]).includes("/api/scripts/"))).toBe(true);
       },
       { timeout: 1000 }
     );
@@ -227,13 +230,13 @@ describe("CodeGenDemo", () => {
     const fullContent = { id: "full", label: "Full (notebook)", content: "# Full pipeline\nimport sempipes\n# ..." };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
       if (u.endsWith("/api/scripts/full")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(fullContent) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       return Promise.resolve({ ok: false } as Response);
@@ -274,10 +277,10 @@ describe("CodeGenDemo", () => {
     };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -312,13 +315,13 @@ describe("CodeGenDemo", () => {
     const mediumContent = { id: "medium", label: "Medium", content: "# Medium\nbaskets = skrub.var('baskets')\nproducts = skrub.var('products')\n" };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
       if (u.includes("/api/scripts/medium")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(mediumContent) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -362,13 +365,13 @@ describe("CodeGenDemo", () => {
     const mediumScriptContent = { id: "medium", label: "Medium", content: "# Medium pipeline\n# no Simple pipeline here\n" };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const urlStr = urlFromRequest(input);
-      if (urlStr.endsWith("/api/scripts") || urlStr === "/api/scripts") {
+      if (urlStr.includes("/api/scripts") && !urlStr.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (urlStr.endsWith("/api/scripts/medium")) {
+      if (urlStr.includes("/api/scripts/medium")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(mediumScriptContent) } as Response);
       }
-      if (urlStr.match(/\/api\/scripts\//)) {
+      if (urlStr.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (urlStr.includes("/api/compile")) {
@@ -447,10 +450,10 @@ describe("CodeGenDemo", () => {
     const generatedCodeForNode = "# Generated for sem_fillna\ndef fill_missing(df):\n    return df.fillna(0)";
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/update-config")) {
@@ -548,10 +551,10 @@ describe("CodeGenDemo", () => {
     };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(scriptWithAsX) } as Response);
       }
       if (u.includes("/api/update-config")) {
@@ -645,10 +648,10 @@ describe("CodeGenDemo", () => {
     };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -694,10 +697,10 @@ describe("CodeGenDemo", () => {
     };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -730,10 +733,10 @@ describe("CodeGenDemo", () => {
     };
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/compile")) {
@@ -830,10 +833,10 @@ describe("CodeGenDemo", () => {
   it("calls update-config API with selected LLM and temperature before executing pipeline", async () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
-      if (u.endsWith("/api/scripts") || u === "/api/scripts") {
+      if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
       }
-      if (u.match(/\/api\/scripts\//)) {
+      if (u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (u.includes("/api/update-config")) {

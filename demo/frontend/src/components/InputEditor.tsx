@@ -36,9 +36,12 @@ interface InputEditorProps {
   onFocusApplied?: () => void;
   /** Node IDs that are sempipes semantic operators (for pink selection styling). */
   sempipesNodeIds?: string[];
+  /** Whether dark mode is active. */
+  isDark?: boolean;
 }
 
-const EDITOR_BG = "#ffffff";
+const EDITOR_BG_LIGHT = "#ffffff";
+const EDITOR_BG_DARK = "#18181b"; // zinc-900
 
 /** Decoration class for as_X / as_y (input) elements. */
 const INPUT_DECORATION: editor.IModelDecorationOptions = {
@@ -101,6 +104,7 @@ export function InputEditor({
   focusNodeId = null,
   onFocusApplied,
   sempipesNodeIds = [],
+  isDark = false,
 }: InputEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -115,12 +119,28 @@ export function InputEditor({
       inherit: true,
       rules: [],
       colors: {
-        "editor.background": EDITOR_BG,
+        "editor.background": EDITOR_BG_LIGHT,
         "editor.foreground": "#18181b",
       },
     });
-    monaco.editor.setTheme("light-editor");
-  }, []);
+    monaco.editor.defineTheme("dark-editor", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [],
+      colors: {
+        "editor.background": EDITOR_BG_DARK,
+        "editor.foreground": "#f4f4f5",
+      },
+    });
+    monaco.editor.setTheme(isDark ? "dark-editor" : "light-editor");
+  }, [isDark]);
+
+  // Update Monaco theme when isDark changes after mount
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    monaco.editor.setTheme(isDark ? "dark-editor" : "light-editor");
+  }, [isDark]);
 
   const getEditor = useCallback(() => editorRef.current, []);
 
@@ -244,14 +264,52 @@ export function InputEditor({
     return () => clearTimeout(t);
   }, [focusNodeId, editorReady, getEditor, nodeRanges, onFocusApplied]);
 
+  const editorBg = isDark ? EDITOR_BG_DARK : EDITOR_BG_LIGHT;
+
   return (
     <div
-      className="h-full w-full rounded-lg border border-slate-200 overflow-hidden bg-white"
-      style={{ backgroundColor: EDITOR_BG }}
+      className="h-full w-full rounded-lg border border-slate-200 dark:border-zinc-700 overflow-hidden"
+      style={{ backgroundColor: editorBg }}
       data-testid="input-editor"
       data-highlighted={highlightedNodeIds.join(",") || undefined}
     >
-      <style>{`
+      <style>{isDark ? `
+        /* as_X / as_y (input) — blue, dark variant */
+        .sempipe-input-decoration {
+          background-color: rgba(59, 130, 246, 0.22);
+          border-radius: 3px;
+        }
+        /* Sempipes operators — green, dark variant */
+        .sempipe-operator-decoration {
+          background-color: rgba(34, 197, 94, 0.18);
+          border-radius: 3px;
+        }
+        /* Regular operators — no color */
+        .sempipe-regular-operator-decoration {
+          background-color: transparent;
+          border-radius: 3px;
+        }
+        /* Hover — teal, dark variant */
+        .sempipe-hover-decoration {
+          background-color: rgba(16, 185, 129, 0.35);
+          border-radius: 3px;
+        }
+        /* Selected non-sempipes — amber, dark variant */
+        .sempipe-selected-decoration {
+          background-color: rgba(251, 191, 36, 0.3);
+          border: 2px solid rgb(251, 191, 36);
+          border-radius: 4px;
+          box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.25);
+        }
+        /* Selected sempipes — pink, dark variant */
+        .sempipe-selected-sempipes-decoration {
+          background-color: rgba(236, 72, 153, 0.25);
+          border: 2px solid rgb(244, 114, 182);
+          border-radius: 4px;
+          box-shadow: 0 0 0 1px rgba(244, 114, 182, 0.25);
+        }
+        .sempipe-element-margin { display: none; }
+      ` : `
         /* as_X / as_y (input) — one distinct colour */
         .sempipe-input-decoration {
           background-color: rgba(59, 130, 246, 0.14);
@@ -299,7 +357,7 @@ export function InputEditor({
           editorRef.current = _;
           setEditorReady(true);
         }}
-        theme="light-editor"
+        theme={isDark ? "dark-editor" : "light-editor"}
         options={{
           readOnly: disabled,
           minimap: { enabled: false },

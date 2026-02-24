@@ -15,6 +15,33 @@ body {
   background-color: rgba(16, 185, 129, 0.3); /* emerald-500 */
 }
 
+/* Dark mode overrides */
+html.dark body {
+  background-color: #09090b; /* zinc-950 */
+  color: #f4f4f5; /* zinc-100 */
+}
+
+html.dark ::selection {
+  background-color: rgba(16, 185, 129, 0.4); /* emerald-500, slightly more opaque */
+}
+
+html.dark .skrub-graph-container svg polygon[fill="white"] {
+  fill: #27272a !important; /* zinc-800 for node backgrounds */
+}
+
+html.dark .skrub-graph-container svg text {
+  fill: #f4f4f5 !important; /* zinc-100 for text */
+}
+
+html.dark .skrub-graph-container svg path,
+html.dark .skrub-graph-container svg line {
+  stroke: #a1a1aa !important; /* zinc-400 for edges */
+}
+
+html.dark .skrub-graph-container svg polygon[fill="black"] {
+  fill: #a1a1aa !important; /* zinc-400 for arrows */
+}
+
 /* Skrub native graph styling — match light theme */
 .skrub-graph-container svg {
   max-width: 100%;
