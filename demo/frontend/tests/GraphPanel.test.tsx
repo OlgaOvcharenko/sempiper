@@ -235,7 +235,6 @@ describe("GraphPanel", () => {
         edges={[]}
         skrubGraph={skrubGraph}
         showGraph={true}
-        statusByNodeId={{ skrub_0: "done", skrub_1: "done" }}
       />
     );
     expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();

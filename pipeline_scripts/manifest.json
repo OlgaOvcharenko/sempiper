@@ -1,6 +1,37 @@
 [
-  { "id": "simple", "label": "Fraud baskets (simple)", "file": "simple.py" },
-  { "id": "medium", "label": "Fraud baskets (medium)", "file": "medium.py" },
-  { "id": "full", "label": "Fraud baskets (full)", "file": "full.py" },
-  { "id": "new", "label": "New", "file": "new.py" }
+  {
+    "id": "simple",
+    "label": "Fraud simple",
+    "file": "simple.py"
+  },
+  {
+    "id": "medium",
+    "label": "Fraud medium",
+    "file": "medium.py"
+  },
+  {
+    "id": "full",
+    "label": "Fraud full",
+    "file": "full.py"
+  },
+  {
+    "id": "1_house_prices",
+    "label": "1 house",
+    "file": "1_house_prices.py"
+  },
+  {
+    "id": "2_fraud",
+    "label": "2 fraud",
+    "file": "2_fraud.py"
+  },
+  {
+    "id": "3_museums",
+    "label": "3 museums",
+    "file": "3_museums.py"
+  },
+  {
+    "id": "new",
+    "label": "New",
+    "file": "new.py"
+  }
 ]

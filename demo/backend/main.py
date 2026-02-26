@@ -11,7 +11,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import codegen_router
+from routers import codegen_router, optimizer_router
 
 app = FastAPI(title="VLDB Code Gen Demo", version="0.1.0")
 
@@ -24,6 +24,7 @@ app.add_middleware(
 )
 
 app.include_router(codegen_router)
+app.include_router(optimizer_router)
 
 
 @app.get("/")

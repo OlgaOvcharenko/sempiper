@@ -1,0 +1,54 @@
+
+def _remove_optimise_colopro_calls(script: str) -> str:
+    """
+    Remove optimise_colopro calls and replace with assignment to dag_sink.
+
+    Transforms:
+        outcomes = optimise_colopro(dag_sink=pipeline, ...)
+    To:
+        outcomes = pipeline
+    """
+    lines = script.split('\n')
+    result_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.search(r"^(\s*)(\w+)\s*=\s*optimise_colopro\s*\(", line)
+        if match:
+            indent, var_name = match.group(1), match.group(2)
+            # Find the dag_sink argument in this or subsequent lines
+            dag_sink_var = None
+            j = i
+            call_content = ""
+            while j < len(lines):
+                call_content += lines[j]
+                if ')' in lines[j]:
+                    break
+                j += 1
+            
+            # Simple regex check for dag_sink=var
+            sink_match = re.search(r"dag_sink\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)", call_content)
+            if sink_match:
+                dag_sink_var = sink_match.group(1)
+            else:
+                # Assuming first positional arg is dag_sink?
+                # optimise_colopro(pipeline, ...)
+                # Remove call part and extract first arg
+                args_content = call_content[call_content.find('(')+1:]
+                first_arg = args_content.split(',')[0].strip()
+                if first_arg and first_arg.isidentifier():
+                    dag_sink_var = first_arg
+
+            if dag_sink_var:
+                result_lines.append(f"{indent}{var_name} = {dag_sink_var}  # optimise_colopro stripped")
+                i = j + 1
+                continue
+            else:
+                 # Failed to parse, just comment out? Or keep as is?
+                 # If we keep it, it executes and might crash.
+                 # Let's verify we found dag_sink. If not, maybe warn?
+                 pass
+        
+        result_lines.append(line)
+        i += 1
+    return '\n'.join(result_lines)

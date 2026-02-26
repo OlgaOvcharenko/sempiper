@@ -9,16 +9,18 @@ interface CodeOutputProps {
   language: string;
   isLoading?: boolean;
   isExpanded?: boolean;
+  isDark?: boolean;
 }
 
 const LINE_HEIGHT = 16;
 const ESTIMATE_LINES = 100;
 
-export function CodeOutput({ code, language, isLoading, isExpanded = false }: CodeOutputProps) {
+export function CodeOutput({ code, language, isLoading, isExpanded = false, isDark: propIsDark }: CodeOutputProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [html, setHtml] = useState<string>("");
   const [lineCount, setLineCount] = useState(0);
-  const { isDark } = useTheme();
+  const { isDark: hookIsDark } = useTheme();
+  const isDark = propIsDark ?? hookIsDark;
 
   const lang = useMemo(() => {
     const l = language.toLowerCase();

@@ -7,20 +7,11 @@
  * - Node has code → Run → Previous code → Spinner → New code
  * - Run → Stop before completion → Revert to previous state
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, it, expect } from "vitest";
+import { render, screen } from "@testing-library/react";
 import { NodeDetailsPanel } from "../src/components/NodeDetailsPanel";
 import type { GraphNode } from "../src/components/GraphPanel";
 
-const wrapper = () => {
-  const client = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
-  });
-  return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  );
-};
 
 describe("NodeDetailsPanel State Transitions", () => {
   /**

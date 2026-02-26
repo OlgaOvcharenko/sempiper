@@ -18,12 +18,59 @@ def is_sempipes_available() -> bool:
     return _sempipes_available
 
 
+# Simple global variable to persist config across requests (since sempipes uses ContextVar)
+_PERSISTENT_CONFIG: dict | None = None
+
+
 def get_sempipes_config() -> dict | None:
-    """Return current sempipes config as a dict, or None if sempipes is not installed."""
+    """Return current sempipes config as a dict (persistent override or default), or None if unavailable."""
+    # Priority: 1. Persistent override (set by frontend), 2. Default sempipes config
+    if _PERSISTENT_CONFIG:
+        return _PERSISTENT_CONFIG
+    
     if not _sempipes_available or _sempipes_get_config is None:
         return None
     cfg = _sempipes_get_config()
     return cfg.to_dict() if hasattr(cfg, "to_dict") else None
+
+
+def update_persistent_config(llm_name: str, temperature: float) -> dict:
+    """Update the persistent configuration for subsequent requests."""
+    global _PERSISTENT_CONFIG
+    
+    # Start with current config (or defaults from sempipes)
+    base_config = get_sempipes_config() or {}
+    
+    # Construct updated config structure (matching sempipes.Config.to_dict format)
+    # We maintain the structure manually since we want a simple dictionary for persistence
+    new_config = base_config.copy()
+    
+    # Ensure llm_for_code_generation section exists
+    if "llm_for_code_generation" not in new_config:
+        new_config["llm_for_code_generation"] = {}
+        
+    new_config["llm_for_code_generation"] = {
+        "name": llm_name,
+        "parameters": {"temperature": temperature}
+    }
+    
+    # Store globally
+    _PERSISTENT_CONFIG = new_config
+    
+    # Also attempt to update the specialized sempipes ContextVar (for current request)
+    if _sempipes_available:
+        try:
+            import sempipes
+            sempipes.update_config(
+                llm_for_code_generation=sempipes.LLM(
+                    name=llm_name,
+                    parameters={"temperature": temperature}
+                )
+            )
+        except Exception:
+            pass
+            
+    return new_config
 
 
 class CodeGenerator:

@@ -346,6 +346,68 @@ def _remove_cross_validate_calls(script: str) -> str:
     return "\n".join(result_lines)
 
 
+def _remove_optimise_colopro_calls(script: str) -> str:
+    """
+    Remove optimise_colopro calls and replace with assignment to dag_sink.
+
+    Transforms:
+        outcomes = optimise_colopro(dag_sink=pipeline, ...)
+    To:
+        outcomes = pipeline
+    """
+    lines = script.split('\\n')
+    new_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.search(r"^(\s*)(\w+)\s*=\s*optimise_colopro\s*\(", line)
+        if match:
+             indent = match.group(1)
+             var_name = match.group(2)
+             
+             # Collect lines until end of call (heuristic: counting parens)
+             collected = ""
+             nesting = 0
+             
+             while i < len(lines):
+                  l = lines[i]
+                  collected += l + "\\n"
+                  nesting += l.count('(') - l.count(')')
+                  if nesting <= 0 and l.strip(): # Check if we closed all parens
+                      i += 1
+                      break
+                  i += 1
+             
+             # Search for dag_sink
+             dag_sink_var = "None"
+             sink_match = re.search(r"dag_sink\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)", collected)
+             if sink_match:
+                 dag_sink_var = sink_match.group(1)
+             else:
+                 # Check first arg (positional)
+                 parts = collected.split('optimise_colopro', 1)
+                 if len(parts) > 1:
+                     after = parts[1].strip()
+                     if after.startswith('('):
+                         inner = after[1:]
+                         # Split by comma but be careful about nested parens/commas?
+                         # Assuming simpler case for now
+                         first = inner.split(',', 1)[0].strip()
+                         # Clean up potentially closed parens if single arg
+                         first = first.split(')', 1)[0].strip()
+                         
+                         if first and first.isidentifier():
+                             dag_sink_var = first
+             
+             new_lines.append(f"{indent}{var_name} = {dag_sink_var}  # optimise_colopro stripped")
+             continue
+
+        new_lines.append(line)
+        i += 1
+        
+    return '\\n'.join(new_lines)
+
+
 def rewrite_script_for_graph_extraction(script: str) -> str:
     """
     Rewrite a pipeline script for graph extraction without full execution.
@@ -371,6 +433,7 @@ def rewrite_script_for_graph_extraction(script: str) -> str:
     script = _rewrite_var_calls(script)
     script = _remove_eval_calls(script)
     script = _remove_cross_validate_calls(script)
+    script = _remove_optimise_colopro_calls(script)
     return script
 
 
@@ -1123,11 +1186,12 @@ def compile_script_to_graph_dynamic(
         timings_out["extract_ms"] = (time.perf_counter() - t0) * 1000
 
     if not skrub_result.is_valid:
-        return GraphResult(
-            nodes=[],
-            edges=[],
-            validation_errors=[skrub_result.error] if skrub_result.error else [],
-        )
+        # Fallback to static parsing if dynamic extraction fails
+        fallback_result = compile_script_to_graph(script)
+        # Append the dynamic error to validation_errors so the user knows why we fell back
+        if skrub_result.error:
+            fallback_result.validation_errors.append(f"Dynamic extraction failed (falling back to static): {skrub_result.error}")
+        return fallback_result
 
     # Capture SVG if requested
     if svg_out is not None and skrub_result.svg:

@@ -35,7 +35,7 @@ function urlFromRequest(input: RequestInfo | URL): string {
 function mockFetchDefault(
   overrides: { list?: unknown; simple?: unknown } = {}
 ) {
-  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
     const u = urlFromRequest(input);
     // Match /api/scripts?mode=normal and /api/scripts?mode=optimizer (list endpoint)
     if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
@@ -93,14 +93,14 @@ describe("CodeGenDemo", () => {
   });
 
   it("calls execute API when Run is clicked", async () => {
-    const mockFetch = vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    const mockFetch = vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
-    if (u.includes("/api/update-config")) {
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
-      } as Response);
-    }
+      if (u.includes("/api/update-config")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
+        } as Response);
+      }
       if (u.includes("/api/execute")) {
         return Promise.resolve({
           ok: true,
@@ -137,14 +137,14 @@ describe("CodeGenDemo", () => {
   });
 
   it("when execute stream emits terminal and done, run completes without showing terminal (no terminal panel)", async () => {
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
-    if (u.includes("/api/update-config")) {
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
-      } as Response);
-    }
+      if (u.includes("/api/update-config")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", llm_name: "gpt-5-mini", temperature: 0.0 }),
+        } as Response);
+      }
       if (u.includes("/api/execute")) {
         return Promise.resolve({
           ok: true,
@@ -228,7 +228,7 @@ describe("CodeGenDemo", () => {
 
   it("fetches script content by id when script is selected from dropdown", async () => {
     const fullContent = { id: "full", label: "Full (notebook)", content: "# Full pipeline\nimport sempipes\n# ..." };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -275,7 +275,7 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -313,7 +313,7 @@ describe("CodeGenDemo", () => {
       ],
     };
     const mediumContent = { id: "medium", label: "Medium", content: "# Medium\nbaskets = skrub.var('baskets')\nproducts = skrub.var('products')\n" };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -363,7 +363,7 @@ describe("CodeGenDemo", () => {
     };
 
     const mediumScriptContent = { id: "medium", label: "Medium", content: "# Medium pipeline\n# no Simple pipeline here\n" };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const urlStr = urlFromRequest(input);
       if (urlStr.includes("/api/scripts") && !urlStr.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -375,7 +375,7 @@ describe("CodeGenDemo", () => {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPT_CONTENT) } as Response);
       }
       if (urlStr.includes("/api/compile")) {
-        const body = JSON.parse((init?.body as string) ?? "{}");
+        const body = JSON.parse((_init?.body as string) ?? "{}");
         const code = body.input_code ?? "";
         const nodes = code.includes("Simple pipeline") ? simpleNodes : mediumNodes;
         return Promise.resolve({
@@ -448,7 +448,7 @@ describe("CodeGenDemo", () => {
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
     const generatedCodeForNode = "# Generated for sem_fillna\ndef fill_missing(df):\n    return df.fillna(0)";
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -506,7 +506,7 @@ describe("CodeGenDemo", () => {
     await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: /run/i }));
-    
+
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
     // After Run: single interactive Skrub graph is shown; click semantic operator to see generated code.
     await waitFor(() => expect(screen.getByText(/Computation graph \(from code\)/)).toBeInTheDocument(), { timeout: 2000 });
@@ -549,7 +549,7 @@ describe("CodeGenDemo", () => {
       children: { "0": ["1"], "1": [] },
       sempipesNodeIds: ["1"],
     };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -646,7 +646,7 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -695,7 +695,7 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -731,7 +731,7 @@ describe("CodeGenDemo", () => {
       ],
       edges: [{ source: "as_X_1", target: "sem_fillna_2" }],
     };
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -748,7 +748,7 @@ describe("CodeGenDemo", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     // Wait for the component to load; before Run we show placeholder (no graph)
     await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
-    
+
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ nodes: [{ id: "op1", type: "operator", label: "Op", source_range: null }], edges: [] }),
@@ -831,7 +831,7 @@ describe("CodeGenDemo", () => {
   });
 
   it("calls update-config API with selected LLM and temperature before executing pipeline", async () => {
-    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, __init?: RequestInit) => {
       const u = urlFromRequest(input);
       if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(DEFAULT_SCRIPTS) } as Response);
@@ -900,61 +900,61 @@ describe("CodeGenDemo", () => {
   it("expands left panel when expand button is clicked", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     const expandBtn = screen.getByTestId("expand-left-panel");
-    
+
     // Initially shows expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
+
     // Click to expand
     fireEvent.click(expandBtn);
-    
+
     // Now shows restore icon
-    expect(expandBtn).toHaveTextContent("⤡");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Restore panel size");
+
     // Click again to restore
     fireEvent.click(expandBtn);
-    
+
     // Back to expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
   });
 
   it("expands middle panel when expand button is clicked", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     const expandBtn = screen.getByTestId("expand-middle-panel");
-    
+
     // Initially shows expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
+
     // Click to expand
     fireEvent.click(expandBtn);
-    
+
     // Now shows restore icon
-    expect(expandBtn).toHaveTextContent("⤡");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Restore panel size");
+
     // Click again to restore
     fireEvent.click(expandBtn);
-    
+
     // Back to expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
   });
 
   it("expands right panel when expand button is clicked", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     const expandBtn = screen.getByTestId("expand-right-panel");
-    
+
     // Initially shows expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
+
     // Click to expand
     fireEvent.click(expandBtn);
-    
+
     // Now shows restore icon
-    expect(expandBtn).toHaveTextContent("⤡");
-    
+    expect(expandBtn).toHaveAttribute("aria-label", "Restore panel size");
+
     // Click again to restore
     fireEvent.click(expandBtn);
 
     // Back to expand icon
-    expect(expandBtn).toHaveTextContent("⤢");
+    expect(expandBtn).toHaveAttribute("aria-label", "Expand panel");
   });
 
   describe("Skrub graph from execution", () => {
@@ -983,7 +983,7 @@ describe("CodeGenDemo", () => {
         sempipesNodeIds: ["2"],
       };
 
-      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const u = urlFromRequest(input);
         if (u.includes("/api/compile")) {
           return Promise.resolve({
@@ -1013,7 +1013,7 @@ describe("CodeGenDemo", () => {
             }),
           } as Response);
         }
-        return mockFetchDefault()(input, init);
+        mockFetchDefault(); return vi.mocked(fetch)(input, _init);
       });
 
       render(<CodeGenDemo />, { wrapper: wrapper() });
@@ -1056,7 +1056,7 @@ describe("CodeGenDemo", () => {
         sempipesNodeIds: ["2"],
       };
 
-      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const u = urlFromRequest(input);
         if (u.includes("/api/compile")) {
           return Promise.resolve({
@@ -1095,7 +1095,7 @@ describe("CodeGenDemo", () => {
             }),
           } as Response);
         }
-        return mockFetchDefault()(input, init);
+        mockFetchDefault(); return vi.mocked(fetch)(input, _init);
       });
 
       render(<CodeGenDemo />, { wrapper: wrapper() });
@@ -1148,7 +1148,7 @@ describe("CodeGenDemo", () => {
 
       let executionCount = 0;
 
-      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const u = urlFromRequest(input);
         if (u.includes("/api/scripts") && !u.includes("/api/scripts/")) {
           return Promise.resolve({
@@ -1239,7 +1239,7 @@ describe("CodeGenDemo", () => {
         sempipesNodeIds: ["2"],
       };
 
-      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
         const u = urlFromRequest(input);
         if (u.includes("/api/compile")) {
           return Promise.resolve({
@@ -1269,7 +1269,7 @@ describe("CodeGenDemo", () => {
             }),
           } as Response);
         }
-        return mockFetchDefault()(input, init);
+        mockFetchDefault(); return vi.mocked(fetch)(input, _init);
       });
 
       render(<CodeGenDemo />, { wrapper: wrapper() });

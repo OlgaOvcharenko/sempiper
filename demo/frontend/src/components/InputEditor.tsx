@@ -38,6 +38,8 @@ interface InputEditorProps {
   sempipesNodeIds?: string[];
   /** Whether dark mode is active. */
   isDark?: boolean;
+  /** The operator name to highlight and scroll to (e.g., from the Optimizer panel) */
+  activeOperatorName?: string;
 }
 
 const EDITOR_BG_LIGHT = "#ffffff";
@@ -105,6 +107,7 @@ export function InputEditor({
   onFocusApplied,
   sempipesNodeIds = [],
   isDark = false,
+  activeOperatorName,
 }: InputEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -142,6 +145,7 @@ export function InputEditor({
     monaco.editor.setTheme(isDark ? "dark-editor" : "light-editor");
   }, [isDark]);
 
+  const operatorDecorationIdsRef = useRef<string[]>([]);
   const getEditor = useCallback(() => editorRef.current, []);
 
   useEffect(() => {
@@ -264,7 +268,82 @@ export function InputEditor({
     return () => clearTimeout(t);
   }, [focusNodeId, editorReady, getEditor, nodeRanges, onFocusApplied]);
 
+
   const editorBg = isDark ? EDITOR_BG_DARK : EDITOR_BG_LIGHT;
+
+  // ─── Active Operator Highlight & Scroll ───
+  useEffect(() => {
+    const ed = getEditor();
+    const monaco = monacoRef.current;
+    if (!ed || !monaco || !activeOperatorName) {
+      if (ed && operatorDecorationIdsRef.current.length > 0) {
+        operatorDecorationIdsRef.current = ed.deltaDecorations(operatorDecorationIdsRef.current, []);
+      }
+      return;
+    }
+    const model = ed.getModel();
+    if (!model) return;
+
+    // We want to find the operator definition. Usually it looks like: name="<activeOperatorName>" or name='...'
+    // Then we find the nearest preceding `sem_` function call to highlight it.
+
+    // 1. Find the name argument
+    const matches = model.findMatches(
+      `name=["']${activeOperatorName}["']`,
+      false, // searchOnlyEditableRange
+      true, // isRegex
+      false, // matchCase
+      null, // wordSeparators
+      true // captureMatches
+    );
+
+    if (matches.length > 0) {
+      const matchRange = matches[0].range;
+
+      // Let's search backwards from this match to find the actual method call, e.g., 'sem_gen_features'
+      // We'll search for 'sem_[a-zA-Z_]+'
+      const methodMatches = model.findMatches(
+        `sem_[a-zA-Z_]+`,
+        false,
+        true,
+        false,
+        null,
+        false
+      );
+
+      // Find the closest method match that is BEFORE or ON the line where name="..." is.
+      let bestMethodMatch = null;
+      for (const m of methodMatches) {
+        if (m.range.startLineNumber <= matchRange.startLineNumber) {
+          if (!bestMethodMatch || (m.range.startLineNumber > bestMethodMatch.range.startLineNumber) ||
+            (m.range.startLineNumber === bestMethodMatch.range.startLineNumber && m.range.startColumn > bestMethodMatch.range.startColumn)) {
+            bestMethodMatch = m;
+          }
+        }
+      }
+
+      const rangeToHighlight = bestMethodMatch ? bestMethodMatch.range : matchRange;
+
+      operatorDecorationIdsRef.current = ed.deltaDecorations(
+        operatorDecorationIdsRef.current,
+        [
+          {
+            range: rangeToHighlight,
+            options: {
+              isWholeLine: false,
+              className: "sempipe-active-operator-highlight",
+            },
+          }
+        ]
+      );
+
+      // Scroll to show it
+      ed.revealRangeInCenterIfOutsideViewport(rangeToHighlight);
+    } else {
+      operatorDecorationIdsRef.current = ed.deltaDecorations(operatorDecorationIdsRef.current, []);
+    }
+  }, [activeOperatorName, getEditor, editorReady]);
+
 
   return (
     <div
@@ -309,6 +388,11 @@ export function InputEditor({
           box-shadow: 0 0 0 1px rgba(244, 114, 182, 0.25);
         }
         .sempipe-element-margin { display: none; }
+        /* Active operator highlight (from optimizer) */
+        .sempipe-active-operator-highlight {
+          background-color: rgba(251, 146, 60, 0.3); /* orange-400 */
+          border-bottom: 2px solid rgb(249, 115, 22);
+        }
       ` : `
         /* as_X / as_y (input) — one distinct colour */
         .sempipe-input-decoration {
@@ -345,6 +429,11 @@ export function InputEditor({
           box-shadow: 0 0 0 1px rgba(236, 72, 153, 0.3);
         }
         .sempipe-element-margin { display: none; }
+        /* Active operator highlight (from optimizer) */
+        .sempipe-active-operator-highlight {
+          background-color: rgba(251, 146, 60, 0.3); /* orange-400 */
+          border-bottom: 2px solid rgb(249, 115, 22);
+        }
       `}</style>
       <Editor
         height="100%"

@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --header-height: 5rem;
+}
+
 /* Bright / light theme — readable, bright UI */
 body {
   margin: 0;
