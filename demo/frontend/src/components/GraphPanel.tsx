@@ -40,6 +40,8 @@ interface GraphPanelProps {
   isExecuting?: boolean;
   expandButton?: React.ReactNode;
   isDark?: boolean;
+  viewToggle?: React.ReactNode;
+  hideHeader?: boolean;
 }
 
 const MOCK_NODES: GraphNode[] = [
@@ -70,6 +72,8 @@ export function GraphPanel({
   isExecuting = false,
   expandButton = null,
   isDark = false,
+  viewToggle = null,
+  hideHeader = false,
 }: GraphPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
@@ -141,39 +145,39 @@ export function GraphPanel({
     // Theme-aware colors
     const colors = isDark
       ? {
-          nodeBg: "#27272a",         // zinc-800
-          nodeBorder: "#52525b",     // zinc-600
-          nodeText: "#f4f4f5",       // zinc-100
-          canvasBg: "#09090b",       // zinc-950
-          inputBg: "#1e3a5f",        // dark blue
-          inputBorder: "#60a5fa",    // blue-400
-          operatorBg: "#27272a",     // zinc-800
-          operatorBorder: "#52525b", // zinc-600
-          semBg: "#14532d",          // dark green
-          semBorder: "#4ade80",      // green-400
-          selSemBg: "#831843",       // dark pink
-          selSemBorder: "#f472b6",   // pink-400
-          selBg: "#78350f",          // dark amber
-          selBorder: "#fbbf24",      // amber-400
-          edgeColor: "#94a3b8",      // slate-400
-        }
+        nodeBg: "#27272a",         // zinc-800
+        nodeBorder: "#52525b",     // zinc-600
+        nodeText: "#f4f4f5",       // zinc-100
+        canvasBg: "#09090b",       // zinc-950
+        inputBg: "#1e3a5f",        // dark blue
+        inputBorder: "#60a5fa",    // blue-400
+        operatorBg: "#27272a",     // zinc-800
+        operatorBorder: "#52525b", // zinc-600
+        semBg: "#14532d",          // dark green
+        semBorder: "#4ade80",      // green-400
+        selSemBg: "#831843",       // dark pink
+        selSemBorder: "#f472b6",   // pink-400
+        selBg: "#78350f",          // dark amber
+        selBorder: "#fbbf24",      // amber-400
+        edgeColor: "#94a3b8",      // slate-400
+      }
       : {
-          nodeBg: "#ffffff",
-          nodeBorder: "#64748b",
-          nodeText: "#18181b",
-          canvasBg: "#fafafa",
-          inputBg: "#dbeafe",        // blue-100
-          inputBorder: "#3b82f6",    // blue-500
-          operatorBg: "#ffffff",
-          operatorBorder: "#94a3b8", // slate-400
-          semBg: "#dcfce7",          // green-100
-          semBorder: "#22c55e",      // green-500
-          selSemBg: "#fce7f3",       // pink-100
-          selSemBorder: "#ec4899",   // pink-500
-          selBg: "#fef9c3",          // yellow-100
-          selBorder: "#f59e0b",      // amber-500
-          edgeColor: "#64748b",      // slate-500
-        };
+        nodeBg: "#ffffff",
+        nodeBorder: "#64748b",
+        nodeText: "#18181b",
+        canvasBg: "#fafafa",
+        inputBg: "#dbeafe",        // blue-100
+        inputBorder: "#3b82f6",    // blue-500
+        operatorBg: "#ffffff",
+        operatorBorder: "#94a3b8", // slate-400
+        semBg: "#dcfce7",          // green-100
+        semBorder: "#22c55e",      // green-500
+        selSemBg: "#fce7f3",       // pink-100
+        selSemBorder: "#ec4899",   // pink-500
+        selBg: "#fef9c3",          // yellow-100
+        selBorder: "#f59e0b",      // amber-500
+        edgeColor: "#64748b",      // slate-500
+      };
 
     // Initialize Cytoscape with proper selectors
     const cy = cytoscape({
@@ -396,21 +400,26 @@ export function GraphPanel({
 
   return (
     <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
-      <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex-1">
-            <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Computation graph</h2>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              {isLoading || (isExecuting && shouldShowSkrubDict)
-                ? "Running pipeline…"
-                : shouldShowSkrubDict
-                  ? "Computation graph (from code) · Click an operator to see generated code"
-                  : "Edit code to see computation graph"}
-            </p>
+      {!hideHeader && (
+        <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex flex-col justify-center gap-0.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex-1">
+              <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Computation graph</h2>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                {isLoading || (isExecuting && shouldShowSkrubDict)
+                  ? "Running pipeline…"
+                  : shouldShowSkrubDict
+                    ? "Computation graph (from code) · Click an operator to see generated code"
+                    : "Edit code to see computation graph"}
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              {viewToggle}
+              {expandButton}
+            </div>
           </div>
-          <div className="flex items-center gap-2">{expandButton}</div>
         </div>
-      </div>
+      )}
       <div className="flex-1 min-h-0 overflow-hidden p-2">
         {shouldShowSkrubDict && skrubGraph ? (
           <div

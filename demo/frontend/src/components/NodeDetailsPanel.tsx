@@ -95,6 +95,8 @@ interface NodeDetailsPanelProps {
   isExpanded?: boolean;
   /** Mapping from skrub runtime IDs to compile IDs (for dynamic compilation). */
   skrubToCompileId?: Record<string, string>;
+  /** Dark mode flag */
+  isDark?: boolean;
 }
 
 export function NodeDetailsPanel({
@@ -114,57 +116,10 @@ export function NodeDetailsPanel({
   isExpanded = false,
   skrubToCompileId = {},
 }: NodeDetailsPanelProps) {
-  // Try multiple ID formats to find code:
-  // 1. selectedNodeId (e.g., "skrub_1")
-  // 2. rawNodeId (e.g., "1")
-  // 3. compileId from mapping (e.g., "subsample_5")
-  // 4. skrub-prefixed compileId (e.g., "skrub_subsample_5")
-  const rawNodeId = selectedNodeId?.startsWith("skrub_") ? selectedNodeId.slice(6) : selectedNodeId;
-  const compileId = rawNodeId ? skrubToCompileId[rawNodeId] : undefined;
-
-  // Direct lookups trying all ID formats
-  const liveMap = liveGeneratedCodeByNode ?? {};
-  const liveCodeForNode = liveMap[selectedNodeId] ||
-                          liveMap[rawNodeId] ||
-                          (compileId && liveMap[compileId]) ||
-                          (compileId && liveMap[`skrub_${compileId}`]) ||
-                          undefined;
-  const effectiveCode =
-    liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode ?? null : null);
-  const isLive = liveCodeForNode !== undefined;
-  const waitingForCode = isExecuting && selectedNode?.type === "operator" && liveCodeForNode === undefined;
-  const hasCodeToShow = (effectiveCode != null && effectiveCode !== "") || waitingForCode;
-
-  // Look up other per-node data using all ID formats (including compile ID from mapping)
-  const retriesMap = liveRetriesByNode ?? {};
-  const nodeRetries = retriesMap[selectedNodeId] ?? retriesMap[rawNodeId] ??
-                     (compileId && retriesMap[compileId]) ??
-                     (compileId && retriesMap[`skrub_${compileId}`]) ?? undefined;
-
-  const fallbackMap = liveFallbackByNode ?? {};
-  const nodeFallback = fallbackMap[selectedNodeId] ?? fallbackMap[rawNodeId] ??
-                      (compileId && fallbackMap[compileId]) ??
-                      (compileId && fallbackMap[`skrub_${compileId}`]) ?? undefined;
-
-  const costMap = liveCostUsdByNode ?? {};
-  const nodeCostUsd = costMap[selectedNodeId] ?? costMap[rawNodeId] ??
-                     (compileId && costMap[compileId]) ??
-                     (compileId && costMap[`skrub_${compileId}`]) ?? undefined;
-
-  const dataMap = nodeDataByNode ?? {};
-  const nodeData = dataMap[selectedNodeId] || dataMap[rawNodeId] ||
-                  (compileId && dataMap[compileId]) ||
-                  (compileId && dataMap[`skrub_${compileId}`]) || undefined;
-
-  const summaryMap = inputSummaryByNode ?? {};
-  const inputSummary = inputSummaryForSelectedNode ??
-                      summaryMap[selectedNodeId] ?? summaryMap[rawNodeId] ??
-                      (compileId && summaryMap[compileId]) ??
-                      (compileId && summaryMap[`skrub_${compileId}`]) ?? undefined;
   if (!selectedNodeId || !selectedNode) {
     return (
       <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
-        <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
+        <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
           <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Node details</h2>
           {expandButton}
         </div>
@@ -175,11 +130,59 @@ export function NodeDetailsPanel({
     );
   }
 
+  // Try multiple ID formats to find code:
+  // 1. selectedNodeId (e.g., "skrub_1")
+  // 2. rawNodeId (e.g., "1")
+  // 3. compileId from mapping (e.g., "subsample_5")
+  // 4. skrub-prefixed compileId (e.g., "skrub_subsample_5")
+  const rawNodeId = selectedNodeId.startsWith("skrub_") ? selectedNodeId.slice(6) : selectedNodeId;
+  const compileId = rawNodeId ? skrubToCompileId[rawNodeId] : undefined;
+
+  // Direct lookups trying all ID formats
+  const liveMap = liveGeneratedCodeByNode ?? {};
+  const liveCodeForNode = liveMap[selectedNodeId] ||
+    liveMap[rawNodeId] ||
+    (compileId && liveMap[compileId]) ||
+    (compileId && liveMap[`skrub_${compileId}`]) ||
+    undefined;
+  const effectiveCode =
+    liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode ?? null : null);
+  const isLive = liveCodeForNode !== undefined;
+  const waitingForCode = isExecuting && selectedNode.type === "operator" && liveCodeForNode === undefined;
+  const hasCodeToShow = (effectiveCode != null && effectiveCode !== "") || waitingForCode;
+
+  // Look up other per-node data using all ID formats (including compile ID from mapping)
+  const retriesMap = liveRetriesByNode ?? {};
+  const nodeRetries = retriesMap[selectedNodeId] ?? retriesMap[rawNodeId] ??
+    (compileId && retriesMap[compileId]) ??
+    (compileId && retriesMap[`skrub_${compileId}`]) ?? undefined;
+
+  const fallbackMap = liveFallbackByNode ?? {};
+  const nodeFallback = fallbackMap[selectedNodeId] ?? fallbackMap[rawNodeId] ??
+    (compileId && fallbackMap[compileId]) ??
+    (compileId && fallbackMap[`skrub_${compileId}`]) ?? undefined;
+
+  const costMap = liveCostUsdByNode ?? {};
+  const nodeCostUsd = costMap[selectedNodeId] ?? costMap[rawNodeId] ??
+    (compileId && costMap[compileId]) ??
+    (compileId && costMap[`skrub_${compileId}`]) ?? undefined;
+
+  const dataMap = nodeDataByNode ?? {};
+  const nodeData = dataMap[selectedNodeId] || dataMap[rawNodeId] ||
+    (compileId && dataMap[compileId]) ||
+    (compileId && dataMap[`skrub_${compileId}`]) || undefined;
+
+  const summaryMap = inputSummaryByNode ?? {};
+  const inputSummary = inputSummaryForSelectedNode ??
+    summaryMap[selectedNodeId] ?? summaryMap[rawNodeId] ??
+    (compileId && summaryMap[compileId]) ??
+    (compileId && summaryMap[`skrub_${compileId}`]) ?? undefined;
+
   const isInput = selectedNode.type === "input";
 
   return (
     <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
-      <div className="shrink-0 px-3 py-2 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
+      <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Node details</h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
