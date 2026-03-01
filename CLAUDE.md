@@ -166,6 +166,17 @@ The middle panel always shows the **compile-time graph**. Execution must never r
 
 See: `.claude/rules/cache-design.md`
 
+### 11. No Simulated Data
+
+See: `.claude/rules/no-simulated-data.md`
+
+The demo must never show fake or placeholder data (e.g. `{schema: [{name: "ID"}], row_count: 5000}`).
+
+- **Do not** write fallback functions that return hardcoded schema/sample/row_count.
+- **Return `None`** from data extractors when real data is unavailable.
+- **Skip emitting** `input_summary` / `node_data` SSE events when data is `None`.
+- Let the frontend show its built-in "Run the pipeline to see…" empty state instead.
+
 Two-tier caching system (memory + file) for pipeline results.
 
 **Architecture:**
