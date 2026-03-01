@@ -177,23 +177,23 @@ export type ExecuteEvent =
   | { type: "terminal"; line: string }
   | { type: "error"; message: string }
   | {
-      type: "node_code";
-      node_id: string;
-      generated_code: string;
-      retries?: number;
-      cost_usd?: number;
-      /** True when backend used placeholder (LLM unavailable or failed). */
-      is_fallback?: boolean;
-    }
+    type: "node_code";
+    node_id: string;
+    generated_code: string;
+    retries?: number;
+    cost_usd?: number;
+    /** True when backend used placeholder (LLM unavailable or failed). */
+    is_fallback?: boolean;
+  }
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
   | {
-      /** Intermediate data for operator nodes (from .skb.preview()). */
-      type: "node_data";
-      node_id: string;
-      schema: InputSummary["schema"];
-      sample: InputSummary["sample"];
-      row_count: number;
-    }
+    /** Intermediate data for operator nodes (from .skb.preview()). */
+    type: "node_data";
+    node_id: string;
+    schema: InputSummary["schema"];
+    sample: InputSummary["sample"];
+    row_count: number;
+  }
   | { type: "cost"; total_usd: number }
   | { type: "done"; total_cost_usd?: number; duration_ms?: number }
   | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string; skrubToCompileId?: Record<string, string> };
@@ -266,7 +266,6 @@ export interface UpdateConfigRequest {
   temperature: number;
 }
 
-/** Response from POST /api/update-config. */
 export interface UpdateConfigResponse {
   status: string;
   llm_name: string;
@@ -302,6 +301,61 @@ export interface ExecuteOptions {
   useCache?: boolean;
 }
 
+export interface OptimizerStatus {
+  active: boolean;
+}
+
+export async function fetchOptimizerStatus(): Promise<OptimizerStatus> {
+  const res = await fetch(`${API_BASE}/optimizer/status`);
+  if (!res.ok) throw new Error(res.statusText || "Failed to fetch optimizer status");
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (optimizer status)");
+  }
+}
+
+export interface OptimizerSearchNode {
+  trial: number;
+  parent_trial: number | null;
+}
+
+export interface OptimizerOutcome {
+  search_node: OptimizerSearchNode;
+  score: number;
+  state: {
+    generated_code: string | string[] | Record<string, string>;
+  };
+}
+
+export interface OptimizerTrajectory {
+  run_id?: string;
+  optimizer_args?: {
+    scoring?: string;
+    [key: string]: any;
+  };
+  outcomes: OptimizerOutcome[];
+}
+
+export async function fetchOptimizerTrajectory(): Promise<OptimizerTrajectory> {
+  const res = await fetch(`${API_BASE}/optimizer/latest`);
+  if (!res.ok) throw new Error(res.statusText || "Failed to fetch optimizer trajectory");
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (optimizer trajectory)");
+  }
+}
+
+export async function fetchOptimizerTrajectoryByScript(scriptId: string): Promise<OptimizerTrajectory> {
+  const res = await fetch(`${API_BASE}/optimizer/by-script?script_id=${encodeURIComponent(scriptId)}`);
+  if (!res.ok) throw new Error(res.statusText || "Failed to fetch optimizer trajectory by script");
+  try {
+    return await res.json();
+  } catch (e) {
+    throw new Error("Invalid response from server (optimizer trajectory by script)");
+  }
+}
 /**
  * Execute pipeline and stream events. Calls onEvent for each SSE event (terminal, node_code, done).
  * Returns an AbortController so the caller can abort the request.
@@ -358,7 +412,7 @@ export function executePipelineStream(
       if (!reader) return;
       const decoder = new TextDecoder();
       let buffer = "";
-      for (;;) {
+      for (; ;) {
         const { done, value } = await reader.read();
         if (value) buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n\n");
