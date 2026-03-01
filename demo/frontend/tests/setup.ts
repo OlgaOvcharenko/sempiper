@@ -34,6 +34,7 @@ vi.mock("cytoscape", () => {
       data: vi.fn(),
     })),
     on: vi.fn(),
+    one: vi.fn(),
     destroy: vi.fn(),
     layout: vi.fn(() => ({
       run: vi.fn(),
