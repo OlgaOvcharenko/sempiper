@@ -381,6 +381,20 @@ class TestCacheServiceCore:
         # Should not raise
         test_cache.clear()
 
+    def test_get_returns_none_when_file_manually_deleted(self, test_cache):
+        """Manually deleting a cache file also invalidates the memory entry."""
+        test_cache.set("key1", "compile", {"data": 1})
+        # Entry is in memory
+        assert test_cache.memory_cache.has_operation("compile:json")
+
+        # Simulate manual file deletion
+        (test_cache.cache_dir / "key1" / "compile.json").unlink()
+
+        # get() must return None and evict from memory
+        result = test_cache.get("key1", "compile")
+        assert result is None
+        assert not test_cache.memory_cache.has_operation("compile:json")
+
     def test_memory_populated_on_file_hit(self, test_cache):
         """File hit populates memory for subsequent access."""
         # Write to cache

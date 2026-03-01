@@ -78,15 +78,24 @@ class CacheService:
             return None
 
     def get(self, cache_key: str, operation: str, format: CacheFormat = CacheFormat.JSON) -> Any | None:
-        """Get from cache (memory first, then file)."""
-        # Try memory cache first
+        """Get from cache (memory first, then file).
+
+        If the backing file has been manually deleted, the in-memory entry is
+        evicted and None is returned — so individual files can be removed from
+        disk to invalidate specific cache entries.
+        """
+        cache_path = self._get_cache_path(cache_key, operation, format)
         mem_op = self._mem_operation(operation, format)
+
+        # Try memory cache first, but only if the backing file still exists
         value = self.memory_cache.get(cache_key, mem_op)
         if value is not None:
+            if not cache_path.exists():
+                self.memory_cache.invalidate(cache_key, mem_op)
+                return None
             return value
 
         # Try file cache
-        cache_path = self._get_cache_path(cache_key, operation, format)
         if not cache_path.exists():
             return None
 
