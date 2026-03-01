@@ -427,7 +427,7 @@ class TestIntegrationWithPipelineScripts:
         result = compile_script_to_graph(script)
 
         assert result.is_valid
-        assert len(result.nodes) >= 3  # var, subsample, sem_gen_features, eval
+        assert len(result.nodes) >= 3  # vars, as_X, as_y, sem_gen_features, skb.apply
         labels = {n.label for n in result.nodes}
         # Simple pipeline should have these core nodes
         assert "sem_gen_features" in labels or any("gen_features" in l for l in labels)
@@ -445,22 +445,11 @@ class TestIntegrationWithPipelineScripts:
 
         assert result.is_valid
         labels = {n.label for n in result.nodes}
-        # Medium should have as_X, as_y, subsample
+        # Medium should have as_X, as_y, sem_fillna, sem_gen_features
         assert "as_X" in labels
         assert "as_y" in labels
-        assert "skb.subsample" in labels
-
-        # Check subsample -> as_X/as_y edges
-        subsample_id = next((n.id for n in result.nodes if n.label == "skb.subsample"), None)
-        as_x_id = next((n.id for n in result.nodes if n.label == "as_X"), None)
-        as_y_id = next((n.id for n in result.nodes if n.label == "as_y"), None)
-
-        if subsample_id and as_x_id:
-            edge_pairs = {(e.source, e.target) for e in result.edges}
-            assert (subsample_id, as_x_id) in edge_pairs, "medium must have subsample->as_X edge"
-        if subsample_id and as_y_id:
-            edge_pairs = {(e.source, e.target) for e in result.edges}
-            assert (subsample_id, as_y_id) in edge_pairs, "medium must have subsample->as_y edge"
+        assert "sem_fillna" in labels
+        assert "sem_gen_features" in labels
 
 
 class TestScriptRewriting:

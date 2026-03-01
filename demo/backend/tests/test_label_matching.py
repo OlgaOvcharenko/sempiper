@@ -433,21 +433,21 @@ filled = subsampled.sem_fillna(target_column="make", nl_prompt="Fill missing man
         assert "generated_code" in event, "node_code event must have generated_code"
 
 
-def test_full_script_reset_index_matching():
+def test_fraud_script_reset_index_matching():
     """
-    Test the full.py script specifically for groupby -> agg -> reset_index matching.
+    Test the fraud.py script specifically for groupby -> agg -> reset_index matching.
 
     The user reported that reset_index in the chain is not matching correctly with the code.
     This test investigates the specific line:
         aggregated_products = vectorized_products.groupby("basket_ID").agg("mean").reset_index()
     """
-    # Get full script
+    # Get fraud script
     try:
-        script_resp = client.get("/api/scripts/full")
+        script_resp = client.get("/api/scripts/fraud")
         assert script_resp.status_code == 200
         code = script_resp.json()["content"]
     except Exception:
-        pytest.skip("Full script not available")
+        pytest.skip("Fraud script not available")
 
     # Execute
     exec_resp = client.post("/api/execute", json={"input_code": code})

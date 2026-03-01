@@ -236,7 +236,7 @@ def test_full_chained_operation_comprehensive():
     Tests the complete chain:
     groupby -> agg -> reset_index -> merge -> drop
 
-    This is the pattern that appears in medium.py and full.py.
+    This is the pattern that appears in medium.py and fraud.py.
     """
     code = """import sempipes
 import skrub

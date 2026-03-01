@@ -82,10 +82,10 @@ def test_verify_as_y_getitem_mapping(medium_script):
             print(f"   Line {node.source_range.start_line}")
             lines = medium_script.splitlines()
             print(f"   Full line: {lines[node.source_range.start_line - 1]}")
-            assert node.source_range.start_line != 19, \
-                f"ERROR: GetItem 'basket_ID' should NOT map to line 19 (as_y line)"
+            assert node.source_range.start_line != 18, \
+                f"ERROR: GetItem 'basket_ID' should NOT map to line 18 (as_y line)"
         else:
-            print(f"   NO SOURCE_RANGE (expected - this is from line 27 filter)")
+            print(f"   NO SOURCE_RANGE (expected - this is from the isin filter)")
 
     if fraud_flag_nodes:
         node = fraud_flag_nodes[0]
@@ -94,10 +94,10 @@ def test_verify_as_y_getitem_mapping(medium_script):
             print(f"   Line {node.source_range.start_line}")
             lines = medium_script.splitlines()
             print(f"   Full line: {lines[node.source_range.start_line - 1]}")
-            assert node.source_range.start_line == 17, \
-                f"GetItem 'fraud_flag' should map to line 17 (as_y), got {node.source_range.start_line}"
+            assert node.source_range.start_line == 18, \
+                f"GetItem 'fraud_flag' should map to line 18 (as_y), got {node.source_range.start_line}"
         else:
-            pytest.fail("ERROR: GetItem 'fraud_flag' should have source_range pointing to line 17")
+            pytest.fail("ERROR: GetItem 'fraud_flag' should have source_range pointing to line 18")
 
 
 def test_check_line_27_getitem_nodes(medium_script):
@@ -119,11 +119,11 @@ def test_check_line_27_getitem_nodes(medium_script):
         else:
             print(f"    NO SOURCE_RANGE")
 
-    # The GetItem 'basket_ID' from line 27 should either:
-    # 1. Have source_range pointing to line 27, OR
+    # The GetItem 'basket_ID' from the isin filter should either:
+    # 1. Have source_range pointing to that line, OR
     # 2. Have no source_range (acceptable for intermediate nodes)
-    # It should NOT have source_range pointing to line 19!
+    # It should NOT have source_range pointing to line 18 (the as_y line)!
     for node in basket_id_nodes:
         if node.source_range:
-            assert node.source_range.start_line != 19, \
-                f"GetItem 'basket_ID' has wrong source_range (line 19 instead of 27 or None)"
+            assert node.source_range.start_line != 18, \
+                f"GetItem 'basket_ID' has wrong source_range (line 18 instead of 26 or None)"

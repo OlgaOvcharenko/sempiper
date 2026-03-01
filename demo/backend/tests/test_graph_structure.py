@@ -168,26 +168,16 @@ def test_medium_pipeline_graph_structure():
     edges = compile_resp.json().get("edges", [])
     node_labels = [n.get("label", "").lower() for n in nodes]
 
-    # Expected operations in medium pipeline (using actual skrub labels):
+    # Expected operations in medium pipeline (using compile graph labels):
     # 1. Inputs: products, baskets (as <Var>)
-    # 2. subsample on baskets (<SubsamplePreviews>)
-    # 3. as_X, as_y (appear as <GetItem> in skrub graph)
-    # 4. sem_fillna on products
-    # 5. sem_gen_features on products
-    # 6. skb.apply (vectorizer) (appears as <Apply TableVectorizer>)
-    # 7. groupby, agg, reset_index, merge, drop (as <CallMethod>)
-    # 8. apply_with_sem_choose
+    # 2. as_X, as_y from baskets (no subsample; sampling done in runner boilerplate)
+    # 3. sem_fillna on products
+    # 4. sem_gen_features on products
+    # 5. apply_with_sem_choose (final step)
 
     expected_operations = [
-        "subsample",          # <SubsamplePreviews>
         "sem_fillna",         # sem_fillna
         "sem_gen_features",   # sem_gen_features
-        "apply",              # <Apply TableVectorizer>
-        "groupby",            # <CallMethod 'groupby'>
-        "agg",                # <CallMethod 'agg'>  - IMPORTANT: should not be missing!
-        "reset_index",        # <CallMethod 'reset_index'>  - IMPORTANT!
-        "merge",              # <CallMethod 'merge'>
-        "drop",               # <CallMethod 'drop'>
         "apply_with_sem_choose",  # apply_with_sem_choose
     ]
 

@@ -655,14 +655,16 @@ class TestFraudScriptSourceRanges:
         assert len(self.nodes) > 0, "fraud script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 14 nodes for the fraud script.
+        """Parser must return exactly 12 nodes for the fraud script.
 
-        The 14 nodes are: 2 vars, as_y, as_X, sem_fillna, groupby,
-        sem_extract_features, merge, sem_gen_features, skb.apply_func,
+        The 12 nodes are: 2 vars, as_y, as_X, sem_fillna,
+        sem_extract_features, merge, sem_gen_features,
         2x skb.apply, sem_agg_features, drop.
+        groupby (dead-end branch) and skb.apply_func (no-LHS side-effect)
+        are pruned by _prune_dead_branches.
         """
-        assert len(self.nodes) == 14, (
-            f"Expected 14 nodes, got {len(self.nodes)}: "
+        assert len(self.nodes) == 12, (
+            f"Expected 12 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -767,29 +769,20 @@ class TestFraudScriptSourceRanges:
         assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_agg_features("
 
     def test_skb_apply_func_line_and_column(self):
-        """products.skb.apply_func(shapiro_test)  →  line 106, cols 13-29"""
+        """products.skb.apply_func(shapiro_test) is a dead-end side-effect — pruned."""
         func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
-        assert len(func_nodes) == 1, (
-            f"Expected 1 skb.apply_func node, got {len(func_nodes)}"
+        assert len(func_nodes) == 0, (
+            f"Expected 0 skb.apply_func nodes (pruned dead end), got {len(func_nodes)}"
         )
-        sr = func_nodes[0].source_range
-        assert sr is not None
-        assert sr.start_line == 106, f"Expected line 106, got {sr.start_line}"
-        assert sr.start_column == 13, f"Expected start_col 13, got {sr.start_column}"
-        assert sr.end_column == 29, f"Expected end_col 29, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, func_nodes[0]) == ".skb.apply_func("
 
     # --- pandas / skb operations --------------------------------------------
 
     def test_groupby_line_and_column(self):
-        """products.groupby('make')  →  line 74, cols 24-33"""
+        """products.groupby('make') feeds only print() — dead-end branch, pruned."""
         nodes = _nodes_containing(self.nodes, "groupby")
-        assert len(nodes) >= 1
-        node = next(n for n in nodes if n.source_range and n.source_range.start_line == 74)
-        sr = node.source_range
-        assert sr.start_column == 24, f"Expected start_col 24, got {sr.start_column}"
-        assert sr.end_column == 33, f"Expected end_col 33, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, node) == ".groupby("
+        assert len(nodes) == 0, (
+            f"Expected 0 groupby nodes (pruned dead end), got {len(nodes)}"
+        )
 
     def test_merge_line_and_column(self):
         """products.merge(brand_risk_info, ...)  →  line 94, cols 33-40"""
@@ -889,13 +882,14 @@ class TestHousePricesScriptSourceRanges:
         assert len(self.nodes) > 0, "house_prices script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 13 nodes for the house_prices script.
+        """Parser must return exactly 12 nodes for the house_prices script.
 
-        The 13 nodes are: 3 vars, merge, as_y, as_X, drop, sem_clean,
-        sem_extract_features, sem_gen_features, 2x skb.apply, skb.apply_func.
+        The 12 nodes are: 3 vars, merge, as_y, as_X, drop, sem_clean,
+        sem_extract_features, sem_gen_features, 2x skb.apply.
+        skb.apply_func (no-LHS dead-end side-effect) is pruned by _prune_dead_branches.
         """
-        assert len(self.nodes) == 13, (
-            f"Expected 13 nodes, got {len(self.nodes)}: "
+        assert len(self.nodes) == 12, (
+            f"Expected 12 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -1052,17 +1046,11 @@ class TestHousePricesScriptSourceRanges:
         assert lines == [71, 82], f"Expected lines [71, 82], got {lines}"
 
     def test_skb_apply_func_line_and_column(self):
-        """predictions.skb.apply_func(analyze_house_prices, ...)  →  line 126, cols 16-32"""
+        """predictions.skb.apply_func(analyze_house_prices) is a dead-end side-effect — pruned."""
         func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
-        assert len(func_nodes) == 1, (
-            f"Expected 1 skb.apply_func node, got {len(func_nodes)}"
+        assert len(func_nodes) == 0, (
+            f"Expected 0 skb.apply_func nodes (pruned dead end), got {len(func_nodes)}"
         )
-        sr = func_nodes[0].source_range
-        assert sr is not None
-        assert sr.start_line == 126, f"Expected line 126, got {sr.start_line}"
-        assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
-        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, func_nodes[0]) == ".skb.apply_func("
 
     # --- document order sanity -----------------------------------------------
 

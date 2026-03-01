@@ -62,15 +62,22 @@ def _edge_pairs_by_label(edges, label_to_ids):
     return pairs
 
 
-# --- Simple pipeline (simple.svg) ---
-# Flow: Var 'products' -> SubsamplePreviews -> product_features | Apply LLMFeatureGenerator
-# Our labels: <Var 'products'> (var), skb.subsample, sem_gen_features
+# --- Simple pipeline ---
+# Flow: Var 'products' + Var 'baskets' -> as_X, as_y, sem_gen_features, skb.apply (classifier)
+# No subsample: data is sampled outside the pipeline in the runner boilerplate.
 
-SIMPLE_EXPECTED_LABELS = {"<Var 'products'>", "skb.subsample", "sem_gen_features"}
+SIMPLE_EXPECTED_LABELS = {
+    "<Var 'products'>",
+    "<Var 'baskets'>",
+    "as_X",
+    "as_y",
+    "sem_gen_features",
+    "skb.apply",
+}
 
 SIMPLE_EXPECTED_EDGES = {
-    ("<Var 'products'>", "skb.subsample"),
-    ("skb.subsample", "sem_gen_features"),
+    ("<Var 'baskets'>", "as_X"),
+    ("<Var 'baskets'>", "as_y"),
 }
 
 
@@ -93,20 +100,14 @@ def test_simple_pipeline_graph_matches_svg_structure():
     )
 
 
-# --- Medium pipeline (medium.svg) ---
-# Flow (from SVG):
-#   Var baskets -> SubsamplePreviews -> X (as_X), y (as_y)
-#   Var products -> Apply LearnedImputer (sem_fillna)
-#   sem_fillna + X -> sem_gen_features (filter)
-#   sem_gen_features -> TableVectorizer (skb.apply)
-#   skb.apply + X -> merge -> apply_with_sem_choose
-#   y -> apply_with_sem_choose
-#   sem_choose -> apply_with_sem_choose
+# --- Medium pipeline ---
+# Flow: Var baskets -> as_X, as_y (no subsample; sampling done in runner boilerplate)
+#       Var products -> sem_fillna -> sem_gen_features -> apply_with_sem_choose
+#       sem_choose -> apply_with_sem_choose
 
 MEDIUM_EXPECTED_LABELS = {
     "<Var 'products'>",
     "<Var 'baskets'>",
-    "skb.subsample",
     "as_X",
     "as_y",
     "sem_fillna",
@@ -118,9 +119,8 @@ MEDIUM_EXPECTED_LABELS = {
 }
 
 MEDIUM_EXPECTED_EDGES = {
-    ("<Var 'baskets'>", "skb.subsample"),
-    ("skb.subsample", "as_X"),
-    ("skb.subsample", "as_y"),
+    ("<Var 'baskets'>", "as_X"),
+    ("<Var 'baskets'>", "as_y"),
     ("<Var 'products'>", "sem_fillna"),
     ("sem_fillna", "sem_gen_features"),
     ("as_X", "sem_gen_features"),
@@ -169,7 +169,7 @@ def test_medium_pipeline_node_order_supports_layout():
     for e in edges:
         children.setdefault(e.source, []).append(e.target)
 
-    # Baskets' first child (subsample) must have lower index than products' first child (sem_fillna)
+    # Baskets' first child (as_X) must have lower index than products' first child (sem_fillna)
     baskets_ids = [n.id for n in runnable if (n.label or "").lower() == "<var 'baskets'>"]
     products_ids = [n.id for n in runnable if (n.label or "").lower() == "<var 'products'>"]
     assert baskets_ids, "must have baskets node"
@@ -179,7 +179,7 @@ def test_medium_pipeline_node_order_supports_layout():
 
     baskets_children = children.get(baskets_id, [])
     products_children = children.get(products_id, [])
-    assert baskets_children, "baskets must have children (subsample)"
+    assert baskets_children, "baskets must have children (as_X, as_y)"
     assert products_children, "products must have children (sem_fillna)"
 
     min_baskets_child_idx = min(node_index.get(c, 999) for c in baskets_children)

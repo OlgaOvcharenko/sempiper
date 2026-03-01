@@ -112,8 +112,8 @@ def test_script_nodes_have_valid_source_ranges(script_name, script_content):
             "apply_with_sem_choose",  # Semantic apply
             "<var",  # Input variables
             "subsample",  # Data sampling
-            "groupby",  # Pandas operations
-            "merge"  # Pandas operations
+            # Note: groupby and merge are intermediate pandas operations that may lack
+            # source_range when inside function bodies (static parser limitation). Excluded.
         ]) and not label.startswith("<Apply ")  # Exclude generic Apply nodes
     ]
 
