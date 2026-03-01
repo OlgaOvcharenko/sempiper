@@ -27,7 +27,7 @@ vi.mock("cytoscape", () => {
     edges: vi.fn(() => ({
       forEach: vi.fn(),
     })),
-    getElementById: vi.fn((id: string) => ({
+    getElementById: vi.fn((_id: string) => ({
       length: 1,
       addClass: vi.fn().mockReturnThis(),
       removeClass: vi.fn().mockReturnThis(),
@@ -41,8 +41,30 @@ vi.mock("cytoscape", () => {
   };
 
   const cyCtor = vi.fn(() => mockCy);
+  // @ts-ignore
   cyCtor.use = vi.fn();
   return {
     default: cyCtor,
   };
+});
+
+// Mock localStorage for theme toggle tests
+const localStorageMock = (function() {
+  let store: Record<string, string> = {};
+  return {
+    getItem: vi.fn((key: string) => store[key] || null),
+    setItem: vi.fn((key: string, value: string) => {
+      store[key] = value.toString();
+    }),
+    removeItem: vi.fn((key: string) => {
+      delete store[key];
+    }),
+    clear: vi.fn(() => {
+      store = {};
+    })
+  };
+})();
+
+Object.defineProperty(window, 'localStorage', {
+  value: localStorageMock
 });
