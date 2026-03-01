@@ -64,6 +64,7 @@ _NODE_PATTERNS = (
     r"\.groupby\s*\(",
     r"\.merge\s*\(",
     r"\.drop\s*\(",
+    r"\boptimise_colopro\s*\(",
 )
 _HAS_NODE_RE = re.compile("|".join(f"({p})" for p in _NODE_PATTERNS))
 
@@ -101,6 +102,7 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     groupby_pat = re.compile(r"\.groupby\s*\(")
     merge_pat = re.compile(r"\.merge\s*\(")
     drop_pat = re.compile(r"\.drop\s*\(")
+    optimise_colopro_pat = re.compile(r"\boptimise_colopro\s*\(")
 
     def add(line_no: int, start: int, end: int, node_id: str, node_type: str, label: str) -> None:
         # Both start and end are 0-indexed from regex match; convert to 1-indexed for Monaco
@@ -203,6 +205,8 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
             add(one_indexed_line, m.start(), m.end(), f"op_{label}_{one_indexed_line}", "operator", label)
         for m in pipeline_pat.finditer(search_line):
             add(one_indexed_line, m.start(), m.end(), f"pipeline_{one_indexed_line}", "pipeline", "Pipeline")
+        for m in optimise_colopro_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"optimise_colopro_{one_indexed_line}", "operator", "optimise_colopro")
 
     return results
 
@@ -241,6 +245,15 @@ def _extract_produces_consumes(
         merge_arg_match = re.search(r"\.merge\s*\(\s*(\w+)", search_text)
         if merge_arg_match and merge_arg_match.group(1) not in consumes:
             consumes.append(merge_arg_match.group(1))
+
+    if node_label == "optimise_colopro":
+        search_text = (line_context or line)
+        # Check for dag_sink=var or positional first arg
+        dag_sink_match = re.search(r"\bdag_sink\s*=\s*(\w+)", search_text)
+        if dag_sink_match:
+             if dag_sink_match.group(1) not in consumes:
+                 consumes.append(dag_sink_match.group(1))
+        # TODO: Handle positional? Usually dag_sink is first.
     if node_label == "apply_with_sem_choose":
         # y= may be on same line or next few lines (multi-line call)
         search_text = (line_context or line)
