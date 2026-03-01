@@ -654,6 +654,13 @@ class TestFraudScriptSourceRanges:
     def test_compiles_to_non_empty_graph(self):
         assert len(self.nodes) > 0, "fraud script should produce nodes"
 
+    def test_exact_node_count(self):
+        """Parser must return exactly 13 nodes for the fraud script."""
+        assert len(self.nodes) == 13, (
+            f"Expected 13 nodes, got {len(self.nodes)}: "
+            f"{[n.label for n in self.nodes]}"
+        )
+
     # --- var nodes -----------------------------------------------------------
 
     def test_products_var_line_and_column(self):
@@ -863,6 +870,13 @@ class TestHousePricesScriptSourceRanges:
     def test_compiles_to_non_empty_graph(self):
         assert len(self.nodes) > 0, "house_prices script should produce nodes"
 
+    def test_exact_node_count(self):
+        """Parser must return exactly 12 nodes for the house_prices script."""
+        assert len(self.nodes) == 12, (
+            f"Expected 12 nodes, got {len(self.nodes)}: "
+            f"{[n.label for n in self.nodes]}"
+        )
+
     # --- var nodes -----------------------------------------------------------
 
     def test_facts_var_line_and_column(self):
@@ -1063,6 +1077,18 @@ class TestMuseumsScriptSourceRanges:
     def test_compiles_to_non_empty_graph(self):
         assert len(self.nodes) > 0, "museums script should produce nodes"
 
+    def test_exact_node_count(self):
+        """Parser must return exactly 11 nodes for the museums script.
+
+        10 are inside sempipes_pipeline(); 1 is the data-prep drop at line 248
+        (museum_objects.drop(...)) which is outside the function but still
+        picked up by the static parser.
+        """
+        assert len(self.nodes) == 11, (
+            f"Expected 11 nodes, got {len(self.nodes)}: "
+            f"{[n.label for n in self.nodes]}"
+        )
+
     # --- var node ------------------------------------------------------------
 
     def test_artworks_var_line_and_column(self):
@@ -1193,6 +1219,34 @@ class TestMuseumsScriptSourceRanges:
             f"Expected 2 pipeline skb.apply nodes (lines 235 and 238), "
             f"got {[n.source_range.start_line for n in pipeline_apply]}"
         )
+
+    # --- data-prep drop (outside pipeline function) --------------------------
+
+    def test_drop_data_prep_outside_pipeline_line_and_column(self):
+        """museum_objects.drop(...) at line 248 is outside sempipes_pipeline().
+
+        This is data-preparation code, not a pipeline operator node, but the
+        static parser still picks it up because it looks syntactically identical
+        to an in-pipeline .drop() call.  We test it explicitly so we know the
+        total node count (11) and the exact position of this extra node.
+
+        Line 248: museum_objects = museum_objects.drop(columns=[...], ...)
+                                                  ^     ^
+                                                  col 32  col 38 (exclusive)
+        """
+        drop_nodes = _nodes_with_label(self.nodes, "drop")
+        node = next(
+            (n for n in drop_nodes if n.source_range and n.source_range.start_line == 248),
+            None,
+        )
+        assert node is not None, (
+            "Expected a drop node at line 248 (outside pipeline); "
+            f"drop nodes found at lines: {[n.source_range.start_line for n in drop_nodes if n.source_range]}"
+        )
+        sr = node.source_range
+        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
+        assert sr.end_column == 38, f"Expected end_col 38, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == ".drop("
 
     # --- document order sanity -----------------------------------------------
 
