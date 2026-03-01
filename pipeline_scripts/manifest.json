@@ -2,5 +2,8 @@
   { "id": "simple", "label": "Fraud baskets (simple)", "file": "simple.py" },
   { "id": "medium", "label": "Fraud baskets (medium)", "file": "medium.py" },
   { "id": "full", "label": "Fraud baskets (full)", "file": "full.py" },
-  { "id": "new", "label": "New", "file": "new.py" }
+  { "id": "new", "label": "New", "file": "new.py" },
+  { "id": "fraud", "label": "Credit Fraud", "file": "fraud.py" },
+  { "id": "house", "label": "House Prices", "file": "house_prices.py" },
+  { "id": "museum", "label": "Museum Artworks", "file": "museums.py" }
 ]
