@@ -129,16 +129,9 @@ class UpdateConfigRequest(BaseModel):
 def update_sempipes_config(req: UpdateConfigRequest) -> dict:
     """Update sempipes config with LLM name and temperature."""
     try:
-        import sempipes
-        sempipes.update_config(
-            llm_for_code_generation=sempipes.LLM(
-                name=req.llm_name,
-                parameters={"temperature": req.temperature}
-            )
-        )
+        from services.engine import update_persistent_config
+        update_persistent_config(req.llm_name, req.temperature)
         return {"status": "ok", "llm_name": req.llm_name, "temperature": req.temperature}
-    except ImportError:
-        raise HTTPException(status_code=500, detail="sempipes not available")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
