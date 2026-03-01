@@ -11,7 +11,6 @@ import {
     type CompileEdge,
     type InputSummary,
     type PipelineScriptEntry,
-    type SkrubGraphDict,
 } from "../api/client";
 import {
     graphNodeToCompileIds,
@@ -102,7 +101,6 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
     const [lastRunError, setLastRunError] = useState<string | null>(null);
     const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
-    const [skrubGraphFromRun, setSkrubGraphFromRun] = useState<SkrubGraphDict | null>(null);
     const [isExecuting, setIsExecuting] = useState(false);
     const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
     const [temperature, setTemperature] = useState<string>("0.1");
@@ -200,7 +198,6 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
         setInputSummaryByNode({});
         setNodeDataByNode({});
         setLastRunCostUsd(null);
-        setSkrubGraphFromRun(null);
         setSkrubToCompileId({});
         setLastRunDurationMs(null);
         setLastRunError(null);
@@ -292,26 +289,10 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                 } else if (event.type === "cost") {
                     setLastRunCostUsd(event.total_usd);
                 } else if (event.type === "skrub_graph") {
-                    if (event.graph) {
-                        setSkrubGraphFromRun(event.graph);
-                        setSkrubToCompileId(event.skrubToCompileId ?? {});
-                        setInputSummaryByNode((prev) => {
-                            const nodes = event.graph?.nodes ?? [];
-                            const runnable = compileNodesRef.current.filter(
-                                (n) => (n.type ?? "").toLowerCase() === "input" || (n.type ?? "").toLowerCase() === "operator"
-                            );
-                            const next = { ...prev };
-                            for (const sn of nodes) {
-                                if (sn.is_sempipes_semantic) continue;
-                                const compileNode = runnable.find(
-                                    (n) => (n.label ?? "") === (sn.label ?? "") && (n.type ?? "").toLowerCase() === "input"
-                                );
-                                if (compileNode && prev[compileNode.id]) {
-                                    next[`skrub_${sn.id}`] = prev[compileNode.id];
-                                }
-                            }
-                            return next;
-                        });
+                    // Keep the skrub→compile ID mapping for node selection fallback,
+                    // but do NOT replace the display graph — the compile graph is canonical.
+                    if (event.skrubToCompileId) {
+                        setSkrubToCompileId(event.skrubToCompileId);
                     }
                 } else if (event.type === "done") {
                     if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
@@ -438,9 +419,11 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
         return () => clearInterval(intervalId);
     }, []);
 
+    // The compile graph is always the canonical display graph.
+    // Running the pipeline must NOT change the graph — only editing pipeline code does.
     const compilePreviewGraph = compileToSkrubGraph(compileNodes, compileEdges ?? []);
-    const displayGraph = skrubGraphFromRun ?? compilePreviewGraph;
-    const isPreviewGraph = !!compilePreviewGraph?.nodes?.length && !skrubGraphFromRun;
+    const displayGraph = compilePreviewGraph;
+    const isPreviewGraph = !!compilePreviewGraph?.nodes?.length;
 
     const nodes = useMemo(() => compileNodes.map((n) => ({
         id: n.id,

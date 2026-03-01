@@ -11,7 +11,6 @@ import {
   type CompileEdge,
   type InputSummary,
   type PipelineScriptEntry,
-  type SkrubGraphDict,
 } from "../api/client";
 import {
   graphNodeToCompileIds,
@@ -101,7 +100,6 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
   const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
-  const [skrubGraphFromRun, setSkrubGraphFromRun] = useState<SkrubGraphDict | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [llmName, setLlmName] = useState<string>("gemini/gemini-2.5-flash-lite");
   const [temperature, setTemperature] = useState<string>("0.0");
@@ -219,8 +217,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     setInputSummaryByNode({});
     setNodeDataByNode({});
     setLastRunCostUsd(null);
-    setSkrubGraphFromRun(null);  // Clear previous skrub graph
-    setSkrubToCompileId({});      // Clear previous mapping
+    setSkrubToCompileId({});
     setLastRunDurationMs(null);
     setLastRunError(null);
     setSkrubToCompileId({});
@@ -300,29 +297,10 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
         } else if (event.type === "cost") {
           setLastRunCostUsd(event.total_usd);
         } else if (event.type === "skrub_graph") {
-          // Store the skrub to compile mapping for node code lookup
-          if (event.graph) {
-            setSkrubGraphFromRun(event.graph);
-            setSkrubToCompileId(event.skrubToCompileId ?? {});
-            // Copy input summaries to skrub node ids so selecting skrub_0 shows data when backend
-            // emitted input_summary with compile node id (e.g. as_X_1).
-            setInputSummaryByNode((prev) => {
-              const nodes = event.graph?.nodes ?? [];
-              const runnable = compileNodesRef.current.filter(
-                (n) => (n.type ?? "").toLowerCase() === "input" || (n.type ?? "").toLowerCase() === "operator"
-              );
-              let next = { ...prev };
-              for (const sn of nodes) {
-                if (sn.is_sempipes_semantic) continue;
-                const compileNode = runnable.find(
-                  (n) => (n.label ?? "") === (sn.label ?? "") && (n.type ?? "").toLowerCase() === "input"
-                );
-                if (compileNode && prev[compileNode.id]) {
-                  next[`skrub_${sn.id}`] = prev[compileNode.id];
-                }
-              }
-              return next;
-            });
+          // Keep the skrub→compile ID mapping for node selection fallback,
+          // but do NOT replace the display graph — the compile graph is canonical.
+          if (event.skrubToCompileId) {
+            setSkrubToCompileId(event.skrubToCompileId);
           }
         } else if (event.type === "done") {
           if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
@@ -426,11 +404,11 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     return () => clearTimeout(t);
   }, [refreshCompileGraph]);
 
-  // Use the compile preview graph as the canonical graph structure
+  // The compile graph is always the canonical display graph.
+  // Running the pipeline must NOT change the graph — only editing the pipeline code does.
   const compilePreviewGraph = compileToSkrubGraph(compileNodes, compileEdges ?? []);
-  // After execution, use actual skrub graph from run; before execution, use compile preview
-  const displayGraph = skrubGraphFromRun ?? compilePreviewGraph;
-  const isPreviewGraph = !!compilePreviewGraph?.nodes?.length && !skrubGraphFromRun;
+  const displayGraph = compilePreviewGraph;
+  const isPreviewGraph = !!compilePreviewGraph?.nodes?.length;
 
   const nodes: GraphNode[] =
     compileNodes.length > 0
@@ -483,7 +461,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     highlightedNodeIds,
     displayGraph?.nodes ?? [],
     compileNodes,
-    !!skrubGraphFromRun  // true when we have actual skrub graph from execution
+    false  // always use compile graph; compile ids = graph ids in preview mode
   );
 
   // Input summary for selected input node: map skrub_X → compile node by id or label → inputSummaryByNode
