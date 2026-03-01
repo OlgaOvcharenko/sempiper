@@ -1,3 +1,17 @@
 [
-  { "id": "placeholder", "label": "Optimizer example", "file": "placeholder.py" }
+  {
+    "id": "optimise_house",
+    "label": "Optimizer (1 house)",
+    "file": "optimise_house.py"
+  },
+  {
+    "id": "optimise_fraud",
+    "label": "Optimizer (2 fraud)",
+    "file": "optimise_fraud.py"
+  },
+  {
+    "id": "optimise_museums",
+    "label": "Optimizer (3 museums)",
+    "file": "optimise_museums.py"
+  }
 ]
