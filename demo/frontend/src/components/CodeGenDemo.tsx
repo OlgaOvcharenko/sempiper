@@ -300,7 +300,52 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
           // Keep the skrub→compile ID mapping for node selection fallback,
           // but do NOT replace the display graph — the compile graph is canonical.
           if (event.skrubToCompileId) {
-            setSkrubToCompileId(event.skrubToCompileId);
+            const mapping = event.skrubToCompileId as Record<string, string>;
+            setSkrubToCompileId(mapping);
+            // Re-key live node maps by compile ID so NodeDetailsPanel can find data when
+            // displaying the compile graph (where graph node IDs = compile IDs).
+            // node_code events use skrub runtime IDs (e.g. "in_0") but compile nodes have
+            // numeric IDs (e.g. "12"); skrubToCompileId["in_0"] = "12" is the bridge.
+            setLiveNodeCode((prev) => {
+              const updated = { ...prev };
+              for (const [skrubId, compileId] of Object.entries(mapping)) {
+                if (prev[skrubId] !== undefined) {
+                  updated[compileId] = prev[skrubId];
+                  updated[`skrub_${compileId}`] = prev[skrubId];
+                }
+              }
+              return updated;
+            });
+            setLiveNodeRetries((prev) => {
+              const updated = { ...prev };
+              for (const [skrubId, compileId] of Object.entries(mapping)) {
+                if (prev[skrubId] !== undefined) {
+                  updated[compileId] = prev[skrubId];
+                  updated[`skrub_${compileId}`] = prev[skrubId];
+                }
+              }
+              return updated;
+            });
+            setLiveFallbackByNode((prev) => {
+              const updated = { ...prev };
+              for (const [skrubId, compileId] of Object.entries(mapping)) {
+                if (prev[skrubId] !== undefined) {
+                  updated[compileId] = prev[skrubId];
+                  updated[`skrub_${compileId}`] = prev[skrubId];
+                }
+              }
+              return updated;
+            });
+            setLiveNodeCostUsd((prev) => {
+              const updated = { ...prev };
+              for (const [skrubId, compileId] of Object.entries(mapping)) {
+                if (prev[skrubId] !== undefined) {
+                  updated[compileId] = prev[skrubId];
+                  updated[`skrub_${compileId}`] = prev[skrubId];
+                }
+              }
+              return updated;
+            });
           }
         } else if (event.type === "done") {
           if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
@@ -440,9 +485,12 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
         // Determine node type from compile nodes (not just sempipesNodeIds).
         // sempipesNodeIds only contains sem_* operators, but we want to show
         // generated code for ALL operators (skb.apply, skb.eval, etc.)
-        // Use skrubToCompileId mapping to find the correct compile node
+        // Use skrubToCompileId mapping to find the correct compile node.
+        // In compile-preview mode, graph IDs equal compile IDs, so also try direct lookup.
         const compileNodeId = skrubToCompileId[nid];
-        const compileNode = compileNodeId ? compileNodes.find((n) => n.id === compileNodeId) : undefined;
+        const compileNode = compileNodeId
+          ? compileNodes.find((n) => n.id === compileNodeId)
+          : compileNodes.find((n) => n.id === nid);
         const compileType = (compileNode?.type ?? "").toLowerCase();
         const isOperator = compileType === "operator" || compileType === "pipeline" ||
           Boolean(displayGraph.sempipesNodeIds?.includes(nid));

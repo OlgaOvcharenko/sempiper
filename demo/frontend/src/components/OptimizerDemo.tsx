@@ -292,7 +292,50 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                     // Keep the skrub→compile ID mapping for node selection fallback,
                     // but do NOT replace the display graph — the compile graph is canonical.
                     if (event.skrubToCompileId) {
-                        setSkrubToCompileId(event.skrubToCompileId);
+                        const mapping = event.skrubToCompileId as Record<string, string>;
+                        setSkrubToCompileId(mapping);
+                        // Re-key live node maps by compile ID so NodeDetailsPanel can find data
+                        // when displaying the compile graph (graph node IDs = compile IDs).
+                        setLiveNodeCode((prev) => {
+                            const updated = { ...prev };
+                            for (const [skrubId, compileId] of Object.entries(mapping)) {
+                                if (prev[skrubId] !== undefined) {
+                                    updated[compileId] = prev[skrubId];
+                                    updated[`skrub_${compileId}`] = prev[skrubId];
+                                }
+                            }
+                            return updated;
+                        });
+                        setLiveNodeRetries((prev) => {
+                            const updated = { ...prev };
+                            for (const [skrubId, compileId] of Object.entries(mapping)) {
+                                if (prev[skrubId] !== undefined) {
+                                    updated[compileId] = prev[skrubId];
+                                    updated[`skrub_${compileId}`] = prev[skrubId];
+                                }
+                            }
+                            return updated;
+                        });
+                        setLiveFallbackByNode((prev) => {
+                            const updated = { ...prev };
+                            for (const [skrubId, compileId] of Object.entries(mapping)) {
+                                if (prev[skrubId] !== undefined) {
+                                    updated[compileId] = prev[skrubId];
+                                    updated[`skrub_${compileId}`] = prev[skrubId];
+                                }
+                            }
+                            return updated;
+                        });
+                        setLiveNodeCostUsd((prev) => {
+                            const updated = { ...prev };
+                            for (const [skrubId, compileId] of Object.entries(mapping)) {
+                                if (prev[skrubId] !== undefined) {
+                                    updated[compileId] = prev[skrubId];
+                                    updated[`skrub_${compileId}`] = prev[skrubId];
+                                }
+                            }
+                            return updated;
+                        });
                     }
                 } else if (event.type === "done") {
                     if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
@@ -503,7 +546,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                 Graph
             </button>
             <button
-                onClick={() => setViewMode('optimizer')}
+                onClick={() => { setViewMode('optimizer'); setReplayTrigger(prev => prev + 1); }}
                 className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all ${viewMode === 'optimizer' ? 'bg-white dark:bg-zinc-900 text-emerald-600 shadow-sm' : 'text-zinc-500 dark:text-zinc-400'}`}
             >
                 Optimizer
