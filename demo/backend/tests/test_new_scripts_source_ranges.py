@@ -1078,14 +1078,14 @@ class TestMuseumsScriptSourceRanges:
         assert len(self.nodes) > 0, "museums script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 11 nodes for the museums script.
+        """Parser must return exactly 10 nodes for the museums script.
 
-        10 are inside sempipes_pipeline(); 1 is the data-prep drop at line 248
-        (museum_objects.drop(...)) which is outside the function but still
-        picked up by the static parser.
+        All 10 nodes are inside sempipes_pipeline().  The data-prep drop at
+        line 248 (museum_objects.drop(...)) is outside the function and must
+        NOT appear in the graph (see test_drop_data_prep_outside_pipeline_excluded).
         """
-        assert len(self.nodes) == 11, (
-            f"Expected 11 nodes, got {len(self.nodes)}: "
+        assert len(self.nodes) == 10, (
+            f"Expected 10 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -1222,31 +1222,22 @@ class TestMuseumsScriptSourceRanges:
 
     # --- data-prep drop (outside pipeline function) --------------------------
 
-    def test_drop_data_prep_outside_pipeline_line_and_column(self):
-        """museum_objects.drop(...) at line 248 is outside sempipes_pipeline().
+    def test_drop_data_prep_outside_pipeline_excluded(self):
+        """museum_objects.drop(...) at line 248 must NOT appear in the graph.
 
-        This is data-preparation code, not a pipeline operator node, but the
-        static parser still picks it up because it looks syntactically identical
-        to an in-pipeline .drop() call.  We test it explicitly so we know the
-        total node count (11) and the exact position of this extra node.
-
-        Line 248: museum_objects = museum_objects.drop(columns=[...], ...)
-                                                  ^     ^
-                                                  col 32  col 38 (exclusive)
+        That .drop() is data-preparation code outside sempipes_pipeline().
+        The scope-aware parser must exclude it so the graph has no isolated nodes
+        and forms a single connected component.
         """
         drop_nodes = _nodes_with_label(self.nodes, "drop")
         node = next(
             (n for n in drop_nodes if n.source_range and n.source_range.start_line == 248),
             None,
         )
-        assert node is not None, (
-            "Expected a drop node at line 248 (outside pipeline); "
-            f"drop nodes found at lines: {[n.source_range.start_line for n in drop_nodes if n.source_range]}"
+        assert node is None, (
+            "Out-of-scope drop at line 248 must not appear in graph; "
+            f"got node: {node}"
         )
-        sr = node.source_range
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 38, f"Expected end_col 38, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".drop("
 
     # --- document order sanity -----------------------------------------------
 

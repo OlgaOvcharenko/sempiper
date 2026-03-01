@@ -73,6 +73,55 @@ _PY_KEYWORDS = frozenset(
 )
 
 
+def _find_pipeline_scope(lines: list[str]) -> set[int] | None:
+    """
+    If the script defines ``def sempipes_pipeline():``, return the set of
+    1-indexed line numbers that are inside that function's body.
+    Returns ``None`` when no such function exists (all lines are in scope).
+
+    The function body is determined by indentation: body lines have at least
+    as much indentation as the first non-blank line after the ``def``.
+    Once a dedented non-blank line is seen, the body has ended.
+    """
+    pip_def_re = re.compile(r"^def\s+sempipes_pipeline\s*\(")
+    func_start_idx = None  # 0-indexed
+    for i, line in enumerate(lines):
+        if pip_def_re.match(line):
+            func_start_idx = i
+            break
+    if func_start_idx is None:
+        return None  # No scoped function; all lines are in scope
+
+    # Determine body indentation from first non-blank line after the def
+    body_indent: int | None = None
+    for i in range(func_start_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped and not stripped.startswith("#"):
+            body_indent = len(lines[i]) - len(lines[i].lstrip())
+            break
+    if not body_indent:
+        return set()  # Empty or trivial function
+
+    scope: set[int] = set()
+    pending_blanks: list[int] = []
+    for i in range(func_start_idx + 1, len(lines)):
+        line_no = i + 1  # 1-indexed
+        line = lines[i]
+        if not line.strip():
+            pending_blanks.append(line_no)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent >= body_indent:
+            scope.update(pending_blanks)
+            pending_blanks = []
+            scope.add(line_no)
+        else:
+            # Dedented back to module level – function has ended
+            pending_blanks = []
+            break
+    return scope
+
+
 def _find_call_ranges(text: str) -> list[_RawEntry]:
     """Find sempipe-style calls. Returns list of _RawEntry."""
     results: list[_RawEntry] = []
@@ -108,7 +157,13 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
         # Both start and end are 0-indexed from regex match; convert to 1-indexed for Monaco
         results.append(_RawEntry(line_no, start + 1, line_no, end + 1, node_id, node_type, label))
 
+    # If the script defines def sempipes_pipeline():, restrict node extraction to that body.
+    scope = _find_pipeline_scope(lines)
+
     for one_indexed_line, line in enumerate(lines, start=1):
+        # Skip lines outside the pipeline function scope (when a scoped function was found)
+        if scope is not None and one_indexed_line not in scope:
+            continue
         # Only match in code; ignore content after first # (line comment)
         comment_start = line.find("#")
         search_line = line[:comment_start] if comment_start >= 0 else line
@@ -233,18 +288,20 @@ def _extract_produces_consumes(
         if first_arg_match:
             consumes.append(first_arg_match.group(1))
         return produces, consumes
-    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample|groupby|merge|drop)
+    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample|skb.drop|groupby|merge|drop)
+    # Note: skb.drop must appear before drop so "augmented.skb.drop(" captures "augmented" not "skb"
     receiver_match = re.search(
-        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample|groupby|merge|drop)\s*\(", line
+        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample|skb\.drop|groupby|merge|drop)\s*\(", line
     )
     if receiver_match:
         consumes.append(receiver_match.group(1))
-    # For merge, also consume the first argument (the other dataframe being merged)
+    # For merge, consume ALL merge arguments (handles chained .merge().merge() on one line)
     if node_label == "merge":
         search_text = (line_context or line)
-        merge_arg_match = re.search(r"\.merge\s*\(\s*(\w+)", search_text)
-        if merge_arg_match and merge_arg_match.group(1) not in consumes:
-            consumes.append(merge_arg_match.group(1))
+        for m in re.finditer(r"\.merge\s*\(\s*(\w+)", search_text):
+            arg = m.group(1)
+            if arg not in consumes:
+                consumes.append(arg)
 
     if node_label == "optimise_colopro":
         search_text = (line_context or line)
