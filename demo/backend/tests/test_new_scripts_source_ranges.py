@@ -655,9 +655,14 @@ class TestFraudScriptSourceRanges:
         assert len(self.nodes) > 0, "fraud script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 13 nodes for the fraud script."""
-        assert len(self.nodes) == 13, (
-            f"Expected 13 nodes, got {len(self.nodes)}: "
+        """Parser must return exactly 14 nodes for the fraud script.
+
+        The 14 nodes are: 2 vars, as_y, as_X, sem_fillna, groupby,
+        sem_extract_features, merge, sem_gen_features, skb.apply_func,
+        2x skb.apply, sem_agg_features, drop.
+        """
+        assert len(self.nodes) == 14, (
+            f"Expected 14 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -760,6 +765,19 @@ class TestFraudScriptSourceRanges:
         assert sr.start_column == 35, f"Expected start_col 35, got {sr.start_column}"
         assert sr.end_column == 53, f"Expected end_col 53, got {sr.end_column}"
         assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_agg_features("
+
+    def test_skb_apply_func_line_and_column(self):
+        """products.skb.apply_func(shapiro_test)  →  line 106, cols 13-29"""
+        func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
+        assert len(func_nodes) == 1, (
+            f"Expected 1 skb.apply_func node, got {len(func_nodes)}"
+        )
+        sr = func_nodes[0].source_range
+        assert sr is not None
+        assert sr.start_line == 106, f"Expected line 106, got {sr.start_line}"
+        assert sr.start_column == 13, f"Expected start_col 13, got {sr.start_column}"
+        assert sr.end_column == 29, f"Expected end_col 29, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, func_nodes[0]) == ".skb.apply_func("
 
     # --- pandas / skb operations --------------------------------------------
 
@@ -871,9 +889,13 @@ class TestHousePricesScriptSourceRanges:
         assert len(self.nodes) > 0, "house_prices script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 12 nodes for the house_prices script."""
-        assert len(self.nodes) == 12, (
-            f"Expected 12 nodes, got {len(self.nodes)}: "
+        """Parser must return exactly 13 nodes for the house_prices script.
+
+        The 13 nodes are: 3 vars, merge, as_y, as_X, drop, sem_clean,
+        sem_extract_features, sem_gen_features, 2x skb.apply, skb.apply_func.
+        """
+        assert len(self.nodes) == 13, (
+            f"Expected 13 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -1029,6 +1051,19 @@ class TestHousePricesScriptSourceRanges:
         lines = sorted(n.source_range.start_line for n in apply_nodes if n.source_range)
         assert lines == [71, 82], f"Expected lines [71, 82], got {lines}"
 
+    def test_skb_apply_func_line_and_column(self):
+        """predictions.skb.apply_func(analyze_house_prices, ...)  →  line 126, cols 16-32"""
+        func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
+        assert len(func_nodes) == 1, (
+            f"Expected 1 skb.apply_func node, got {len(func_nodes)}"
+        )
+        sr = func_nodes[0].source_range
+        assert sr is not None
+        assert sr.start_line == 126, f"Expected line 126, got {sr.start_line}"
+        assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
+        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, func_nodes[0]) == ".skb.apply_func("
+
     # --- document order sanity -----------------------------------------------
 
     def test_pipeline_nodes_in_document_order(self):
@@ -1078,14 +1113,17 @@ class TestMuseumsScriptSourceRanges:
         assert len(self.nodes) > 0, "museums script should produce nodes"
 
     def test_exact_node_count(self):
-        """Parser must return exactly 10 nodes for the museums script.
+        """Parser must return exactly 12 nodes for the museums script.
 
-        All 10 nodes are inside sempipes_pipeline().  The data-prep drop at
-        line 248 (museum_objects.drop(...)) is outside the function and must
-        NOT appear in the graph (see test_drop_data_prep_outside_pipeline_excluded).
+        The 12 nodes are: artworks var, 2x skb.apply_func (lines 191 & 225),
+        as_y, as_X, drop (inline in as_X), sem_extract_features,
+        sem_gen_features, sem_refine, drop (inner), 2x skb.apply.
+        The data-prep drop at line 248 (museum_objects.drop(...)) is outside
+        sempipes_pipeline() and must NOT appear in the graph (see
+        test_drop_data_prep_outside_pipeline_excluded).
         """
-        assert len(self.nodes) == 10, (
-            f"Expected 10 nodes, got {len(self.nodes)}: "
+        assert len(self.nodes) == 12, (
+            f"Expected 12 nodes, got {len(self.nodes)}: "
             f"{[n.label for n in self.nodes]}"
         )
 
@@ -1101,6 +1139,41 @@ class TestMuseumsScriptSourceRanges:
         assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
         assert sr.end_column == 26, f"Expected end_col 26, got {sr.end_column}"
         assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "skrub.var("
+
+    # --- skb.apply_func nodes ------------------------------------------------
+
+    def test_skb_apply_func_first_line_and_column(self):
+        """artworks = artworks.skb.apply_func(apply_spacy_features)  →  line 191, cols 24-40"""
+        func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
+        node = next(
+            (n for n in func_nodes if n.source_range and n.source_range.start_line == 191),
+            None,
+        )
+        assert node is not None, "Expected skb.apply_func node at line 191"
+        sr = node.source_range
+        assert sr.start_column == 24, f"Expected start_col 24, got {sr.start_column}"
+        assert sr.end_column == 40, f"Expected end_col 40, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply_func("
+
+    def test_skb_apply_func_second_line_and_column(self):
+        """artwork_data = artwork_data.skb.apply_func(fill_missing_values)  →  line 225, cols 32-48"""
+        func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
+        node = next(
+            (n for n in func_nodes if n.source_range and n.source_range.start_line == 225),
+            None,
+        )
+        assert node is not None, "Expected skb.apply_func node at line 225"
+        sr = node.source_range
+        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
+        assert sr.end_column == 48, f"Expected end_col 48, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply_func("
+
+    def test_two_skb_apply_func_nodes_on_lines_191_and_225(self):
+        """The two skb.apply_func calls must be on lines 191 and 225."""
+        func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
+        assert len(func_nodes) == 2, f"Expected 2 skb.apply_func nodes, got {len(func_nodes)}"
+        lines = sorted(n.source_range.start_line for n in func_nodes if n.source_range)
+        assert lines == [191, 225], f"Expected lines [191, 225], got {lines}"
 
     # --- as_y / as_X ---------------------------------------------------------
 
