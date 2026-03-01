@@ -1,8 +1,8 @@
 """
 Extract real data summaries by executing script subparts.
 
-For input nodes and non-semantic operators, we execute the script up to that point
-to get actual DataFrame statistics instead of mock data.
+For input nodes, we execute the script up to that point to get actual DataFrame statistics.
+Returns None when execution fails — callers must NOT fall back to fake/placeholder data.
 """
 
 import hashlib
@@ -141,7 +141,7 @@ def get_data_summary(
         cache_dir: Optional cache directory for storing results
 
     Returns:
-        Dict with schema, sample, row_count. Falls back to mock if execution fails.
+        Dict with schema, sample, row_count, or None if execution fails.
     """
     # Extract script subpart
     script_part = _extract_script_up_to_line(script, end_line)
@@ -158,19 +158,15 @@ def get_data_summary(
             try:
                 with open(cache_file, 'r') as f:
                     cached = json.load(f)
-                    return cached.get("summary", _fallback_summary(variable_name))
+                    return cached.get("summary")
             except (json.JSONDecodeError, IOError):
                 pass
 
     # Execute and extract
     summary = _execute_and_extract_summary(script_part, variable_name)
 
-    # If execution failed, use fallback
-    if summary is None:
-        summary = _fallback_summary(variable_name)
-
-    # Cache result
-    if cache_file:
+    # Cache result (only when we have real data)
+    if summary is not None and cache_file:
         try:
             with open(cache_file, 'w') as f:
                 json.dump({"summary": summary}, f)
@@ -178,12 +174,3 @@ def get_data_summary(
             pass
 
     return summary
-
-
-def _fallback_summary(variable_name: str) -> dict:
-    """Fallback mock summary when real execution fails."""
-    return {
-        "schema": [{"name": "ID", "dtype": "int64"}],
-        "sample": [{"ID": i} for i in range(1, 6)],
-        "row_count": 5000
-    }

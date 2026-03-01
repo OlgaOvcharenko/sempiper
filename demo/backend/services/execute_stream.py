@@ -34,6 +34,7 @@ _SKRUB_GRAPH_END = "##END##"
 _SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 _NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
 _EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
+_NODE_INPUT_SUMMARY_MARKER = "##NODE_INPUT_SUMMARY##"
 
 
 def _parse_captured_codes_from_stdout(stdout_str: str) -> list[dict]:
@@ -144,21 +145,29 @@ def _parse_execution_stats_from_stdout(stdout_str: str) -> dict | None:
     return None
 
 
-def _mock_input_summary(node_id: str, label: str) -> dict:
-    """Return mock schema, sample rows, and row count for an input node (demo; no real data)."""
-    if label == "as_y":
-        return {
-            "node_id": node_id,
-            "schema": [{"name": "target", "dtype": "int64"}],
-            "sample": [{"target": 0}, {"target": 1}, {"target": 0}, {"target": 1}, {"target": 0}],
-            "row_count": 5000,
-        }
-    return {
-        "node_id": node_id,
-        "schema": [{"name": "ID", "dtype": "int64"}],
-        "sample": [{"ID": 1}, {"ID": 2}, {"ID": 3}, {"ID": 4}, {"ID": 5}],
-        "row_count": 5000,
-    }
+def _parse_node_input_summaries_from_stdout(stdout_str: str) -> dict[str, dict]:
+    """
+    Parse ##NODE_INPUT_SUMMARY##\\n{json}\\n##END## blocks from runner stdout.
+    Returns dict keyed by var_name -> {schema, sample, row_count}.
+    Only real data is emitted by the runner; no placeholders are expected.
+    """
+    result: dict[str, dict] = {}
+    pattern = re.compile(
+        re.escape(_NODE_INPUT_SUMMARY_MARKER) + r"\s*\n([^\n]+)\n" + re.escape(_SKRUB_GRAPH_END)
+    )
+    for m in pattern.finditer(stdout_str):
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict) and "var_name" in obj and "schema" in obj:
+                var_name = obj["var_name"]
+                result[var_name] = {
+                    "schema": obj["schema"],
+                    "sample": obj.get("sample", []),
+                    "row_count": obj.get("row_count", 0),
+                }
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return result
 
 
 def _merge_compile_inputs_into_skrub_graph(
@@ -562,6 +571,7 @@ def stream_execute_events(
         graph_from_run: dict | None = None
         svg_from_run: str | None = None
         node_previews: list[dict] = []
+        runner_input_summaries: dict[str, dict] = {}
         e2e_mode = os.environ.get("DEMO_E2E") == "1"
         if e2e_mode:
             logger.info("E2E mode: skipping subprocess, using fallback graph and mock code")
@@ -643,11 +653,12 @@ def stream_execute_events(
                     logger.info(f"Stdout preview: {decoded[:200]}")
                 # Check for subprocess failure
                 exec_failed = (proc.returncode != 0)
-                # Extract skrub graph dict (##SKRUB_GRAPH##), native SVG (##SKRUB_GRAPH_SVG##), node previews (##NODE_PREVIEW##), and execution stats (##EXECUTION_STATS##)
+                # Extract skrub graph dict (##SKRUB_GRAPH##), native SVG (##SKRUB_GRAPH_SVG##), node previews (##NODE_PREVIEW##), execution stats (##EXECUTION_STATS##), and input summaries (##NODE_INPUT_SUMMARY##)
                 if decoded:
                     graph_from_run = _parse_skrub_graph_from_stdout(decoded)
                     svg_from_run = _parse_skrub_svg_from_stdout(decoded)
                     node_previews = _parse_node_previews_from_stdout(decoded)
+                    runner_input_summaries = _parse_node_input_summaries_from_stdout(decoded)
                     exec_stats = _parse_execution_stats_from_stdout(decoded)
                     if exec_stats:
                         total_cost_usd = exec_stats.get("cost_usd", 0.0)
@@ -716,41 +727,44 @@ def stream_execute_events(
             # Determine if this is a semantic (code-generating) operator
             is_semantic = node.type != "input" and _is_semantic_operator(node.label)
 
-            if node.type == "input" or not is_semantic:
-                # Input nodes and non-semantic operators: emit data summary
-                # Try to get real data summary by executing script up to this point
+            if node.type == "input":
+                # Input nodes: emit real data summary when available.
+                # Priority: runner-captured data (from ##NODE_INPUT_SUMMARY##) >
+                #           get_data_summary (separate subprocess for vars with inline defaults).
+                # Never emit placeholder data.
+                var_name = None
+                if "<Var '" in node.label:
+                    match = re.search(r"<Var '([^']+)'>", node.label)
+                    if match:
+                        var_name = match.group(1)
+
                 summary = None
-                if node.source_range and node.source_range.end_line:
-                    # Extract variable name from label (e.g., "<Var 'products'>" -> "products")
-                    var_name = None
-                    if node.type == "input" and "<Var '" in node.label:
-                        # Extract from "<Var 'products'>" format
-                        import re
-                        match = re.search(r"<Var '([^']+)'>", node.label)
-                        if match:
-                            var_name = match.group(1)
-
-                    if var_name:
-                        # Get real data summary from execution
-                        cache_dir = os.path.join(_BACKEND_ROOT, ".cache") if cache_key else None
-                        try:
-                            summary = get_data_summary(
-                                input_code,
-                                var_name,
-                                node.source_range.end_line,
-                                cache_dir=cache_dir
-                            )
+                if var_name and var_name in runner_input_summaries:
+                    # Best path: runner already evaluated the pipeline and captured real data
+                    summary = dict(runner_input_summaries[var_name])
+                    summary["node_id"] = display_id
+                elif var_name and node.source_range and node.source_range.end_line:
+                    # Fallback: run partial script to evaluate vars with inline default values
+                    cache_dir = os.path.join(_BACKEND_ROOT, ".cache") if cache_key else None
+                    try:
+                        summary = get_data_summary(
+                            input_code,
+                            var_name,
+                            node.source_range.end_line,
+                            cache_dir=cache_dir
+                        )
+                        if summary is not None:
                             summary["node_id"] = display_id
-                        except Exception as e:
-                            logger.warning(f"Failed to get real data summary for {var_name}: {e}")
-                            summary = None
+                    except Exception as e:
+                        logger.warning(f"Failed to get real data summary for {var_name}: {e}")
 
-                # Fall back to mock if real data extraction failed
-                if summary is None:
-                    summary = _mock_input_summary(display_id, node.label)
-
-                yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
-                time.sleep(0.1)
+                if summary is not None:
+                    yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
+                    time.sleep(0.1)
+            elif not is_semantic:
+                # Non-semantic operators (subsample, eval, etc.): no input_summary emitted.
+                # Their output data is captured as node_data via ##NODE_PREVIEW## blocks.
+                pass
             else:
                 # Semantic operators: emit generated code
                 skid = compile_to_skrub.get(node.id) if compile_to_skrub else None
