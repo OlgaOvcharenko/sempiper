@@ -187,6 +187,7 @@ _SKRUB_GRAPH_END = "##END##"
 _SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 _NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
 _EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
+_NODE_INPUT_SUMMARY_MARKER = "##NODE_INPUT_SUMMARY##"
 
 # Global list to accumulate LLM costs during execution
 _execution_costs: list[float] = []
@@ -600,6 +601,69 @@ def _get_skrub_dag_dict(code, globals_dict):
     return graph_dict, svg_str, previews
 
 
+def _df_to_summary(df, var_name: str) -> dict | None:
+    """Convert a pandas DataFrame to a JSON-serialisable summary dict."""
+    try:
+        schema = [{"name": str(col), "dtype": str(df[col].dtype)} for col in df.columns]
+        sample = df.head(5).to_dict(orient="records")
+        for row in sample:
+            for key, val in list(row.items()):
+                if hasattr(val, "item"):  # numpy scalar
+                    row[key] = val.item()
+                elif val is None or (isinstance(val, float) and (val != val)):  # NaN
+                    row[key] = None
+                elif not isinstance(val, (str, int, float, bool, type(None))):
+                    row[key] = str(val)
+        return {"var_name": var_name, "schema": schema, "sample": sample, "row_count": len(df)}
+    except Exception as e:
+        print(f"Warning: Could not summarise {var_name}: {e}", file=sys.stderr)
+        return None
+
+
+def _extract_var_input_summaries(g: dict) -> list[dict]:
+    """
+    Extract real data summaries for pipeline input variables after exec().
+
+    Looks in two places (in priority order):
+    1. g["env"] — set by pipeline.skb.get_data(); contains the actual DataFrames fed to
+       the pipeline (e.g. env["products"] = dataset.products).
+    2. g directly — plain DataFrame variables assigned at script top-level.
+
+    Returns list of dicts: {var_name, schema, sample, row_count}.
+    Never returns placeholder data — skips variables that cannot be summarised.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+
+    summaries: list[dict] = []
+    seen: set[str] = set()
+
+    # Priority 1: g["env"] (pipeline data environment)
+    env = g.get("env")
+    if isinstance(env, dict):
+        for var_name, val in env.items():
+            if isinstance(var_name, str) and not var_name.startswith("_"):
+                if isinstance(val, pd.DataFrame):
+                    s = _df_to_summary(val, var_name)
+                    if s:
+                        summaries.append(s)
+                        seen.add(var_name)
+
+    # Priority 2: top-level DataFrame variables in g
+    for var_name, val in g.items():
+        if var_name in seen or var_name.startswith("_") or not isinstance(var_name, str):
+            continue
+        if isinstance(val, pd.DataFrame):
+            s = _df_to_summary(val, var_name)
+            if s:
+                summaries.append(s)
+                seen.add(var_name)
+
+    return summaries
+
+
 def main():
     code = sys.stdin.read()
 
@@ -623,6 +687,14 @@ def main():
             exec_failed = True
     exec_duration_ms = (time.perf_counter() - exec_start) * 1000
     total_cost_usd = sum(_per_operator_costs)
+
+    # Emit real data summaries for input variables (from g["env"] or top-level DataFrames).
+    # Only emitted when actual data is available — never placeholder/fake data.
+    input_summaries = _extract_var_input_summaries(g)
+    for s in input_summaries:
+        print(_NODE_INPUT_SUMMARY_MARKER)
+        print(json.dumps(s))
+        print(_SKRUB_GRAPH_END)
 
     # Extract skrub DAG first so we can emit skrub_node_id with each code block (fixes code-to-node mapping).
     graph_dict, svg_str, previews = _get_skrub_dag_dict(code, g)
