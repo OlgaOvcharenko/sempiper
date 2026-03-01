@@ -38,6 +38,28 @@ def _line_context(lines: list[str], start_line: int, extra_lines: int = 4) -> st
     end = min(start_line + extra_lines, len(lines) + 1)
     return "\n".join(lines[start_line - 1 : end])
 
+
+def _extract_call_text(lines: list[str], one_indexed_line: int, call_start: int) -> str:
+    """Return text from call_start (0-indexed col) through the matching closing paren.
+
+    Stops at the first unbalanced closing paren so the result contains exactly
+    the text of one function call.  Looks ahead at most 12 lines.
+    """
+    depth = 0
+    chars: list[str] = []
+    for i in range(one_indexed_line - 1, min(one_indexed_line + 11, len(lines))):
+        col_start = call_start if i == one_indexed_line - 1 else 0
+        for ch in lines[i][col_start:]:
+            chars.append(ch)
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return "".join(chars)
+        chars.append("\n")
+    return "".join(chars)
+
 # Patterns for "this line contains a pipeline node" (used to skip when building depends_on)
 _NODE_PATTERNS = (
     r"skrub\.var\s*\(",
@@ -53,6 +75,7 @@ _NODE_PATTERNS = (
     r"\.sem_refine\s*\(",
     r"\.sem_select\s*\(",
     r"\.sem_distill\s*\(",
+    r"\.skb\.apply_func\s*\(",
     r"\.skb\.apply\s*\(",
     r"\.skb\.apply_with_sem_choose\s*\(",
     r"\.skb\.eval\s*\(",
@@ -141,6 +164,7 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     sem_select_pat = re.compile(r"\.sem_select\s*\(")
     sem_distill_pat = re.compile(r"\.sem_distill\s*\(")
     apply_with_sem_choose_pat = re.compile(r"\.skb\.apply_with_sem_choose\s*\(")
+    skb_apply_func_pat = re.compile(r"\.skb\.apply_func\s*\(")
     skb_apply_pat = re.compile(r"\.skb\.apply\s*\(")
     skb_eval_pat = re.compile(r"\.skb\.eval\s*\(")
     sem_choose_pat = re.compile(r"\bsem_choose\s*\(")
@@ -230,6 +254,8 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
                 "operator",
                 "apply_with_sem_choose",
             )
+        for m in skb_apply_func_pat.finditer(search_line):
+            add(one_indexed_line, m.start(), m.end(), f"skb_apply_func_{one_indexed_line}", "operator", "skb.apply_func")
         for m in skb_apply_pat.finditer(search_line):
             add(one_indexed_line, m.start(), m.end(), f"skb_apply_{one_indexed_line}", "operator", "skb.apply")
         for m in skb_eval_pat.finditer(search_line):
@@ -288,10 +314,11 @@ def _extract_produces_consumes(
         if first_arg_match:
             consumes.append(first_arg_match.group(1))
         return produces, consumes
-    # Method call: search full line for (\w+)\.(sem_fillna|...|skb.eval|skb.subsample|skb.drop|groupby|merge|drop)
-    # Note: skb.drop must appear before drop so "augmented.skb.drop(" captures "augmented" not "skb"
+    # Method call: search full line for receiver before the method.
+    # Note: more specific patterns (skb.apply_func, skb.drop) must appear before their prefixes
+    # (skb.apply, drop) in the alternation so the correct receiver is captured.
     receiver_match = re.search(
-        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample|skb\.drop|groupby|merge|drop)\s*\(", line
+        r"(\w+)\.(?:sem_fillna|sem_gen_features|sem_extract_features|sem_clean|sem_augment|sem_agg_features|sem_refine|sem_select|sem_distill|skb\.apply_func|skb\.apply(?:_with_sem_choose)?|skb\.eval|skb\.subsample|skb\.drop|groupby|merge|drop)\s*\(", line
     )
     if receiver_match:
         consumes.append(receiver_match.group(1))
@@ -312,11 +339,20 @@ def _extract_produces_consumes(
                  consumes.append(dag_sink_match.group(1))
         # TODO: Handle positional? Usually dag_sink is first.
     if node_label == "apply_with_sem_choose":
-        # y= may be on same line or next few lines (multi-line call)
+        # y= may be on same line or next few lines (multi-line call); capture the target variable
         search_text = (line_context or line)
         y_match = re.search(r"\by\s*=\s*(\w+)", search_text)
         if y_match and y_match.group(1) not in consumes:
             consumes.append(y_match.group(1))
+    # skb.apply y= is handled via _extract_call_text in _infer_edges_from_flow (pass 4) to
+    # avoid false positives when a nearby skb.apply call's y= bleeds into line_context.
+    if node_label == "sem_agg_features":
+        # First positional argument is the "other" dataframe to aggregate from;
+        # capture it so the producer → sem_agg_features edge is created.
+        search_text = (line_context or line)
+        agg_arg_match = re.search(r"\.sem_agg_features\s*\(\s*(\w+)", search_text)
+        if agg_arg_match and agg_arg_match.group(1) not in consumes:
+            consumes.append(agg_arg_match.group(1))
     return produces, consumes
 
 
@@ -326,14 +362,20 @@ def _rhs_identifiers(rhs: str) -> list[str]:
     return [t for t in tokens if t not in _PY_KEYWORDS]
 
 
-def _build_depends_on(lines: list[str]) -> dict[str, list[str]]:
+def _build_depends_on(lines: list[str], *, scope: set[int] | None = None) -> dict[str, list[str]]:
     """
     For lines that assign a var from an expression with no pipeline call, record
     depends_on[lhs] = list of vars from RHS that are "known" (assigned earlier).
+
+    When *scope* is provided (a set of 1-based line numbers), only lines inside
+    the pipeline function body are scanned, skipping class definitions, helper
+    functions, and module-level boilerplate that appear outside it.
     """
     depends_on: dict[str, list[str]] = {}
     known: set[str] = set()
-    for line in lines:
+    for i, line in enumerate(lines, start=1):
+        if scope is not None and i not in scope:
+            continue
         if _HAS_NODE_RE.search(line):
             # This line has a node; LHS will be added to known when we process nodes
             match = re.match(r"^\s*(\w+)\s*=", line)
@@ -384,13 +426,81 @@ def _add_edge(
         edges.append(CompileEdge(source=source, target=target))
 
 
-def _infer_edges_from_flow(raw: list[_RawEntry], lines: list[str]) -> list[CompileEdge]:
+def _find_return_var(lines: list[str], scope: set[int] | None) -> str | None:
+    """Return the variable name in 'return <var>' within the pipeline scope."""
+    return_re = re.compile(r"^\s*return\s+(\w+)\s*(?:#.*)?$")
+    for i, line in enumerate(lines):
+        line_no = i + 1
+        if scope is not None and line_no not in scope:
+            continue
+        m = return_re.match(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _prune_dead_branches(
+    nodes: list[CompileNode],
+    edges: list[CompileEdge],
+    final_node_id: str | None,
+    *,
+    prune_isolated: bool = True,
+) -> tuple[list[CompileNode], list[CompileEdge]]:
+    """Remove dead-branch nodes that are not the intended pipeline output.
+
+    Two kinds are removed:
+    1. Isolated nodes — no edges at all (e.g. a chained .drop() on a
+       continuation line where the parser cannot resolve receiver or LHS).
+       Only applied when *prune_isolated* is True (i.e. the script defines
+       sempipes_pipeline(), so the parser can reliably tell dead nodes apart
+       from parse failures on module-level backslash continuations).
+    2. Dead-end nodes — have incoming edges but no outgoing edges — that are
+       NOT the final output node.  Only applied when *final_node_id* is known
+       (identified via the 'return <var>' statement in sempipes_pipeline()).
+    """
+    if not nodes:
+        return nodes, edges
+
+    sources = {e.source for e in edges}
+    nodes_in_edges = sources | {e.target for e in edges}
+    to_remove: set[str] = set()
+
+    # 1. Isolated nodes (no edges at all) — only when we trust the scope
+    if prune_isolated:
+        for n in nodes:
+            if n.id not in nodes_in_edges:
+                to_remove.add(n.id)
+
+    # 2. Dead-end nodes that are not the final output node
+    if final_node_id and final_node_id in {n.id for n in nodes}:
+        for n in nodes:
+            if n.id == final_node_id or n.id in to_remove:
+                continue
+            if n.id not in sources:  # no outgoing edges → dead end
+                to_remove.add(n.id)
+
+    if not to_remove:
+        return nodes, edges
+
+    new_nodes = [n for n in nodes if n.id not in to_remove]
+    new_edges = [
+        e for e in edges
+        if e.source not in to_remove and e.target not in to_remove
+    ]
+    return new_nodes, new_edges
+
+
+def _infer_edges_from_flow(
+    raw: list[_RawEntry], lines: list[str], *, scope: set[int] | None = None
+) -> tuple[list[CompileEdge], dict[str, str]]:
     """
     Infer DAG edges from data flow: who produces a var and who consumes it.
     Build var_producer in document order; resolve consumes for each node; ensure
     as_X/as_y get edges from subsample; add sem_choose -> apply_with_sem_choose.
+
+    Returns (edges, var_producer) so callers can identify the final output node.
     """
-    depends_on = _build_depends_on(lines)
+    depends_on = _build_depends_on(lines, scope=scope)
     var_producer: dict[str, str] = {}
     edges: list[CompileEdge] = []
     seen: set[tuple[str, str]] = set()
@@ -430,6 +540,38 @@ def _infer_edges_from_flow(raw: list[_RawEntry], lines: list[str]) -> list[Compi
                 continue
             break
 
+    # Pass 3: inline drop-in-argument → as_X/as_y
+    # When as_X(df.drop(...), ...) or as_y(df.drop(...), ...), the drop result is the actual
+    # input to as_X/as_y, so add edge drop_node → as_X/as_y.  We detect this by checking
+    # whether the as_X/as_y line-context contains "identifier.drop(" as the first argument.
+    inline_drop_re = re.compile(r"(?:as_X|as_y)\s*\(\s*\w+\.drop\s*\(")
+    for r in raw:
+        if r.label not in ("as_X", "as_y"):
+            continue
+        ctx = _line_context(lines, r.start_line)
+        if not inline_drop_re.search(ctx):
+            continue
+        # Find a drop raw entry whose start line falls within the as_X call's context window
+        for drop_r in raw:
+            if drop_r.label != "drop":
+                continue
+            if r.start_line <= drop_r.start_line <= r.start_line + 8:
+                _add_edge(edges, seen, drop_r.node_id, r.node_id)
+
+    # Pass 4: y= argument of skb.apply (call-scoped to avoid false edges from nearby calls)
+    # Uses _extract_call_text so the y= search is bounded to the current call's parentheses.
+    _y_kw_re = re.compile(r"\by\s*=\s*(\w+)")
+    for r in raw:
+        if r.label != "skb.apply":
+            continue
+        call_text = _extract_call_text(lines, r.start_line, r.start_col - 1)
+        y_match = _y_kw_re.search(call_text)
+        if not y_match:
+            continue
+        y_var = y_match.group(1)
+        for src_id in _resolve_producers(y_var, var_producer, depends_on, set()):
+            _add_edge(edges, seen, src_id, r.node_id)
+
     # sem_choose -> apply_with_sem_choose (choices= parameter)
     apply_nodes = [(r.start_line, r.node_id) for r in raw if r.label == "apply_with_sem_choose"]
     for r in raw:
@@ -440,13 +582,26 @@ def _infer_edges_from_flow(raw: list[_RawEntry], lines: list[str]) -> list[Compi
             _, apply_id = max(containing, key=lambda x: x[0])
             _add_edge(edges, seen, r.node_id, apply_id)
 
-    return edges
+    return edges, var_producer
 
 
-def extract_nodes_with_ranges(input_code: str) -> tuple[list[CompileNode], list[CompileEdge]]:
-    """Parse pipeline source and return graph nodes (with source ranges) and DAG edges from data flow."""
-    raw = _find_call_ranges(input_code)
+def extract_nodes_with_ranges(
+    input_code: str, *, prune: bool = True
+) -> tuple[list[CompileNode], list[CompileEdge]]:
+    """Parse pipeline source and return graph nodes (with source ranges) and DAG edges from data flow.
+
+    Args:
+        input_code: Python source code.
+        prune: If True (default) dead-branch nodes are removed via _prune_dead_branches.
+               Pass False when the caller needs the full node list as a source-range pool
+               for matching against a dynamic (skrub) graph, where isolated parse-failure
+               nodes must still be available for label-matching.
+    """
     lines = input_code.split("\n")
+    # Compute scope once; reused for _find_call_ranges filtering (via _infer_edges_from_flow),
+    # dead-branch pruning, and _find_return_var — avoids three redundant full-file scans.
+    scope = _find_pipeline_scope(lines)
+    raw = _find_call_ranges(input_code)
     seen: set[str] = set()
     nodes: list[CompileNode] = []
     for r in raw:
@@ -470,11 +625,26 @@ def extract_nodes_with_ranges(input_code: str) -> tuple[list[CompileNode], list[
         # Return empty graph - frontend shows "No computation graph yet"
         return [], []
 
-    edges = _infer_edges_from_flow(raw, lines)
+    edges, var_producer = _infer_edges_from_flow(raw, lines, scope=scope)
     # Fallback: if data flow yields no edges (e.g. snippet without assignments), use document order
     if not edges and len(nodes) > 1:
         edges = [
             CompileEdge(source=nodes[i].id, target=nodes[i + 1].id)
             for i in range(len(nodes) - 1)
         ]
+
+    if not prune:
+        return nodes, edges
+
+    # Prune dead branches: isolated nodes and dead-end non-final nodes.
+    # Isolated pruning is only safe inside sempipes_pipeline() scope; for
+    # module-level scripts (no sempipes_pipeline) a backslash-continuation
+    # groupby/merge can appear isolated to the static parser even though it IS
+    # connected in the real pipeline, so we keep it for the dynamic-merge step.
+    return_var = _find_return_var(lines, scope)
+    final_node_id = var_producer.get(return_var) if return_var else None
+    nodes, edges = _prune_dead_branches(
+        nodes, edges, final_node_id, prune_isolated=(scope is not None)
+    )
+
     return nodes, edges
