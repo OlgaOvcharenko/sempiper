@@ -394,6 +394,42 @@ def _remove_optimise_colopro_calls(script: str) -> str:
     return '\n'.join(result_lines)
 
 
+def _strip_pipeline_runner(script: str) -> str:
+    """Strip the runner boilerplate from scripts following the sempipes_pipeline() pattern.
+
+    Scripts that wrap the pipeline in a function (like fraud.py, and the new simple/medium.py)
+    have a "# Load dataset" marker followed by runner code that should not be executed during
+    graph extraction. This function strips that runner and replaces it with a direct call to
+    the pipeline function so the DataOp is available in globals.
+
+    Example transformation:
+        def sempipes_pipeline():
+            ...
+            return fraud_detector
+
+        # Load dataset
+        dataset = skrub.datasets.fetch_credit_fraud()
+        ...
+
+    Becomes:
+        def sempipes_pipeline():
+            ...
+            return fraud_detector
+
+        graph_result = sempipes_pipeline()
+    """
+    lines = script.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.strip() == "# Load dataset":
+            body = "".join(lines[:i])
+            fn_match = re.search(r"^def\s+(\w+)\s*\(\s*\)\s*:", body, re.MULTILINE)
+            if fn_match:
+                fn_name = fn_match.group(1)
+                return body + f"\ngraph_result = {fn_name}()\n"
+            return body
+    return script
+
+
 def rewrite_script_for_graph_extraction(script: str) -> str:
     """
     Rewrite a pipeline script for graph extraction without full execution.
@@ -402,12 +438,14 @@ def rewrite_script_for_graph_extraction(script: str) -> str:
     - Remove skrub.datasets.fetch_*() so we don't run dataset load during exec.
     - Strip the data argument from skrub.var(name, data) -> skrub.var(name), e.g.:
       products = skrub.var("products", dataset.products)  ->  products = skrub.var("products")
+    - Strip runner boilerplate (after "# Load dataset") for function-wrapped scripts.
 
     Transformations:
     1. skrub.datasets.fetch_*(...) -> assign None (preprocessing: no dataset load).
     2. skrub.var("name", data) -> skrub.var("name") (preprocessing: no data argument).
     3. Remove .skb.eval() calls (so we don't materialize the pipeline).
     4. Remove .skb.cross_validate() calls (so we don't run CV; keep the DataOp for graph).
+    5. Strip runner boilerplate and add pipeline function call for graph extraction.
 
     Args:
         script: Original pipeline script
@@ -415,6 +453,7 @@ def rewrite_script_for_graph_extraction(script: str) -> str:
     Returns:
         Rewritten script that can be executed to build the computation graph.
     """
+    script = _strip_pipeline_runner(script)
     script = _remove_skrub_datasets_fetches(script)
     script = _rewrite_var_calls(script)
     script = _remove_eval_calls(script)
@@ -982,15 +1021,26 @@ def _merge_source_ranges(
         # Special case: TableVectorizer maps to skb.apply
         # When skb.apply(TableVectorizer()) is called, skrub creates <Apply TableVectorizer>,
         # but static parse creates skb.apply node.
-        if key == "tablevectorizer" and "skb.apply" in label_to_ranges:
-            occurrence = label_usage.get("tablevectorizer_to_skb_apply", 0)
-            ranges = label_to_ranges["skb.apply"]
-            if occurrence < len(ranges):
-                source_range = ranges[occurrence]
-                label_usage["tablevectorizer_to_skb_apply"] = occurrence + 1
-                effective_label = node.label
-                key = "tablevectorizer_matched"
-                getitem_needs_matching = False  # Already matched
+        # Also handles apply_with_sem_choose from relabeling <Apply MLEstimator>
+        # (e.g. skb.apply(HistGradientBoostingClassifier(), y=...)): no direct apply_with_sem_choose
+        # in static nodes, so fall back to the next available skb.apply range.
+        # Both cases share the same "skb_apply_consumed" counter to avoid double-consuming.
+        if key in ("tablevectorizer", "apply_with_sem_choose") and "skb.apply" in label_to_ranges:
+            # For apply_with_sem_choose: only fall back to skb.apply when no direct static match
+            if key == "apply_with_sem_choose" and "apply_with_sem_choose" in label_to_ranges:
+                pass  # Direct match will be handled in the elif below
+            else:
+                occurrence = label_usage.get("skb_apply_consumed", 0)
+                ranges = label_to_ranges["skb.apply"]
+                if occurrence < len(ranges):
+                    source_range = ranges[occurrence]
+                    label_usage["skb_apply_consumed"] = occurrence + 1
+                    # Also keep legacy counter for tablevectorizer for backwards compat
+                    if key == "tablevectorizer":
+                        label_usage["tablevectorizer_to_skb_apply"] = label_usage["skb_apply_consumed"]
+                    effective_label = node.label
+                    key = f"{key}_matched"
+                    getitem_needs_matching = False  # Already matched
 
         # Special case: Chained pandas methods (agg, reset_index) map to their parent operation
         # e.g., .agg() and .reset_index() after .groupby() should use groupby's LINE,
@@ -1160,9 +1210,12 @@ def compile_script_to_graph_dynamic(
     Returns:
         GraphResult with nodes, edges, and validation_errors.
     """
-    # Single static parse for source ranges (reused in merge step; avoids duplicate compile_script_to_graph)
+    # Static parse for source-range pool used in the merge step.
+    # Use prune=False so that backslash-continuation nodes (groupby, merge, etc.)
+    # that are isolated in the static graph are still available for label-matching
+    # against the dynamic (skrub) graph nodes.
     t0 = time.perf_counter()
-    static_nodes, _ = extract_nodes_with_ranges(script)
+    static_nodes, _ = extract_nodes_with_ranges(script, prune=False)
     if timings_out is not None:
         timings_out["static_ms"] = (time.perf_counter() - t0) * 1000
 
