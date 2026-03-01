@@ -1,9 +1,10 @@
 """
 Tests for the optimizer trajectory API router (/api/optimizer/).
 
-These tests patch SEARCH_PATHS in the router module to point at a temporary
-directory, so no real .sempipes_trajectories files are required and no LLMs
-are called.
+Fixtures redirect both SEARCH_PATHS (legacy directory fallback) and
+_trajectory_cache (primary CacheService store) to temporary directories,
+so no real .sempipes_trajectories files or .cache entries are required
+and no LLMs are called.
 """
 
 import json
@@ -22,17 +23,21 @@ def client():
 
 @pytest.fixture
 def traj_dir(tmp_path):
-    """Temporary directory used as the sole trajectory search path."""
+    """Temporary directory used as the sole legacy trajectory search path."""
     d = tmp_path / ".sempipes_trajectories"
     d.mkdir()
     return d
 
 
 @pytest.fixture(autouse=True)
-def patch_search_paths(traj_dir, monkeypatch):
-    """Redirect SEARCH_PATHS in the optimizer router to the temp directory."""
+def patch_optimizer_stores(traj_dir, tmp_path, monkeypatch):
+    """Redirect SEARCH_PATHS and _trajectory_cache to temp directories."""
     import routers.optimizer as opt_module
+    from services.cache.cache_service import CacheService
+
     monkeypatch.setattr(opt_module, "SEARCH_PATHS", [traj_dir])
+    temp_cache = CacheService(tmp_path / ".cache/optimizer")
+    monkeypatch.setattr(opt_module, "_trajectory_cache", temp_cache)
 
 
 SAMPLE_TRAJECTORY = {
@@ -56,6 +61,20 @@ def test_status_returns_false_when_no_files(client):
 
 def test_status_returns_true_when_file_exists(client, traj_dir):
     (traj_dir / "optimise_house_simulated.json").write_text(json.dumps(SAMPLE_TRAJECTORY))
+    resp = client.get("/api/optimizer/status")
+    assert resp.status_code == 200
+    assert resp.json() == {"active": True}
+
+
+def test_status_returns_true_when_cached(client, tmp_path, monkeypatch):
+    """Status is active when a trajectory is in the cache (no legacy file needed)."""
+    import routers.optimizer as opt_module
+    from services.cache.cache_service import CacheService
+
+    cache = CacheService(tmp_path / ".cache/optimizer_seed")
+    cache.set("optimise_house", "trajectory", {**SAMPLE_TRAJECTORY, "run_id": "seed.json"})
+    monkeypatch.setattr(opt_module, "_trajectory_cache", cache)
+
     resp = client.get("/api/optimizer/status")
     assert resp.status_code == 200
     assert resp.json() == {"active": True}
@@ -126,6 +145,24 @@ def test_by_script_picks_newest_when_multiple(client, traj_dir):
     resp = client.get("/api/optimizer/by-script?script_id=optimise_house")
     assert resp.status_code == 200
     assert resp.json()["tag"] == "new"
+
+
+def test_by_script_served_from_cache_on_second_request(client, traj_dir):
+    """Second request is served from cache; deleting the source file has no effect."""
+    source = traj_dir / "optimise_house_simulated.json"
+    source.write_text(json.dumps(SAMPLE_TRAJECTORY))
+
+    # First request seeds the cache
+    resp1 = client.get("/api/optimizer/by-script?script_id=optimise_house")
+    assert resp1.status_code == 200
+
+    # Remove the source file
+    source.unlink()
+
+    # Second request should still be served from cache
+    resp2 = client.get("/api/optimizer/by-script?script_id=optimise_house")
+    assert resp2.status_code == 200
+    assert "outcomes" in resp2.json()
 
 
 # ---------------------------------------------------------------------------
