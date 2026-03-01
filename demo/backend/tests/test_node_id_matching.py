@@ -65,18 +65,19 @@ result = products.skb.eval()
         assert node_id in runtime_node_ids, \
             f"node_id '{node_id}' should match a runtime graph node ID. Available IDs: {runtime_node_ids}"
 
-    # Also verify input_summary events use IDs from the runtime graph
+    # input_summary events are only emitted for input nodes when real data is available.
+    # With a mocked runner and undefined dataset variable, no real data is captured, so
+    # no input_summary events are expected.
     input_summary_events = [e for e in events if e.get("type") == "input_summary"]
-    assert len(input_summary_events) > 0, "Should have input_summary events for inputs and non-semantic operators"
-
     for event in input_summary_events:
         node_id = event.get("node_id", "")
         assert node_id in runtime_node_ids, \
             f"node_id '{node_id}' should match a runtime graph node ID. Available IDs: {runtime_node_ids}"
 
 
-def test_subsample_gets_data_summary_not_code():
-    """Non-semantic operators like subsample should get input_summary (data), not node_code."""
+def test_subsample_gets_node_data_not_input_summary():
+    """Non-semantic operators like subsample do NOT get input_summary — they get node_data (from node previews).
+    Semantic operators get node_code events."""
     code = """import skrub
 import sempipes
 
@@ -113,15 +114,16 @@ result = products.skb.eval()
     subsample_id = subsample_node["id"]
     sem_gen_id = sem_gen_node["id"]
 
-    # Check that subsample gets input_summary, not node_code
+    # Check events by type
     node_code_events = {e["node_id"]: e for e in events if e.get("type") == "node_code"}
     input_summary_events = {e["node_id"]: e for e in events if e.get("type") == "input_summary"}
 
-    # Subsample should have input_summary (data), NOT node_code
+    # Subsample is non-semantic: should NOT have node_code, and NOT have input_summary
+    # (its output data comes via node_data from ##NODE_PREVIEW## blocks)
     assert subsample_id not in node_code_events, \
         f"Subsample (ID: {subsample_id}) should NOT have node_code event"
-    assert subsample_id in input_summary_events, \
-        f"Subsample (ID: {subsample_id}) should have input_summary event (data summary)"
+    assert subsample_id not in input_summary_events, \
+        f"Subsample (ID: {subsample_id}) should NOT have input_summary (no fake data emitted)"
 
     # sem_gen_features should have node_code (it's semantic)
     assert sem_gen_id in node_code_events, \

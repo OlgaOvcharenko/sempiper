@@ -104,21 +104,18 @@ products = products.skb.subsample(n=50, how="random")
         "Cached summaries should have identical schemas"
 
 
-def test_fallback_to_mock_on_execution_failure():
-    """Should fall back to mock data if real execution fails."""
+def test_no_fake_data_on_execution_failure():
+    """When real data cannot be obtained, no input_summary events are emitted (no fake/placeholder data)."""
     code = """import skrub
 
-# This will fail because undefined_dataset doesn't exist
-products = skrub.var("products", undefined_dataset.products)
+# skrub.var without a default value — no data is available unless env is populated at runtime
+products = skrub.var("products")
 """
 
     # Execute
     exec_resp = client.post("/api/execute", json={"input_code": code})
-    # Execution might fail, but we should still get a response
-    # (The compile step will fail, so we might not even get to execute)
+    assert exec_resp.status_code == 200
 
-    # The key point is that we handle failures gracefully
-    # If we get events, input_summary should fall back to mock
     events = []
     for line in exec_resp.text.split("\n"):
         if line.strip().startswith("data: "):
@@ -127,9 +124,9 @@ products = skrub.var("products", undefined_dataset.products)
             except json.JSONDecodeError:
                 pass
 
-    # If we got input_summary events, they should have data (even if mock)
+    # No input_summary events should be emitted when real data is unavailable.
+    # The frontend shows "Run the pipeline to see..." in this case.
     input_summaries = [e for e in events if e.get("type") == "input_summary"]
-    for summary in input_summaries:
-        assert "schema" in summary
-        assert "sample" in summary
-        assert "row_count" in summary
+    assert len(input_summaries) == 0, (
+        f"No input_summary events should be emitted when data is unavailable; got: {input_summaries}"
+    )

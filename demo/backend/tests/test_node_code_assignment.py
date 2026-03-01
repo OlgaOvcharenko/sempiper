@@ -3,7 +3,7 @@ Tests for node code assignment logic in execute_stream.py.
 
 Verifies that:
 1. Semantic operators (sem_*, apply_with_sem_choose) receive generated code (node_code events)
-2. Non-semantic operators (subsample, eval, etc.) receive data summaries (input_summary events)
+2. Non-semantic operators (subsample, eval, etc.) receive no fake events (node_data from previews only)
 3. Code is correctly assigned to the right semantic operators (no misalignment)
 """
 

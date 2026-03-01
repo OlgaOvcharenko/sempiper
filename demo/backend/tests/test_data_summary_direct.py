@@ -57,8 +57,8 @@ products = skrub.var("products", dataset.products)
         assert summary1 == summary2, "Cached summaries should match"
 
 
-def test_data_summary_fallback_on_error():
-    """Should fall back to mock data on execution failure."""
+def test_data_summary_returns_none_on_error():
+    """When real data cannot be obtained, get_data_summary returns None (no fake/placeholder data)."""
     code = """import skrub
 
 # This will fail because undefined_dataset doesn't exist
@@ -68,10 +68,5 @@ products = skrub.var("products", undefined_dataset.products)
     with tempfile.TemporaryDirectory() as tmpdir:
         summary = get_data_summary(code, "products", 4, cache_dir=Path(tmpdir))
 
-        # Should still return a summary (fallback)
-        assert "schema" in summary
-        assert "sample" in summary
-        assert "row_count" in summary
-
-        # Will be mock data
-        assert len(summary["schema"]) >= 1
+        # Should return None when real data is unavailable — no fake data
+        assert summary is None, f"Expected None when data cannot be obtained, got: {summary}"

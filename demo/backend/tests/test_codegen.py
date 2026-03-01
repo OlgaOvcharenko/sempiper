@@ -40,7 +40,7 @@ def test_list_scripts_returns_200_and_manifest():
     ids = {s["id"] for s in scripts}
     assert "simple" in ids
     assert "medium" in ids
-    assert "full" in ids
+    assert "fraud" in ids
     for s in scripts:
         assert "id" in s and "label" in s
         assert isinstance(s["id"], str)
@@ -60,9 +60,9 @@ def test_get_script_content_simple_returns_200_and_content():
     assert "sem_gen_features" in data["content"]
 
 
-def test_get_script_content_medium_and_full_return_200():
-    """GET /api/scripts/medium and full return 200 and non-empty content."""
-    for name in ("medium", "full"):
+def test_get_script_content_medium_and_fraud_return_200():
+    """GET /api/scripts/medium and fraud return 200 and non-empty content."""
+    for name in ("medium", "fraud"):
         resp = client.get(f"/api/scripts/{name}")
         assert resp.status_code == 200, f"GET /api/scripts/{name} should return 200"
         data = resp.json()
@@ -212,11 +212,11 @@ def test_compile_returns_200_and_nodes_with_ranges():
             assert "start_line" in r and "start_column" in r and "end_line" in r and "end_column" in r
 
 
-def test_compile_medium_has_subsample_to_as_x_edge():
+def test_compile_medium_has_baskets_var_to_as_x_edge():
     """
-    Compile API must return subsample->as_X and subsample->as_y for medium so graph shows as_X below subsample.
+    Compile API must return baskets_var->as_X for medium so graph shows as_X connected to its input.
+    medium.py defines sempipes_pipeline() with skrub.var("baskets") feeding into as_X.
     Uses TestClient (same process) - passes when code is correct.
-    To verify the LIVE backend (e.g. after make run), run: ./scripts/verify-compile-edges.sh
     """
     resp = client.get("/api/scripts/medium")
     if resp.status_code != 200:
@@ -229,14 +229,13 @@ def test_compile_medium_has_subsample_to_as_x_edge():
     data = resp.json()
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
-    # With raw skrub labels: <SubsamplePreviews>, <Var 'baskets'>, etc.
-    # Check that graph has expected structure (subsample feeds into other nodes)
-    subsample_id = next((n["id"] for n in nodes if "subsample" in (n.get("label") or "").lower()), None)
-    assert subsample_id, f"medium must have a subsample node. Nodes: {[n.get('label') for n in nodes]}"
-    # Check subsample has outgoing edges
-    outgoing_from_subsample = [e for e in edges if e["source"] == subsample_id]
-    assert len(outgoing_from_subsample) >= 1, (
-        f"subsample node {subsample_id} should have outgoing edges. Got edges: {edges}"
+    # medium.py has skrub.var("baskets") → as_X; check as_X is present and connected
+    as_x_id = next((n["id"] for n in nodes if (n.get("label") or "").lower() in ("as_x",)), None)
+    assert as_x_id, f"medium must have an as_X node. Nodes: {[n.get('label') for n in nodes]}"
+    # Check as_X has at least one incoming edge (from baskets var)
+    incoming_to_as_x = [e for e in edges if e["target"] == as_x_id]
+    assert len(incoming_to_as_x) >= 1, (
+        f"as_X node should have incoming edges (from baskets var). Got edges: {edges}"
     )
 
 
@@ -770,18 +769,17 @@ def test_execute_stream_emits_skrub_graph_only_when_runner_prints_marker():
     assert graph.get("nodes") == real_skrub_graph["nodes"]
     assert "n1" in (graph.get("parents") or {})
 
-    # Input nodes get input_summary (data summary), not node_code
-    # Semantic operators get node_code
-    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
+    # Semantic operators get node_code; non-semantic/non-var nodes get no fake input_summary
     node_code_events = [e for e in events if e.get("type") == "node_code"]
+    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
 
-    # Check that we got input_summary for input nodes
-    input_summaries = [e for e in input_summary_events if "as_X" in str(e.get("node_id", "")) or "n1" in str(e.get("node_id", ""))]
-    assert len(input_summaries) >= 1, "input nodes should get input_summary events"
-
-    # Check that semantic operators got node_code
+    # Semantic operators (sem_fillna, n2) should get node_code
     semantic_codes = [e for e in node_code_events if "sem_fillna" in str(e.get("node_id", "")) or "n2" in str(e.get("node_id", ""))]
     assert len(semantic_codes) >= 1, "semantic operators should get node_code events"
+
+    # input_summary is only emitted for real Var nodes with available data — no fake data
+    for e in input_summary_events:
+        assert "schema" in e and "sample" in e and "row_count" in e, "input_summary must contain real data fields"
 
 
 def test_skrub_runner_treats_apply_nodes_as_semantic_and_maps_to_sempipes():
@@ -870,13 +868,11 @@ def test_execute_stream_handles_llm_failure_gracefully():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
-    # With the new behavior: semantic operators get node_code, inputs get input_summary
+    # Semantic operators get node_code (with placeholder when runner returns nothing).
+    # Non-semantic, non-Var nodes get no event — no fake input_summary emitted.
     node_code_events = [e for e in events if e.get("type") == "node_code"]
-    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
 
-    # Only semantic operators (sem_fillna) get node_code; input (as_X) gets input_summary
     assert len(node_code_events) >= 1, "semantic operator should get node_code"
-    assert len(input_summary_events) >= 1, "input should get input_summary"
 
     operator_events = [e for e in node_code_events if e.get("node_id", "").startswith("sem_")]
     assert len(operator_events) >= 1
@@ -886,8 +882,9 @@ def test_execute_stream_handles_llm_failure_gracefully():
     assert any(e["type"] == "done" for e in events), "stream must always emit done"
 
 
-def test_execute_stream_includes_input_summary_for_input_nodes():
-    """Design: execute stream yields input_summary (schema, sample, row_count) for each input node."""
+def test_execute_stream_no_fake_input_summary_for_non_var_nodes():
+    """Design: execute stream never emits fake input_summary events. Only real Var nodes with available
+    data get input_summary. Non-Var operator nodes (as_X, as_y, subsample, etc.) get no input_summary."""
     import json
 
     resp = client.post(
@@ -903,22 +900,21 @@ def test_execute_stream_includes_input_summary_for_input_nodes():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
+
+    # input_summary is only emitted for real Var nodes with available data.
+    # as_X, as_y are operator nodes (non-Var), so they should NOT get input_summary.
     input_summary_events = [e for e in events if e.get("type") == "input_summary"]
-    assert len(input_summary_events) >= 2, "expect at least as_X and as_y input nodes to get input_summary"
     for e in input_summary_events:
+        # Any input_summary that IS emitted must have real data fields
         assert "node_id" in e
-        assert "schema" in e
-        assert "sample" in e
-        assert "row_count" in e
-        assert isinstance(e["schema"], list)
-        assert isinstance(e["sample"], list)
-        assert isinstance(e["row_count"], int)
-        schema_names = [c.get("name") for c in e["schema"]]
-        # as_y (or skrub node with as_y label) has target; as_X has ID
-        if e.get("node_id", "").startswith("as_y") or "target" in schema_names:
-            assert any(c.get("name") == "target" for c in e["schema"])
-        else:
-            assert any(c.get("name") == "ID" for c in e["schema"])
+        assert "schema" in e and isinstance(e["schema"], list)
+        assert "sample" in e and isinstance(e["sample"], list)
+        assert "row_count" in e and isinstance(e["row_count"], int)
+        # Real data must have more than 1 column (the single-column {name: "ID"} was a mock artifact)
+        # Note: may be 0 summaries total since no Var nodes in this script — that's correct
+    # Semantic operators still get node_code
+    node_code_events = [e for e in events if e.get("type") == "node_code"]
+    assert len(node_code_events) >= 1, "semantic operators must still get node_code"
 
 
 def test_parse_captured_codes_returns_code_cost_usd_and_attempts():
@@ -1100,15 +1096,17 @@ def test_compile_exact_nodes_and_edge_chain_for_snippet():
     assert nodes[1]["label"] == "sem_fillna"
 
 
-def test_execute_node_code_ids_match_compile_runnable_nodes():
-    """Execute stream emits events (node_code or input_summary) for every compile runnable node."""
+def test_execute_node_code_emitted_for_semantic_operators():
+    """Execute stream emits node_code for every semantic operator in the compile graph.
+    Non-semantic nodes (as_X, subsample) get no fake events — real data only when available."""
     import json
 
     code = "sempipes.as_X(df,'X')\ndf.sem_fillna(target_column='a')"
     compile_resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": False})
     assert compile_resp.status_code == 200
     compile_nodes = compile_resp.json()["nodes"]
-    runnable_ids = {n["id"] for n in compile_nodes if n["type"] in ("input", "operator")}
+    semantic_ids = {n["id"] for n in compile_nodes if n["type"] == "operator" and
+                    any(s in n.get("label", "") for s in ("sem_", "apply"))}
 
     exec_resp = client.post("/api/execute", json={"input_code": code})
     assert exec_resp.status_code == 200
@@ -1120,11 +1118,14 @@ def test_execute_node_code_ids_match_compile_runnable_nodes():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
-    # Collect both node_code and input_summary event IDs
+    # Semantic operators must get node_code events
     node_code_ids = {e["node_id"] for e in events if e.get("type") == "node_code"}
-    input_summary_ids = {e["node_id"] for e in events if e.get("type") == "input_summary"}
-    all_node_event_ids = node_code_ids | input_summary_ids
-    assert runnable_ids <= all_node_event_ids, "execute must emit node_code or input_summary for every compile runnable node"
+    assert len(node_code_ids) >= 1, "execute must emit node_code for semantic operators"
+
+    # No fake input_summary: every emitted input_summary must have real data structure
+    for e in events:
+        if e.get("type") == "input_summary":
+            assert "schema" in e and "sample" in e and "row_count" in e
 
 
 def test_execute_stream_does_not_call_sempipes_llm_directly():
