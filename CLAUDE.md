@@ -151,7 +151,18 @@ The demo must use **sempipes API and operators** as the pipeline code does.
 **Tests:**
 - `test_execute_stream_does_not_call_sempipes_llm_directly` verifies this rule
 
-### 9. Cache Design
+### 9. Compile Graph is Canonical
+
+See: `.claude/rules/compile-graph-is-canonical.md`
+
+The middle panel always shows the **compile-time graph**. Execution must never replace or mutate it.
+
+- `displayGraph` must always equal `compilePreviewGraph` (from `compileToSkrubGraph`)
+- **Never** use `skrubGraphFromRun ?? compilePreviewGraph` — the runtime skrub DAG must not be shown
+- The graph only changes when **pipeline code changes** (triggers a new compile)
+- The `skrub_graph` SSE event may only update `skrubToCompileId` (node-ID mapping for the right panel)
+
+### 10. Cache Design
 
 See: `.claude/rules/cache-design.md`
 
