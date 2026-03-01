@@ -40,13 +40,12 @@ x = 1
         assert len(result.validation_errors) > 0
 
     def test_unclosed_parenthesis(self):
-        """Script with unclosed parenthesis should return empty graph."""
+        """Script with unclosed parenthesis should report an error (may fall back to static)."""
         script = """
 import skrub
 products = skrub.var("products", None
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
     def test_invalid_string_quote(self):
@@ -65,26 +64,24 @@ class TestImportErrors:
     """Test scripts with missing/invalid imports."""
 
     def test_missing_module(self):
-        """Script importing non-existent module should return empty graph."""
+        """Script importing non-existent module should report an error (may fall back to static)."""
         script = """
 import skrub
 import this_module_does_not_exist_at_all
 products = skrub.var("products", None)
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
-        assert "Execution failed" in result.validation_errors[0]
+        assert "Execution failed" in result.validation_errors[0] or "failed" in result.validation_errors[0].lower()
 
     def test_invalid_from_import(self):
-        """Script with invalid from...import should return empty graph."""
+        """Script with invalid from...import should report an error (may fall back to static)."""
         script = """
 import skrub
 from nonexistent_package import SomeClass
 products = skrub.var("products", None)
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
 
@@ -92,7 +89,7 @@ class TestRuntimeErrors:
     """Test scripts that fail during execution."""
 
     def test_undefined_variable(self):
-        """Script using undefined variable should return empty graph."""
+        """Script using undefined variable should report an error (may fall back to static)."""
         script = """
 import skrub
 products = skrub.var("products", None)
@@ -100,11 +97,10 @@ products = skrub.var("products", None)
 x = undefined_variable_that_does_not_exist
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
     def test_attribute_error(self):
-        """Script with actual attribute error during execution."""
+        """Script with actual attribute error during execution should report an error."""
         script = """
 import skrub
 # Access attribute on non-object
@@ -112,11 +108,10 @@ x = None.this_method_does_not_exist()
 products = skrub.var("products", None)
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
     def test_type_error(self):
-        """Script with type error during execution."""
+        """Script with type error during execution should report an error."""
         script = """
 import skrub
 # Cause immediate type error
@@ -124,18 +119,16 @@ x = len(123)  # len() requires sequence, not int
 products = skrub.var("products", None)
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
     def test_division_by_zero(self):
-        """Script with division by zero should return empty graph."""
+        """Script with division by zero should report an error."""
         script = """
 import skrub
 x = 1 / 0
 products = skrub.var("products", None)
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
 
@@ -319,18 +312,17 @@ class TestMixedErrorScenarios:
     """Test scripts with multiple issues."""
 
     def test_syntax_and_import_error(self):
-        """Script with both syntax and import errors."""
+        """Script with both syntax and import errors should report an error."""
         script = """
 import nonexistent_module
 if True
     x = 1
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
     def test_valid_start_then_error(self):
-        """Script that starts valid but fails during execution."""
+        """Script that starts valid but fails during execution should report error (may fall back to static)."""
         script = """
 import skrub
 products = skrub.var("products", None)
@@ -339,7 +331,6 @@ products = products.skb.subsample(n=100)
 x = undefined_variable
 """
         result = compile_script_to_graph_dynamic(script)
-        assert len(result.nodes) == 0
         assert len(result.validation_errors) > 0
 
 
@@ -382,7 +373,7 @@ price = sempipes.as_y(houses["price"], "Price")
 """
     result = compile_script_to_graph_dynamic(script)
 
-    # Should fail with import error for kagglehub
-    assert len(result.nodes) == 0
+    # Should fail with import error for kagglehub (may still return static nodes via fallback)
     assert len(result.validation_errors) > 0
-    assert "kagglehub" in result.validation_errors[0].lower()
+    combined_errors = " ".join(result.validation_errors).lower()
+    assert "kagglehub" in combined_errors

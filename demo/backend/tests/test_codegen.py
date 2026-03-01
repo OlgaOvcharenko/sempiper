@@ -399,13 +399,12 @@ def test_compile_code_with_no_pipeline_nodes_returns_empty_graph():
     assert len(edges) == 0, "code with no pipeline nodes should return empty edges"
 
 
-def test_compile_dynamic_failure_returns_empty_graph_no_fallback():
-    """When dynamic extraction fails (e.g. exec error), compile returns empty graph; no fallback to static.
+def test_compile_dynamic_failure_reports_error_and_falls_back_to_static():
+    """When dynamic extraction fails (e.g. exec error), compile falls back to static parsing.
 
-    We return empty on failing scripts (no fallback to static parsing) so the frontend
-    always sees a single source of truth: either the real skrub graph from execution,
-    or nothing. A static-only graph for runnable-but-dynamic-failing code would be
-    misleading (different structure/labels than what would actually run).
+    After luloduarte's change: dynamic failure triggers static-parse fallback.
+    The frontend receives whatever static parsing can extract plus a validation_error
+    explaining why dynamic extraction failed.
     """
     # Use a script that fails during exec (undefined name not touched by rewrite)
     code = """
@@ -416,14 +415,11 @@ basket_ids = sempipes.as_X(baskets[["ID"]], "X")
     resp = client.post("/api/compile", json={"input_code": code, "use_dynamic": True})
     assert resp.status_code == 200
     data = resp.json()
-    nodes = data.get("nodes", [])
-    edges = data.get("edges", [])
-    # Return empty graph on failure: no fallback to static, so UI gets one source of truth (real graph or nothing).
-    assert len(nodes) == 0, "dynamic failure must return empty nodes (no static fallback)"
-    assert len(edges) == 0, "dynamic failure must return empty edges"
-    # Report the extraction error so the frontend can show why the graph is empty.
+    # Report the extraction error so the frontend can show why dynamic graph failed.
     errors = data.get("validation_errors", [])
     assert len(errors) >= 1, "validation_errors should contain extraction error when dynamic fails"
+    combined = " ".join(errors).lower()
+    assert "failed" in combined or "error" in combined, "error message should explain the failure"
 
 
 def test_compile_full_like_script_produces_graph_with_dynamic():
