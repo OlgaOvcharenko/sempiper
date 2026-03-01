@@ -136,7 +136,7 @@ def sempipes_pipeline():
 
 # Load dataset
 dataset = skrub.datasets.fetch_credit_fraud()
-baskets_df = dataset.baskets.sample(n=1000, random_state=42)
+baskets_df = dataset.baskets.sample(n=50, random_state=42)
 train_baskets, test_baskets = train_test_split(baskets_df, test_size=0.25, random_state=42)
 
 # Run pipeline
