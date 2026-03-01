@@ -251,10 +251,17 @@ export const OptimizerPanel: React.FC<OptimizerPanelProps> = ({
     const shunnedRunIdsRef = useRef<Set<string>>(new Set());
     // Ref to track if we've already cleared for the current execution
     const hasClearedForExecutionRef = useRef<boolean>(false);
+    // Deferred replay: set when replayTrigger fires before Cytoscape is ready
+    const pendingReplayRef = useRef<boolean>(false);
 
     useEffect(() => {
-        if (replayTrigger > 0 && cyRef.current) {
-            playRevealAnimation(cyRef.current);
+        if (replayTrigger > 0) {
+            if (cyRef.current) {
+                playRevealAnimation(cyRef.current);
+            } else {
+                // Cytoscape not yet initialised (panel just mounted) — defer until init
+                pendingReplayRef.current = true;
+            }
         }
     }, [replayTrigger]);
 
@@ -516,10 +523,11 @@ export const OptimizerPanel: React.FC<OptimizerPanelProps> = ({
                 node.connectedEdges().forEach(updateEdgeControlPoints);
             });
 
-            // Initial Reveal Cascade (Moves nodes from parent while fading in)
+            // Capture non-null instance for the closure. Using cyRef.current would fail
+            // if the layout fires synchronously (before cyRef.current = cy is reached).
+            const cyInstance = cy;
             cy.one('layoutstop', () => {
-                if (!cyRef.current) return;
-                playRevealAnimation(cyRef.current);
+                playRevealAnimation(cyInstance);
             });
 
             // Run layout manually
@@ -550,6 +558,12 @@ export const OptimizerPanel: React.FC<OptimizerPanelProps> = ({
             });
 
             cyRef.current = cy;
+
+            // Consume a deferred replay request (replayTrigger fired before this init ran)
+            if (pendingReplayRef.current) {
+                pendingReplayRef.current = false;
+                playRevealAnimation(cy);
+            }
         } else {
             // Intelligent Update using Diffing
             const instance = cy; // Capture non-null instance
