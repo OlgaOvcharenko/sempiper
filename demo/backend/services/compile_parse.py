@@ -150,32 +150,38 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
     results: list[_RawEntry] = []
     lines = text.split("\n")
 
-    skrub_var_pat = re.compile(r"skrub\.var\s*\(")
-    skb_subsample_pat = re.compile(r"\.skb\.subsample\s*\(")
-    as_x_pat = re.compile(r"\bas_X\s*\(")
-    as_y_pat = re.compile(r"\bas_y\s*\(")
-    sem_fillna_pat = re.compile(r"\.sem_fillna\s*\(")
-    sem_gen_features_pat = re.compile(r"\.sem_gen_features\s*\(")
-    sem_extract_features_pat = re.compile(r"\.sem_extract_features\s*\(")
-    sem_clean_pat = re.compile(r"\.sem_clean\s*\(")
-    sem_augment_pat = re.compile(r"\.sem_augment\s*\(")
-    sem_agg_features_pat = re.compile(r"\.sem_agg_features\s*\(")
-    sem_refine_pat = re.compile(r"\.sem_refine\s*\(")
-    sem_select_pat = re.compile(r"\.sem_select\s*\(")
-    sem_distill_pat = re.compile(r"\.sem_distill\s*\(")
-    apply_with_sem_choose_pat = re.compile(r"\.skb\.apply_with_sem_choose\s*\(")
-    skb_apply_func_pat = re.compile(r"\.skb\.apply_func\s*\(")
-    skb_apply_pat = re.compile(r"\.skb\.apply\s*\(")
-    skb_eval_pat = re.compile(r"\.skb\.eval\s*\(")
-    sem_choose_pat = re.compile(r"\bsem_choose\s*\(")
-    source_pat = re.compile(r'\bsource\s*\(\s*["\']([^"\']*)["\']\s*\)')
-    op_pat = re.compile(r'\bop\s*\(\s*["\']([^"\']*)["\']\s*\)')
-    pipeline_pat = re.compile(r"\bpipeline\s*\(")
+    # Each pattern uses a capturing group (group 1) to isolate the function/method name.
+    # Rules for source range matching:
+    #   1. No leading dot: method calls like .sem_fillna → match starts at 'sem_fillna'
+    #   2. No trailing '(': match ends at last char of the name, before the open paren
+    #   3. For subscript patterns (future): include the closing ']' in the match
+    # The outer `\.(` or `\s*\(` anchors are kept for disambiguation but excluded from the range.
+    skrub_var_pat = re.compile(r"(skrub\.var)\s*\(")
+    skb_subsample_pat = re.compile(r"\.(skb\.subsample)\s*\(")
+    as_x_pat = re.compile(r"(\bas_X)\s*\(")
+    as_y_pat = re.compile(r"(\bas_y)\s*\(")
+    sem_fillna_pat = re.compile(r"\.(sem_fillna)\s*\(")
+    sem_gen_features_pat = re.compile(r"\.(sem_gen_features)\s*\(")
+    sem_extract_features_pat = re.compile(r"\.(sem_extract_features)\s*\(")
+    sem_clean_pat = re.compile(r"\.(sem_clean)\s*\(")
+    sem_augment_pat = re.compile(r"\.(sem_augment)\s*\(")
+    sem_agg_features_pat = re.compile(r"\.(sem_agg_features)\s*\(")
+    sem_refine_pat = re.compile(r"\.(sem_refine)\s*\(")
+    sem_select_pat = re.compile(r"\.(sem_select)\s*\(")
+    sem_distill_pat = re.compile(r"\.(sem_distill)\s*\(")
+    apply_with_sem_choose_pat = re.compile(r"\.(skb\.apply_with_sem_choose)\s*\(")
+    skb_apply_func_pat = re.compile(r"\.(skb\.apply_func)\s*\(")
+    skb_apply_pat = re.compile(r"\.(skb\.apply)\s*\(")
+    skb_eval_pat = re.compile(r"\.(skb\.eval)\s*\(")
+    sem_choose_pat = re.compile(r"(\bsem_choose)\s*\(")
+    source_pat = re.compile(r'(\bsource)\s*\(\s*["\']([^"\']*)["\']\s*\)')
+    op_pat = re.compile(r'(\bop)\s*\(\s*["\']([^"\']*)["\']\s*\)')
+    pipeline_pat = re.compile(r"(\bpipeline)\s*\(")
     # Pandas DataFrame operations
-    groupby_pat = re.compile(r"\.groupby\s*\(")
-    merge_pat = re.compile(r"\.merge\s*\(")
-    drop_pat = re.compile(r"\.drop\s*\(")
-    optimise_colopro_pat = re.compile(r"\boptimise_colopro\s*\(")
+    groupby_pat = re.compile(r"\.(groupby)\s*\(")
+    merge_pat = re.compile(r"\.(merge)\s*\(")
+    drop_pat = re.compile(r"\.(drop)\s*\(")
+    optimise_colopro_pat = re.compile(r"(\boptimise_colopro)\s*\(")
 
     def add(line_no: int, start: int, end: int, node_id: str, node_type: str, label: str) -> None:
         # Both start and end are 0-indexed from regex match; convert to 1-indexed for Monaco
@@ -193,26 +199,26 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
         search_line = line[:comment_start] if comment_start >= 0 else line
         for m in skrub_var_pat.finditer(search_line):
             # skrub.var("name", ...) or skrub.var('name', ...) -> capture name; label like skrub: <Var 'name'>
-            name_match = re.search(r'skrub\.var\s*\(\s*["\']([^"\']*)["\']', search_line[m.start() :])
+            name_match = re.search(r'skrub\.var\s*\(\s*["\']([^"\']*)["\']', search_line[m.start(1) :])
             name = name_match.group(1) if name_match else "var"
             label = f"<Var '{name}'>"
-            add(one_indexed_line, m.start(), m.end(), f"var_{name}_{one_indexed_line}", "input", label)
+            add(one_indexed_line, m.start(1), m.end(1), f"var_{name}_{one_indexed_line}", "input", label)
         for m in skb_subsample_pat.finditer(search_line):
             # products.skb.subsample -> receiver is "products"
             rec_match = re.search(r"(\w+)\.skb\.subsample", search_line[: m.end()])
             label = rec_match.group(1) if rec_match else "subsample"
-            add(one_indexed_line, m.start(), m.end(), f"subsample_{one_indexed_line}", "operator", f"skb.subsample")
+            add(one_indexed_line, m.start(1), m.end(1), f"subsample_{one_indexed_line}", "operator", f"skb.subsample")
         for m in as_x_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"as_X_{one_indexed_line}", "input", "as_X")
+            add(one_indexed_line, m.start(1), m.end(1), f"as_X_{one_indexed_line}", "input", "as_X")
         for m in as_y_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"as_y_{one_indexed_line}", "input", "as_y")
+            add(one_indexed_line, m.start(1), m.end(1), f"as_y_{one_indexed_line}", "input", "as_y")
         for m in sem_fillna_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_fillna_{one_indexed_line}", "operator", "sem_fillna")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_fillna_{one_indexed_line}", "operator", "sem_fillna")
         for m in sem_gen_features_pat.finditer(search_line):
             add(
                 one_indexed_line,
-                m.start(),
-                m.end(),
+                m.start(1),
+                m.end(1),
                 f"sem_gen_features_{one_indexed_line}",
                 "operator",
                 "sem_gen_features",
@@ -220,74 +226,74 @@ def _find_call_ranges(text: str) -> list[_RawEntry]:
         for m in sem_extract_features_pat.finditer(search_line):
             add(
                 one_indexed_line,
-                m.start(),
-                m.end(),
+                m.start(1),
+                m.end(1),
                 f"sem_extract_features_{one_indexed_line}",
                 "operator",
                 "sem_extract_features",
             )
         for m in sem_clean_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_clean_{one_indexed_line}", "operator", "sem_clean")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_clean_{one_indexed_line}", "operator", "sem_clean")
         for m in sem_augment_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_augment_{one_indexed_line}", "operator", "sem_augment")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_augment_{one_indexed_line}", "operator", "sem_augment")
         for m in sem_agg_features_pat.finditer(search_line):
             add(
                 one_indexed_line,
-                m.start(),
-                m.end(),
+                m.start(1),
+                m.end(1),
                 f"sem_agg_features_{one_indexed_line}",
                 "operator",
                 "sem_agg_features",
             )
         for m in sem_refine_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_refine_{one_indexed_line}", "operator", "sem_refine")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_refine_{one_indexed_line}", "operator", "sem_refine")
         for m in sem_select_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_select_{one_indexed_line}", "operator", "sem_select")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_select_{one_indexed_line}", "operator", "sem_select")
         for m in sem_distill_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_distill_{one_indexed_line}", "operator", "sem_distill")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_distill_{one_indexed_line}", "operator", "sem_distill")
         for m in apply_with_sem_choose_pat.finditer(search_line):
             add(
                 one_indexed_line,
-                m.start(),
-                m.end(),
+                m.start(1),
+                m.end(1),
                 f"apply_with_sem_choose_{one_indexed_line}",
                 "operator",
                 "apply_with_sem_choose",
             )
         for m in skb_apply_func_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"skb_apply_func_{one_indexed_line}", "operator", "skb.apply_func")
+            add(one_indexed_line, m.start(1), m.end(1), f"skb_apply_func_{one_indexed_line}", "operator", "skb.apply_func")
         for m in skb_apply_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"skb_apply_{one_indexed_line}", "operator", "skb.apply")
+            add(one_indexed_line, m.start(1), m.end(1), f"skb_apply_{one_indexed_line}", "operator", "skb.apply")
         for m in skb_eval_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"skb_eval_{one_indexed_line}", "operator", "skb.eval")
+            add(one_indexed_line, m.start(1), m.end(1), f"skb_eval_{one_indexed_line}", "operator", "skb.eval")
         for m in sem_choose_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"sem_choose_{one_indexed_line}", "operator", "sem_choose")
+            add(one_indexed_line, m.start(1), m.end(1), f"sem_choose_{one_indexed_line}", "operator", "sem_choose")
         # Pandas DataFrame operations
         for m in groupby_pat.finditer(search_line):
             # df.groupby(...) -> extract receiver name
             rec_match = re.search(r"(\w+)\.groupby", search_line[: m.end()])
             label = rec_match.group(1) if rec_match else "groupby"
-            add(one_indexed_line, m.start(), m.end(), f"groupby_{one_indexed_line}", "operator", "groupby")
+            add(one_indexed_line, m.start(1), m.end(1), f"groupby_{one_indexed_line}", "operator", "groupby")
         for m in merge_pat.finditer(search_line):
             # df.merge(...) -> extract receiver name
             rec_match = re.search(r"(\w+)\.merge", search_line[: m.end()])
             label = rec_match.group(1) if rec_match else "merge"
-            add(one_indexed_line, m.start(), m.end(), f"merge_{one_indexed_line}", "operator", "merge")
+            add(one_indexed_line, m.start(1), m.end(1), f"merge_{one_indexed_line}", "operator", "merge")
         for m in drop_pat.finditer(search_line):
             # df.drop(...) -> extract receiver name
             rec_match = re.search(r"(\w+)\.drop", search_line[: m.end()])
             label = rec_match.group(1) if rec_match else "drop"
-            add(one_indexed_line, m.start(), m.end(), f"drop_{one_indexed_line}", "operator", "drop")
+            add(one_indexed_line, m.start(1), m.end(1), f"drop_{one_indexed_line}", "operator", "drop")
         for m in source_pat.finditer(search_line):
-            label = m.group(1) if m.lastindex else "input"
-            add(one_indexed_line, m.start(), m.end(), f"input_{label}", "input", label)
+            label = m.group(2) if m.lastindex and m.lastindex >= 2 else "input"
+            add(one_indexed_line, m.start(1), m.end(1), f"input_{label}", "input", label)
         for m in op_pat.finditer(search_line):
-            label = m.group(1) if m.lastindex else "op"
-            add(one_indexed_line, m.start(), m.end(), f"op_{label}_{one_indexed_line}", "operator", label)
+            label = m.group(2) if m.lastindex and m.lastindex >= 2 else "op"
+            add(one_indexed_line, m.start(1), m.end(1), f"op_{label}_{one_indexed_line}", "operator", label)
         for m in pipeline_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"pipeline_{one_indexed_line}", "pipeline", "Pipeline")
+            add(one_indexed_line, m.start(1), m.end(1), f"pipeline_{one_indexed_line}", "pipeline", "Pipeline")
         for m in optimise_colopro_pat.finditer(search_line):
-            add(one_indexed_line, m.start(), m.end(), f"optimise_colopro_{one_indexed_line}", "operator", "optimise_colopro")
+            add(one_indexed_line, m.start(1), m.end(1), f"optimise_colopro_{one_indexed_line}", "operator", "optimise_colopro")
 
     return results
 

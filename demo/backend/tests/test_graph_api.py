@@ -291,16 +291,16 @@ x = sempipes.as_X(b[["id"]], "X")
 
 # Minimal scripts and expected substring for each of the 10 SemPipes operators (node extraction + highlighting).
 _SEMPIPES_OPERATOR_COMPILE_CASES = [
-    ("sem_fillna", "x = sempipes.as_X(df,'X')\ny = x.sem_fillna(target_column='a')", ".sem_fillna("),
-    ("sem_gen_features", "x = sempipes.as_X(df,'X')\ny = x.sem_gen_features(nl_prompt='gen')", ".sem_gen_features("),
-    ("sem_extract_features", "x = sempipes.as_X(df,'X')\ny = x.sem_extract_features(columns=['a'])", ".sem_extract_features("),
-    ("sem_clean", "x = sempipes.as_X(df,'X')\ny = x.sem_clean(nl_prompt='c')", ".sem_clean("),
-    ("sem_augment", "x = sempipes.as_X(df,'X')\ny = x.sem_augment(nl_prompt='a')", ".sem_augment("),
-    ("sem_agg_features", "x = sempipes.as_X(df,'X')\ny = x.sem_agg_features(nl_prompt='a')", ".sem_agg_features("),
-    ("sem_refine", "x = sempipes.as_X(df,'X')\ny = x.sem_refine(target_column='a')", ".sem_refine("),
-    ("sem_select", "x = sempipes.as_X(df,'X')\ny = x.sem_select(nl_prompt='s')", ".sem_select("),
-    ("sem_distill", "x = sempipes.as_X(df,'X')\ny = x.sem_distill(nl_prompt='d')", ".sem_distill("),
-    ("sem_choose", "x = sempipes.as_X(df,'X')\nchoices = sem_choose(name='c')", "sem_choose("),
+    ("sem_fillna", "x = sempipes.as_X(df,'X')\ny = x.sem_fillna(target_column='a')", "sem_fillna"),
+    ("sem_gen_features", "x = sempipes.as_X(df,'X')\ny = x.sem_gen_features(nl_prompt='gen')", "sem_gen_features"),
+    ("sem_extract_features", "x = sempipes.as_X(df,'X')\ny = x.sem_extract_features(columns=['a'])", "sem_extract_features"),
+    ("sem_clean", "x = sempipes.as_X(df,'X')\ny = x.sem_clean(nl_prompt='c')", "sem_clean"),
+    ("sem_augment", "x = sempipes.as_X(df,'X')\ny = x.sem_augment(nl_prompt='a')", "sem_augment"),
+    ("sem_agg_features", "x = sempipes.as_X(df,'X')\ny = x.sem_agg_features(nl_prompt='a')", "sem_agg_features"),
+    ("sem_refine", "x = sempipes.as_X(df,'X')\ny = x.sem_refine(target_column='a')", "sem_refine"),
+    ("sem_select", "x = sempipes.as_X(df,'X')\ny = x.sem_select(nl_prompt='s')", "sem_select"),
+    ("sem_distill", "x = sempipes.as_X(df,'X')\ny = x.sem_distill(nl_prompt='d')", "sem_distill"),
+    ("sem_choose", "x = sempipes.as_X(df,'X')\nchoices = sem_choose(name='c')", "sem_choose"),
 ]
 
 
@@ -329,9 +329,7 @@ class TestCompileScriptToGraphPerOperator:
         start_col = max(1, min(r.start_column, len(line) + 1))
         end_col = max(start_col, min(r.end_column, len(line) + 1))
         highlighted = line[start_col - 1 : end_col - 1]
-        assert expected_substring in highlighted or highlighted.startswith(
-            expected_substring.rstrip("(")
-        ), f"highlighted span {repr(highlighted)} should contain {repr(expected_substring)}"
+        assert expected_substring in highlighted, f"highlighted span {repr(highlighted)} should contain {repr(expected_substring)}"
 
 
 class TestMergeSourceRanges:
@@ -861,7 +859,7 @@ products = products.sem_gen_features(nl_prompt="Gen features.", name="feat", how
         r = node.source_range
         line = lines[r.start_line - 1] if 1 <= r.start_line <= len(lines) else ""
         span = line[r.start_column - 1 : r.end_column - 1] if line else ""
-        assert ".sem_gen_features(" in span or "sem_gen_features(" in span, "source_range should span the call"
+        assert "sem_gen_features" in span, "source_range should span the call"
 
     def test_pipeline_with_both_sem_extract_features_and_sem_gen_features(self):
         """When code has both sem_extract_features and sem_gen_features, each node gets correct label and source_range."""

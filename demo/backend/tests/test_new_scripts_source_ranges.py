@@ -671,26 +671,26 @@ class TestFraudScriptSourceRanges:
     # --- var nodes -----------------------------------------------------------
 
     def test_products_var_line_and_column(self):
-        """products = skrub.var("products")  →  line 46, cols 16-26"""
+        """products = skrub.var("products")  →  line 46, cols 16-25"""
         nodes = _nodes_with_label(self.nodes, "<Var 'products'>")
         assert len(nodes) == 1, f"Expected 1 <Var 'products'> node, got {len(nodes)}"
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 46, f"Expected line 46, got {sr.start_line}"
         assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
-        assert sr.end_column == 26, f"Expected end_col 26, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 25, f"Expected end_col 25, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "skrub.var"
 
     def test_baskets_var_line_and_column(self):
-        """baskets = skrub.var("baskets")  →  line 47, cols 15-25"""
+        """baskets = skrub.var("baskets")  →  line 47, cols 15-24"""
         nodes = _nodes_with_label(self.nodes, "<Var 'baskets'>")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 47, f"Expected line 47, got {sr.start_line}"
         assert sr.start_column == 15, f"Expected start_col 15, got {sr.start_column}"
-        assert sr.end_column == 25, f"Expected end_col 25, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 24, f"Expected end_col 24, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "skrub.var"
 
     def test_var_nodes_on_different_lines(self):
         """products and baskets vars must be on consecutive distinct lines."""
@@ -701,72 +701,72 @@ class TestFraudScriptSourceRanges:
     # --- as_y / as_X ---------------------------------------------------------
 
     def test_as_y_line_and_column(self):
-        """fraud_flags = sempipes.as_y(  →  line 49, cols 28-33"""
+        """fraud_flags = sempipes.as_y(  →  line 49, cols 28-32"""
         nodes = _nodes_with_label(self.nodes, "as_y")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 49, f"Expected line 49, got {sr.start_line}"
         assert sr.start_column == 28, f"Expected start_col 28, got {sr.start_column}"
-        assert sr.end_column == 33, f"Expected end_col 33, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "as_y("
+        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "as_y"
 
     def test_as_x_line_and_column(self):
-        """basket_ids = sempipes.as_X(  →  line 54, cols 27-32"""
+        """basket_ids = sempipes.as_X(  →  line 54, cols 27-31"""
         nodes = _nodes_with_label(self.nodes, "as_X")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 54, f"Expected line 54, got {sr.start_line}"
         assert sr.start_column == 27, f"Expected start_col 27, got {sr.start_column}"
-        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "as_X("
+        assert sr.end_column == 31, f"Expected end_col 31, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "as_X"
 
     # --- semantic operators --------------------------------------------------
 
     def test_sem_fillna_line_and_column(self):
-        """products = products.sem_fillna(  →  line 59, cols 24-36"""
+        """products = products.sem_fillna(  →  line 59, cols 25-35"""
         nodes = _nodes_with_label(self.nodes, "sem_fillna")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 59, f"Expected line 59, got {sr.start_line}"
-        assert sr.start_column == 24, f"Expected start_col 24, got {sr.start_column}"
-        assert sr.end_column == 36, f"Expected end_col 36, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_fillna("
+        assert sr.start_column == 25, f"Expected start_col 25, got {sr.start_column}"
+        assert sr.end_column == 35, f"Expected end_col 35, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "sem_fillna"
 
     def test_sem_extract_features_line_and_column(self):
-        """unique_brands.sem_extract_features(  →  line 84, cols 36-58"""
+        """unique_brands.sem_extract_features(  →  line 84, cols 37-57"""
         nodes = _nodes_with_label(self.nodes, "sem_extract_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 84, f"Expected line 84, got {sr.start_line}"
-        assert sr.start_column == 36, f"Expected start_col 36, got {sr.start_column}"
-        assert sr.end_column == 58, f"Expected end_col 58, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_extract_features("
+        assert sr.start_column == 37, f"Expected start_col 37, got {sr.start_column}"
+        assert sr.end_column == 57, f"Expected end_col 57, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "sem_extract_features"
 
     def test_sem_gen_features_line_and_column(self):
-        """kept_products.sem_gen_features(  →  line 98, cols 34-52"""
+        """kept_products.sem_gen_features(  →  line 98, cols 35-51"""
         nodes = _nodes_with_label(self.nodes, "sem_gen_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 98, f"Expected line 98, got {sr.start_line}"
-        assert sr.start_column == 34, f"Expected start_col 34, got {sr.start_column}"
-        assert sr.end_column == 52, f"Expected end_col 52, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_gen_features("
+        assert sr.start_column == 35, f"Expected start_col 35, got {sr.start_column}"
+        assert sr.end_column == 51, f"Expected end_col 51, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "sem_gen_features"
 
     def test_sem_agg_features_line_and_column(self):
-        """basket_ids.sem_agg_features(  →  line 114, cols 35-53"""
+        """basket_ids.sem_agg_features(  →  line 114, cols 36-52"""
         nodes = _nodes_with_label(self.nodes, "sem_agg_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 114, f"Expected line 114, got {sr.start_line}"
-        assert sr.start_column == 35, f"Expected start_col 35, got {sr.start_column}"
-        assert sr.end_column == 53, f"Expected end_col 53, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == ".sem_agg_features("
+        assert sr.start_column == 36, f"Expected start_col 36, got {sr.start_column}"
+        assert sr.end_column == 52, f"Expected end_col 52, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, nodes[0]) == "sem_agg_features"
 
     def test_skb_apply_func_line_and_column(self):
         """products.skb.apply_func(shapiro_test) is a dead-end side-effect — pruned."""
@@ -785,32 +785,32 @@ class TestFraudScriptSourceRanges:
         )
 
     def test_merge_line_and_column(self):
-        """products.merge(brand_risk_info, ...)  →  line 94, cols 33-40"""
+        """products.merge(brand_risk_info, ...)  →  line 94, cols 34-39"""
         nodes = _nodes_containing(self.nodes, "merge")
         assert len(nodes) >= 1
         node = next(n for n in nodes if n.source_range and n.source_range.start_line == 94)
         sr = node.source_range
-        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
-        assert sr.end_column == 40, f"Expected end_col 40, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, node) == ".merge("
+        assert sr.start_column == 34, f"Expected start_col 34, got {sr.start_column}"
+        assert sr.end_column == 39, f"Expected end_col 39, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, node) == "merge"
 
     def test_skb_apply_vectorizer_line_and_column(self):
-        """kept_products.skb.apply(vectorizer, ...)  →  line 109, cols 40-51"""
+        """kept_products.skb.apply(vectorizer, ...)  →  line 109, cols 41-50"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 109)
         sr = node.source_range
-        assert sr.start_column == 40, f"Expected start_col 40, got {sr.start_column}"
-        assert sr.end_column == 51, f"Expected end_col 51, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 41, f"Expected start_col 41, got {sr.start_column}"
+        assert sr.end_column == 50, f"Expected end_col 50, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, node) == "skb.apply"
 
     def test_skb_apply_catboost_line_and_column(self):
-        """augmented_baskets.skb.apply(catboost_classifier, ...)  →  line 129, cols 39-50"""
+        """augmented_baskets.skb.apply(catboost_classifier, ...)  →  line 129, cols 40-49"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 129)
         sr = node.source_range
-        assert sr.start_column == 39, f"Expected start_col 39, got {sr.start_column}"
-        assert sr.end_column == 50, f"Expected end_col 50, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 40, f"Expected start_col 40, got {sr.start_column}"
+        assert sr.end_column == 49, f"Expected end_col 49, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, node) == "skb.apply"
 
     def test_two_skb_apply_nodes_on_different_lines(self):
         """The two skb.apply calls must be on different lines (vectorizer vs catboost)."""
@@ -821,13 +821,13 @@ class TestFraudScriptSourceRanges:
         assert lines == [109, 129], f"Expected lines [109, 129], got {lines}"
 
     def test_skb_drop_line_and_column(self):
-        """augmented_baskets.skb.drop(cols=["ID"])  →  line 125, cols 46-52"""
+        """augmented_baskets.skb.drop(cols=["ID"])  →  line 125, cols 47-51"""
         drop_nodes = _nodes_with_label(self.nodes, "drop")
         node = next(n for n in drop_nodes if n.source_range and n.source_range.start_line == 125)
         sr = node.source_range
-        assert sr.start_column == 46, f"Expected start_col 46, got {sr.start_column}"
-        assert sr.end_column == 52, f"Expected end_col 52, got {sr.end_column}"
-        assert _highlighted(FRAUD_SCRIPT, node) == ".drop("
+        assert sr.start_column == 47, f"Expected start_col 47, got {sr.start_column}"
+        assert sr.end_column == 51, f"Expected end_col 51, got {sr.end_column}"
+        assert _highlighted(FRAUD_SCRIPT, node) == "drop"
 
     # --- document order sanity -----------------------------------------------
 
@@ -896,37 +896,37 @@ class TestHousePricesScriptSourceRanges:
     # --- var nodes -----------------------------------------------------------
 
     def test_facts_var_line_and_column(self):
-        """houses_facts = skrub.var("facts")  →  line 25, cols 20-30"""
+        """houses_facts = skrub.var("facts")  →  line 25, cols 20-29"""
         nodes = _nodes_with_label(self.nodes, "<Var 'facts'>")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 25, f"Expected line 25, got {sr.start_line}"
         assert sr.start_column == 20, f"Expected start_col 20, got {sr.start_column}"
-        assert sr.end_column == 30, f"Expected end_col 30, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 29, f"Expected end_col 29, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var"
 
     def test_cities_var_line_and_column(self):
-        """houses_cities = skrub.var("cities")  →  line 26, cols 21-31"""
+        """houses_cities = skrub.var("cities")  →  line 26, cols 21-30"""
         nodes = _nodes_with_label(self.nodes, "<Var 'cities'>")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 26, f"Expected line 26, got {sr.start_line}"
         assert sr.start_column == 21, f"Expected start_col 21, got {sr.start_column}"
-        assert sr.end_column == 31, f"Expected end_col 31, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 30, f"Expected end_col 30, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var"
 
     def test_images_var_line_and_column(self):
-        """house_images = skrub.var("images")  →  line 27, cols 20-30"""
+        """house_images = skrub.var("images")  →  line 27, cols 20-29"""
         nodes = _nodes_with_label(self.nodes, "<Var 'images'>")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 27, f"Expected line 27, got {sr.start_line}"
         assert sr.start_column == 20, f"Expected start_col 20, got {sr.start_column}"
-        assert sr.end_column == 30, f"Expected end_col 30, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 29, f"Expected end_col 29, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "skrub.var"
 
     def test_three_var_nodes_on_consecutive_lines(self):
         """facts/cities/images vars must be on lines 25, 26, 27."""
@@ -941,102 +941,102 @@ class TestHousePricesScriptSourceRanges:
     # --- merge (joins the three tables) -------------------------------------
 
     def test_merge_line_and_column(self):
-        """houses_facts.merge(houses_cities, ...)  →  line 29, cols 26-33"""
+        """houses_facts.merge(houses_cities, ...)  →  line 29, cols 27-32"""
         nodes = _nodes_containing(self.nodes, "merge")
         assert len(nodes) >= 1
         node = next(n for n in nodes if n.source_range and n.source_range.start_line == 29)
         sr = node.source_range
-        assert sr.start_column == 26, f"Expected start_col 26, got {sr.start_column}"
-        assert sr.end_column == 33, f"Expected end_col 33, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == ".merge("
+        assert sr.start_column == 27, f"Expected start_col 27, got {sr.start_column}"
+        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == "merge"
 
     # --- as_y / as_X ---------------------------------------------------------
 
     def test_as_y_line_and_column(self):
-        """price = sempipes.as_y(  →  line 31, cols 22-27"""
+        """price = sempipes.as_y(  →  line 31, cols 22-26"""
         nodes = _nodes_with_label(self.nodes, "as_y")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 31, f"Expected line 31, got {sr.start_line}"
         assert sr.start_column == 22, f"Expected start_col 22, got {sr.start_column}"
-        assert sr.end_column == 27, f"Expected end_col 27, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "as_y("
+        assert sr.end_column == 26, f"Expected end_col 26, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "as_y"
 
     def test_as_x_line_and_column(self):
-        """house_data = sempipes.as_X(  →  line 36, cols 27-32"""
+        """house_data = sempipes.as_X(  →  line 36, cols 27-31"""
         nodes = _nodes_with_label(self.nodes, "as_X")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 36, f"Expected line 36, got {sr.start_line}"
         assert sr.start_column == 27, f"Expected start_col 27, got {sr.start_column}"
-        assert sr.end_column == 32, f"Expected end_col 32, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "as_X("
+        assert sr.end_column == 31, f"Expected end_col 31, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "as_X"
 
     def test_drop_inside_as_x_line_and_column(self):
-        """houses.drop(columns=["price"]) inside as_X(...)  →  line 37, cols 15-21"""
+        """houses.drop(columns=["price"]) inside as_X(...)  →  line 37, cols 16-20"""
         drop_nodes = _nodes_with_label(self.nodes, "drop")
         node = next(n for n in drop_nodes if n.source_range and n.source_range.start_line == 37)
         sr = node.source_range
-        assert sr.start_column == 15, f"Expected start_col 15, got {sr.start_column}"
-        assert sr.end_column == 21, f"Expected end_col 21, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == ".drop("
+        assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
+        assert sr.end_column == 20, f"Expected end_col 20, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == "drop"
 
     # --- semantic operators --------------------------------------------------
 
     def test_sem_clean_line_and_column(self):
-        """house_data.sem_clean(  →  line 42, cols 28-39"""
+        """house_data.sem_clean(  →  line 42, cols 29-38"""
         nodes = _nodes_with_label(self.nodes, "sem_clean")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 42, f"Expected line 42, got {sr.start_line}"
-        assert sr.start_column == 28, f"Expected start_col 28, got {sr.start_column}"
-        assert sr.end_column == 39, f"Expected end_col 39, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == ".sem_clean("
+        assert sr.start_column == 29, f"Expected start_col 29, got {sr.start_column}"
+        assert sr.end_column == 38, f"Expected end_col 38, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "sem_clean"
 
     def test_sem_extract_features_line_and_column(self):
-        """house_data.sem_extract_features(  →  line 55, cols 28-50"""
+        """house_data.sem_extract_features(  →  line 55, cols 29-49"""
         nodes = _nodes_with_label(self.nodes, "sem_extract_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 55, f"Expected line 55, got {sr.start_line}"
-        assert sr.start_column == 28, f"Expected start_col 28, got {sr.start_column}"
-        assert sr.end_column == 50, f"Expected end_col 50, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == ".sem_extract_features("
+        assert sr.start_column == 29, f"Expected start_col 29, got {sr.start_column}"
+        assert sr.end_column == 49, f"Expected end_col 49, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "sem_extract_features"
 
     def test_sem_gen_features_line_and_column(self):
-        """house_data.sem_gen_features(  →  line 63, cols 28-46"""
+        """house_data.sem_gen_features(  →  line 63, cols 29-45"""
         nodes = _nodes_with_label(self.nodes, "sem_gen_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 63, f"Expected line 63, got {sr.start_line}"
-        assert sr.start_column == 28, f"Expected start_col 28, got {sr.start_column}"
-        assert sr.end_column == 46, f"Expected end_col 46, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == ".sem_gen_features("
+        assert sr.start_column == 29, f"Expected start_col 29, got {sr.start_column}"
+        assert sr.end_column == 45, f"Expected end_col 45, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, nodes[0]) == "sem_gen_features"
 
     # --- skb.apply nodes -----------------------------------------------------
 
     def test_skb_apply_vectorizer_line_and_column(self):
-        """house_data.skb.apply(vectorizer, ...)  →  line 71, cols 35-46"""
+        """house_data.skb.apply(vectorizer, ...)  →  line 71, cols 36-45"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 71)
         sr = node.source_range
-        assert sr.start_column == 35, f"Expected start_col 35, got {sr.start_column}"
-        assert sr.end_column == 46, f"Expected end_col 46, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 36, f"Expected start_col 36, got {sr.start_column}"
+        assert sr.end_column == 45, f"Expected end_col 45, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == "skb.apply"
 
     def test_skb_apply_tabpfn_line_and_column(self):
-        """vectorized_houses.skb.apply(tabpfn, ...)  →  line 82, cols 36-47"""
+        """vectorized_houses.skb.apply(tabpfn, ...)  →  line 82, cols 37-46"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 82)
         sr = node.source_range
-        assert sr.start_column == 36, f"Expected start_col 36, got {sr.start_column}"
-        assert sr.end_column == 47, f"Expected end_col 47, got {sr.end_column}"
-        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 37, f"Expected start_col 37, got {sr.start_column}"
+        assert sr.end_column == 46, f"Expected end_col 46, got {sr.end_column}"
+        assert _highlighted(HOUSE_PRICES_SCRIPT, node) == "skb.apply"
 
     def test_two_skb_apply_nodes_on_different_lines(self):
         """The two skb.apply calls must be on lines 71 and 82."""
@@ -1118,20 +1118,20 @@ class TestMuseumsScriptSourceRanges:
     # --- var node ------------------------------------------------------------
 
     def test_artworks_var_line_and_column(self):
-        """artworks = skrub.var("artworks")  →  line 190, cols 16-26"""
+        """artworks = skrub.var("artworks")  →  line 190, cols 16-25"""
         nodes = _nodes_with_label(self.nodes, "<Var 'artworks'>")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 190, f"Expected line 190, got {sr.start_line}"
         assert sr.start_column == 16, f"Expected start_col 16, got {sr.start_column}"
-        assert sr.end_column == 26, f"Expected end_col 26, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "skrub.var("
+        assert sr.end_column == 25, f"Expected end_col 25, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "skrub.var"
 
     # --- skb.apply_func nodes ------------------------------------------------
 
     def test_skb_apply_func_first_line_and_column(self):
-        """artworks = artworks.skb.apply_func(apply_spacy_features)  →  line 191, cols 24-40"""
+        """artworks = artworks.skb.apply_func(apply_spacy_features)  →  line 191, cols 25-39"""
         func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
         node = next(
             (n for n in func_nodes if n.source_range and n.source_range.start_line == 191),
@@ -1139,12 +1139,12 @@ class TestMuseumsScriptSourceRanges:
         )
         assert node is not None, "Expected skb.apply_func node at line 191"
         sr = node.source_range
-        assert sr.start_column == 24, f"Expected start_col 24, got {sr.start_column}"
-        assert sr.end_column == 40, f"Expected end_col 40, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply_func("
+        assert sr.start_column == 25, f"Expected start_col 25, got {sr.start_column}"
+        assert sr.end_column == 39, f"Expected end_col 39, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "skb.apply_func"
 
     def test_skb_apply_func_second_line_and_column(self):
-        """artwork_data = artwork_data.skb.apply_func(fill_missing_values)  →  line 225, cols 32-48"""
+        """artwork_data = artwork_data.skb.apply_func(fill_missing_values)  →  line 225, cols 33-47"""
         func_nodes = _nodes_with_label(self.nodes, "skb.apply_func")
         node = next(
             (n for n in func_nodes if n.source_range and n.source_range.start_line == 225),
@@ -1152,9 +1152,9 @@ class TestMuseumsScriptSourceRanges:
         )
         assert node is not None, "Expected skb.apply_func node at line 225"
         sr = node.source_range
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 48, f"Expected end_col 48, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply_func("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 47, f"Expected end_col 47, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "skb.apply_func"
 
     def test_two_skb_apply_func_nodes_on_lines_191_and_225(self):
         """The two skb.apply_func calls must be on lines 191 and 225."""
@@ -1166,70 +1166,70 @@ class TestMuseumsScriptSourceRanges:
     # --- as_y / as_X ---------------------------------------------------------
 
     def test_as_y_line_and_column(self):
-        """culture_target = sempipes.as_y(  →  line 193, cols 31-36"""
+        """culture_target = sempipes.as_y(  →  line 193, cols 31-35"""
         nodes = _nodes_with_label(self.nodes, "as_y")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 193, f"Expected line 193, got {sr.start_line}"
         assert sr.start_column == 31, f"Expected start_col 31, got {sr.start_column}"
-        assert sr.end_column == 36, f"Expected end_col 36, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "as_y("
+        assert sr.end_column == 35, f"Expected end_col 35, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "as_y"
 
     def test_as_x_line_and_column(self):
-        """artwork_data = sempipes.as_X(  →  line 198, cols 29-34"""
+        """artwork_data = sempipes.as_X(  →  line 198, cols 29-33"""
         nodes = _nodes_with_label(self.nodes, "as_X")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 198, f"Expected line 198, got {sr.start_line}"
         assert sr.start_column == 29, f"Expected start_col 29, got {sr.start_column}"
-        assert sr.end_column == 34, f"Expected end_col 34, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "as_X("
+        assert sr.end_column == 33, f"Expected end_col 33, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "as_X"
 
     def test_drop_inside_as_x_line_and_column(self):
-        """artworks.drop(columns=["culture"]) inside as_X(...)  →  line 199, cols 17-23"""
+        """artworks.drop(columns=["culture"]) inside as_X(...)  →  line 199, cols 18-22"""
         drop_nodes = _nodes_with_label(self.nodes, "drop")
         node = next(n for n in drop_nodes if n.source_range and n.source_range.start_line == 199)
         sr = node.source_range
-        assert sr.start_column == 17, f"Expected start_col 17, got {sr.start_column}"
-        assert sr.end_column == 23, f"Expected end_col 23, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".drop("
+        assert sr.start_column == 18, f"Expected start_col 18, got {sr.start_column}"
+        assert sr.end_column == 22, f"Expected end_col 22, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "drop"
 
     # --- semantic operators --------------------------------------------------
 
     def test_sem_extract_features_line_and_column(self):
-        """artwork_data.sem_extract_features(  →  line 203, cols 32-54"""
+        """artwork_data.sem_extract_features(  →  line 203, cols 33-53"""
         nodes = _nodes_with_label(self.nodes, "sem_extract_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 203, f"Expected line 203, got {sr.start_line}"
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 54, f"Expected end_col 54, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == ".sem_extract_features("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 53, f"Expected end_col 53, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "sem_extract_features"
 
     def test_sem_gen_features_line_and_column(self):
-        """artwork_data.sem_gen_features(  →  line 218, cols 32-50"""
+        """artwork_data.sem_gen_features(  →  line 218, cols 33-49"""
         nodes = _nodes_with_label(self.nodes, "sem_gen_features")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 218, f"Expected line 218, got {sr.start_line}"
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 50, f"Expected end_col 50, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == ".sem_gen_features("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 49, f"Expected end_col 49, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "sem_gen_features"
 
     def test_sem_refine_line_and_column(self):
-        """artwork_data.sem_refine(  →  line 227, cols 32-44"""
+        """artwork_data.sem_refine(  →  line 227, cols 33-43"""
         nodes = _nodes_with_label(self.nodes, "sem_refine")
         assert len(nodes) == 1
         sr = nodes[0].source_range
         assert sr is not None
         assert sr.start_line == 227, f"Expected line 227, got {sr.start_line}"
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 44, f"Expected end_col 44, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == ".sem_refine("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 43, f"Expected end_col 43, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, nodes[0]) == "sem_refine"
 
     def test_sem_extract_before_sem_gen_before_sem_refine(self):
         """sem_extract_features < sem_gen_features < sem_refine in document order."""
@@ -1241,33 +1241,33 @@ class TestMuseumsScriptSourceRanges:
     # --- drop nodes inside the pipeline function -----------------------------
 
     def test_drop_pipeline_inner_line_and_column(self):
-        """artwork_data.drop(columns=["object_name_raw", ...])  →  line 233, cols 32-38"""
+        """artwork_data.drop(columns=["object_name_raw", ...])  →  line 233, cols 33-37"""
         drop_nodes = _nodes_with_label(self.nodes, "drop")
         node = next(n for n in drop_nodes if n.source_range and n.source_range.start_line == 233)
         sr = node.source_range
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 38, f"Expected end_col 38, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".drop("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 37, f"Expected end_col 37, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "drop"
 
     # --- skb.apply nodes -----------------------------------------------------
 
     def test_skb_apply_vectorizer_line_and_column(self):
-        """artwork_data.skb.apply(skrub.TableVectorizer())  →  line 235, cols 32-43"""
+        """artwork_data.skb.apply(skrub.TableVectorizer())  →  line 235, cols 33-42"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 235)
         sr = node.source_range
-        assert sr.start_column == 32, f"Expected start_col 32, got {sr.start_column}"
-        assert sr.end_column == 43, f"Expected end_col 43, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 33, f"Expected start_col 33, got {sr.start_column}"
+        assert sr.end_column == 42, f"Expected end_col 42, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "skb.apply"
 
     def test_skb_apply_ft_transformer_line_and_column(self):
-        """pred = artwork_data.skb.apply(ft_transformer, ...)  →  line 238, cols 24-35"""
+        """pred = artwork_data.skb.apply(ft_transformer, ...)  →  line 238, cols 25-34"""
         apply_nodes = _nodes_with_label(self.nodes, "skb.apply")
         node = next(n for n in apply_nodes if n.source_range and n.source_range.start_line == 238)
         sr = node.source_range
-        assert sr.start_column == 24, f"Expected start_col 24, got {sr.start_column}"
-        assert sr.end_column == 35, f"Expected end_col 35, got {sr.end_column}"
-        assert _highlighted(MUSEUMS_SCRIPT, node) == ".skb.apply("
+        assert sr.start_column == 25, f"Expected start_col 25, got {sr.start_column}"
+        assert sr.end_column == 34, f"Expected end_col 34, got {sr.end_column}"
+        assert _highlighted(MUSEUMS_SCRIPT, node) == "skb.apply"
 
     def test_two_pipeline_skb_apply_nodes_on_different_lines(self):
         """The two pipeline skb.apply calls must be on lines 235 and 238."""
@@ -1327,3 +1327,118 @@ class TestMuseumsScriptSourceRanges:
                 sr = node.source_range
                 assert 1 <= sr.start_line <= max_line
                 assert 1 <= sr.end_line <= max_line
+
+
+# ===========================================================================
+# Rule invariant tests — verified across all three embedded scripts
+# ===========================================================================
+#
+# Rules for source range matching (enforced by compile_parse.py):
+#   Rule 1: No leading dot   — highlighted text never starts with "."
+#   Rule 2: No trailing "("  — highlighted text never ends with "("
+#   Rule 3: (subscripts)     — closing "]" is included when applicable
+#
+# These tests verify the invariants hold for every node in every script.
+# They are intentionally script-agnostic so they catch any new operator
+# that might be added later.
+
+_ALL_SCRIPTS = [
+    ("FRAUD_SCRIPT", FRAUD_SCRIPT),
+    ("HOUSE_PRICES_SCRIPT", HOUSE_PRICES_SCRIPT),
+    ("MUSEUMS_SCRIPT", MUSEUMS_SCRIPT),
+]
+
+
+class TestSourceRangeRuleInvariants:
+    """Verify the three source-range matching rules hold for every node in every script."""
+
+    def _all_highlights(self, script_name, script):
+        """Return (node_label, highlighted_text) for every node that has a source range."""
+        nodes, _ = extract_nodes_with_ranges(script)
+        result = []
+        for node in nodes:
+            if node.source_range is None:
+                continue
+            sr = node.source_range
+            lines = script.splitlines()
+            if 1 <= sr.start_line <= len(lines):
+                line = lines[sr.start_line - 1]
+                text = line[sr.start_column - 1: sr.end_column - 1]
+                result.append((node.label, text))
+        return result
+
+    def test_rule1_no_leading_dot(self):
+        """Rule 1: highlighted text must never start with '.'."""
+        violations = []
+        for script_name, script in _ALL_SCRIPTS:
+            for label, text in self._all_highlights(script_name, script):
+                if text.startswith("."):
+                    violations.append(f"{script_name} / {label!r}: highlighted {text!r} starts with '.'")
+        assert not violations, "Rule 1 violated:\n" + "\n".join(violations)
+
+    def test_rule2_no_trailing_open_paren(self):
+        """Rule 2: highlighted text must never end with '('."""
+        violations = []
+        for script_name, script in _ALL_SCRIPTS:
+            for label, text in self._all_highlights(script_name, script):
+                if text.endswith("("):
+                    violations.append(f"{script_name} / {label!r}: highlighted {text!r} ends with '('")
+        assert not violations, "Rule 2 violated:\n" + "\n".join(violations)
+
+    def test_highlighted_text_is_non_empty(self):
+        """Every node with a source range must produce a non-empty highlighted span."""
+        violations = []
+        for script_name, script in _ALL_SCRIPTS:
+            for label, text in self._all_highlights(script_name, script):
+                if not text:
+                    violations.append(f"{script_name} / {label!r}: highlighted text is empty")
+        assert not violations, "Empty highlights:\n" + "\n".join(violations)
+
+    def test_highlighted_text_matches_node_label_keyword(self):
+        """Highlighted text should contain the key identifier from the node label.
+
+        For method-call nodes (sem_*, skb.apply*, merge, drop, etc.) the highlighted
+        text should be exactly the method name (no dot, no paren). For var nodes the
+        text should be 'skrub.var'. For as_X / as_y nodes the text should be the
+        function name itself.
+        """
+        # Map from label → expected highlighted text
+        exact_cases = [
+            ("sem_fillna",           "sem_fillna"),
+            ("sem_gen_features",     "sem_gen_features"),
+            ("sem_extract_features", "sem_extract_features"),
+            ("sem_agg_features",     "sem_agg_features"),
+            ("sem_clean",            "sem_clean"),
+            ("sem_refine",           "sem_refine"),
+            ("skb.apply",            "skb.apply"),
+            ("skb.apply_func",       "skb.apply_func"),
+            ("merge",                "merge"),
+            ("drop",                 "drop"),
+            ("as_X",                 "as_X"),
+            ("as_y",                 "as_y"),
+        ]
+        failures = []
+        for script_name, script in _ALL_SCRIPTS:
+            nodes, _ = extract_nodes_with_ranges(script)
+            node_map = {n.label: n for n in nodes if n.source_range}
+            for label, expected_text in exact_cases:
+                if label not in node_map:
+                    continue
+                actual = _highlighted(script, node_map[label])
+                if actual != expected_text:
+                    failures.append(
+                        f"{script_name} / {label!r}: expected {expected_text!r}, got {actual!r}"
+                    )
+        assert not failures, "Label↔highlight mismatches:\n" + "\n".join(failures)
+
+    def test_var_nodes_highlighted_as_skrub_var(self):
+        """All <Var ...> nodes must highlight 'skrub.var' (not 'skrub.var(')."""
+        failures = []
+        for script_name, script in _ALL_SCRIPTS:
+            for label, text in self._all_highlights(script_name, script):
+                if label.startswith("<Var "):
+                    if text != "skrub.var":
+                        failures.append(
+                            f"{script_name} / {label!r}: expected 'skrub.var', got {text!r}"
+                        )
+        assert not failures, "Var node highlight mismatches:\n" + "\n".join(failures)

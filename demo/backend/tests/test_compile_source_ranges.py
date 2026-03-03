@@ -9,9 +9,29 @@ source code, enabling bidirectional code-graph highlighting:
 These tests verify:
 1. Line numbers are 1-indexed (first line = 1)
 2. Column numbers are 1-indexed (first character = 1)
-3. start_column points to the start of the matched pattern
-4. end_column points to one past the last character of the pattern (exclusive end)
+3. start_column points to the first character of the function/method name
+4. end_column is the exclusive end (one past the last character of the name)
 5. Multi-line constructs are handled correctly
+
+Source-range matching rules
+----------------------------
+Rule 1 – No leading dot:
+    Method calls are prefixed by a dot in Python (e.g. `df.sem_fillna(...)`).
+    The source range must start at the first character of the name itself,
+    NOT at the preceding dot.
+    ✓  `sem_fillna`  (start at `s`)
+    ✗  `.sem_fillna` (must not include `.`)
+
+Rule 2 – No trailing open-paren:
+    Every call ends with `(...)`.  The source range must stop at the last
+    character of the name, before the opening parenthesis.
+    ✓  `as_X`  (end after `X`)
+    ✗  `as_X(` (must not include `(`)
+
+Rule 3 – Include closing bracket for subscript patterns:
+    If a future pattern matches a subscript access expression (e.g. `var["col"]`),
+    the source range must include the closing `]`.
+    (No subscript-access nodes exist yet; this rule applies when they are added.)
 """
 
 import pytest
@@ -108,14 +128,14 @@ class TestColumnPositions:
         assert r.start_column == 18
 
     def test_method_call_column_position(self):
-        """Method call (.sem_fillna) has correct column position."""
+        """Method call (.sem_fillna) has correct column position — starts after the dot (Rule 1)."""
         code = "y = x.sem_fillna(target_column='a')"
         nodes, _ = extract_nodes_with_ranges(code)
 
         r = nodes[0].source_range
-        # "y = x." is 6 chars, so .sem_fillna starts at column 5 (0-indexed)
-        # But the pattern matches ".sem_fillna(" so start is at the dot
-        assert r.start_column >= 5
+        # "y = x." is 6 chars (1-indexed cols 1-6); 's' of 'sem_fillna' is at col 7
+        # Rule 1: start_column is at 's', NOT at '.'
+        assert r.start_column == 7
 
 
 class TestSimplePipeline:
@@ -341,31 +361,25 @@ class TestSourceRangeAccuracyForHighlighting:
     """
 
     def test_highlighting_range_covers_method_name(self):
-        """The source range should at minimum cover the method name."""
+        """Highlighted range is exactly the method name — no dot, no paren (Rules 1 & 2)."""
         code = "y = x.sem_fillna(target_column='a')"
         nodes, _ = extract_nodes_with_ranges(code)
 
         r = nodes[0].source_range
         line = code.split('\n')[r.start_line - 1]
-
-        # Extract the substring that would be highlighted
-        # Note: columns are 1-indexed, Python slicing is 0-indexed
         highlighted = line[r.start_column - 1 : r.end_column - 1]
 
-        # Should contain the method name
-        assert "sem_fillna" in highlighted or highlighted.startswith(".sem_fillna")
+        assert highlighted == "sem_fillna", f"Expected 'sem_fillna', got '{highlighted}'"
 
     def test_highlighting_range_for_skrub_var(self):
-        """skrub.var highlighting should cover the pattern."""
+        """skrub.var highlighted range is exactly 'skrub.var' — no trailing '(' (Rule 2)."""
         code = 'products = skrub.var("products", data)'
         nodes, _ = extract_nodes_with_ranges(code)
 
         r = nodes[0].source_range
-        line = code
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        highlighted = code[r.start_column - 1 : r.end_column - 1]
 
-        # Should match "skrub.var("
-        assert "skrub.var" in highlighted
+        assert highlighted == "skrub.var", f"Expected 'skrub.var', got '{highlighted}'"
 
     def test_all_operators_have_meaningful_ranges(self):
         """All operator types should have ranges that match their patterns."""
@@ -402,248 +416,171 @@ class TestColumnIndexingConsistency:
     Monaco editor uses 1-indexed lines and columns. The source ranges must
     be consistently 1-indexed for proper code highlighting.
 
-    For exclusive end ranges (like Monaco):
-    - start_column is the 1-indexed position of the first character
-    - end_column is the 1-indexed position AFTER the last character
+    Convention (exclusive end, matching Rules 1 & 2):
+    - start_column: 1-indexed position of the first character of the NAME
+      (after any leading dot — Rule 1)
+    - end_column: 1-indexed position ONE PAST the last character of the NAME
+      (before the opening paren — Rule 2)
 
     Example: "sempipes.as_X(" in "sempipes.as_X(df, 'X')"
     - Characters: s(1) e(2) m(3) p(4) i(5) p(6) e(7) s(8) .(9) a(10) s(11) _(12) X(13) ((14)
     - start_column = 10 (the 'a' in 'as_X')
-    - end_column = 15 (one past the '(' which is at position 14)
+    - end_column = 14 (one past 'X'; the '(' at position 14 is NOT included — Rule 2)
+
+    Highlighted text = line[start_column - 1 : end_column - 1]  (Python slice)
     """
 
     def test_as_x_exact_column_positions(self):
-        """Verify exact column positions for as_X pattern."""
+        """Verify exact column positions for as_X pattern (Rule 2: no trailing '(')."""
         code = "sempipes.as_X(df, 'X')"
         raw = _find_call_ranges(code)
 
         assert len(raw) == 1
         entry = raw[0]
 
-        # Pattern "as_X(" matches starting at column 10 (1-indexed)
         # s=1 e=2 m=3 p=4 i=5 p=6 e=7 s=8 .=9 a=10 s=11 _=12 X=13 (=14
-        # So as_X( starts at index 9 (0-indexed) = column 10 (1-indexed)
+        # 'as_X' starts at column 10 (1-indexed)
         assert entry.start_col == 10, f"Expected start_col=10, got {entry.start_col}"
 
-        # The pattern "as_X(" is 5 chars: a(10) s(11) _(12) X(13) ((14)
-        # End column should be 15 (exclusive, one past the '(')
-        assert entry.end_col == 15, f"Expected end_col=15, got {entry.end_col}"
+        # 'as_X' is 4 chars: a(10) s(11) _(12) X(13)
+        # end_col = 14 (exclusive, one past 'X'; '(' at position 14 is NOT included — Rule 2)
+        assert entry.end_col == 14, f"Expected end_col=14, got {entry.end_col}"
 
     def test_skrub_var_exact_column_positions(self):
-        """Verify exact column positions for skrub.var pattern."""
+        """Verify exact column positions for skrub.var pattern (Rule 2: no trailing '(')."""
         code = 'products = skrub.var("products", data)'
         raw = _find_call_ranges(code)
 
         assert len(raw) == 1
         entry = raw[0]
 
-        # "products = " is 11 chars, "skrub.var(" starts at column 12
+        # "products = " is 11 chars, "skrub.var" starts at column 12
         assert entry.start_col == 12, f"Expected start_col=12, got {entry.start_col}"
 
-        # "skrub.var(" is 10 chars, so end should be 12 + 10 = 22
-        assert entry.end_col == 22, f"Expected end_col=22, got {entry.end_col}"
+        # "skrub.var" is 9 chars, so end = 12 + 9 = 21 (exclusive, '(' at col 21 not included)
+        assert entry.end_col == 21, f"Expected end_col=21, got {entry.end_col}"
 
     def test_method_call_exact_column_positions(self):
-        """Verify exact column positions for method call (.sem_fillna)."""
+        """Verify exact column positions for method call (.sem_fillna) — Rules 1 & 2."""
         code = "y = x.sem_fillna(target_column='a')"
         raw = _find_call_ranges(code)
 
         assert len(raw) == 1
         entry = raw[0]
 
-        # "y = x" is 5 chars, ".sem_fillna(" starts at column 6
-        assert entry.start_col == 6, f"Expected start_col=6, got {entry.start_col}"
+        # "y = x." is 6 chars (cols 1-6); 's' of 'sem_fillna' is at col 7
+        # Rule 1: start_col is at 's', NOT at '.'
+        assert entry.start_col == 7, f"Expected start_col=7 (after dot, Rule 1), got {entry.start_col}"
 
-        # ".sem_fillna(" is 12 chars, so end should be 6 + 12 = 18
-        assert entry.end_col == 18, f"Expected end_col=18, got {entry.end_col}"
+        # "sem_fillna" is 10 chars: cols 7-16 (inclusive)
+        # end_col = 17 (exclusive, one past 'a'; '(' at col 17 not included — Rule 2)
+        assert entry.end_col == 17, f"Expected end_col=17 (before '(', Rule 2), got {entry.end_col}"
 
     def test_highlighting_extracts_correct_text(self):
-        """The highlighted text should match the pattern exactly."""
+        """Highlighted text is the name only — no trailing '(' (Rule 2)."""
         code = "sempipes.as_X(df, 'X')"
         raw = _find_call_ranges(code)
         entry = raw[0]
 
-        # Using 1-indexed columns with exclusive end
         highlighted = code[entry.start_col - 1 : entry.end_col - 1]
 
-        # Should extract "as_X("
-        assert highlighted == "as_X(", f"Expected 'as_X(', got '{highlighted}'"
+        assert highlighted == "as_X", f"Expected 'as_X', got '{highlighted}'"
 
     def test_skrub_var_highlighting_extracts_correct_text(self):
-        """Verify skrub.var highlighting extracts the correct text."""
+        """skrub.var highlighting: name only, no trailing '(' (Rule 2)."""
         code = 'products = skrub.var("products", data)'
         raw = _find_call_ranges(code)
         entry = raw[0]
 
         highlighted = code[entry.start_col - 1 : entry.end_col - 1]
 
-        assert highlighted == "skrub.var(", f"Expected 'skrub.var(', got '{highlighted}'"
+        assert highlighted == "skrub.var", f"Expected 'skrub.var', got '{highlighted}'"
 
     def test_sem_fillna_highlighting_extracts_correct_text(self):
-        """Verify .sem_fillna highlighting extracts the correct text."""
+        """sem_fillna highlighting: no leading '.' (Rule 1), no trailing '(' (Rule 2)."""
         code = "y = x.sem_fillna(target_column='a')"
         raw = _find_call_ranges(code)
         entry = raw[0]
 
         highlighted = code[entry.start_col - 1 : entry.end_col - 1]
 
-        assert highlighted == ".sem_fillna(", f"Expected '.sem_fillna(', got '{highlighted}'"
+        assert highlighted == "sem_fillna", f"Expected 'sem_fillna', got '{highlighted}'"
 
     def test_skb_subsample_highlighting(self):
-        """Verify .skb.subsample highlighting extracts the correct text."""
+        """skb.subsample highlighting: no leading '.' (Rule 1), no trailing '(' (Rule 2)."""
         code = "products = products.skb.subsample(n=100)"
         raw = _find_call_ranges(code)
         entry = raw[0]
 
         highlighted = code[entry.start_col - 1 : entry.end_col - 1]
 
-        # Pattern matches ".skb.subsample("
-        assert highlighted == ".skb.subsample(", f"Expected '.skb.subsample(', got '{highlighted}'"
+        assert highlighted == "skb.subsample", f"Expected 'skb.subsample', got '{highlighted}'"
 
     def test_skb_eval_highlighting(self):
-        """Verify .skb.eval highlighting extracts the correct text."""
+        """skb.eval highlighting: no leading '.' (Rule 1), no trailing '(' (Rule 2)."""
         code = "result = products.skb.eval()"
         raw = _find_call_ranges(code)
         entry = raw[0]
 
         highlighted = code[entry.start_col - 1 : entry.end_col - 1]
 
-        # Pattern matches ".skb.eval("
-        assert highlighted == ".skb.eval(", f"Expected '.skb.eval(', got '{highlighted}'"
+        assert highlighted == "skb.eval", f"Expected 'skb.eval', got '{highlighted}'"
 
 
 class TestSempipesOperatorSourceRanges:
-    """Explicit test per sempipes operator: node exists, has source_range, highlighting covers call."""
+    """
+    Explicit test per sempipes operator: node exists, has source_range,
+    highlighted text is exactly the operator name (Rules 1 & 2).
+
+    For every method call `df.op_name(...)`:
+      highlighted == "op_name"   (no leading '.', no trailing '(')
+    For standalone calls `op_name(...)`:
+      highlighted == "op_name"   (no trailing '(')
+    """
+
+    def _check(self, code: str, expected_label: str, expected_highlighted: str) -> None:
+        nodes, _ = extract_nodes_with_ranges(code)
+        assert len(nodes) == 1, f"expected one node, got {[n.label for n in nodes]}"
+        node = nodes[0]
+        assert node.label == expected_label
+        r = node.source_range
+        assert r is not None
+        line = code.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert highlighted == expected_highlighted, (
+            f"Expected '{expected_highlighted}', got '{highlighted}'"
+        )
 
     def test_sem_fillna_node_and_highlighting(self):
-        """sem_fillna: one node, source_range present, highlighted span covers .sem_fillna(."""
-        code = "y = x.sem_fillna(target_column='a')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1, "expected one node"
-        node = nodes[0]
-        assert node.label == "sem_fillna"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_fillna(" in highlighted or highlighted.startswith(".sem_fillna")
+        self._check("y = x.sem_fillna(target_column='a')", "sem_fillna", "sem_fillna")
 
     def test_sem_gen_features_node_and_highlighting(self):
-        """sem_gen_features: one node, source_range present, highlighted span covers .sem_gen_features(."""
-        code = "y = x.sem_gen_features(nl_prompt='gen')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1, "expected one node"
-        node = nodes[0]
-        assert node.label == "sem_gen_features"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_gen_features(" in highlighted or highlighted.startswith(".sem_gen_features")
+        self._check("y = x.sem_gen_features(nl_prompt='gen')", "sem_gen_features", "sem_gen_features")
 
     def test_sem_extract_features_node_and_highlighting(self):
-        """sem_extract_features: one node, source_range present, highlighted span covers .sem_extract_features(."""
-        code = "y = x.sem_extract_features(columns=['a'])"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1, "expected one node"
-        node = nodes[0]
-        assert node.label == "sem_extract_features"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_extract_features(" in highlighted or highlighted.startswith(".sem_extract_features")
+        self._check("y = x.sem_extract_features(columns=['a'])", "sem_extract_features", "sem_extract_features")
 
     def test_sem_clean_node_and_highlighting(self):
-        """sem_clean: one node, source_range present, highlighted span covers .sem_clean(."""
-        code = "y = x.sem_clean(nl_prompt='clean', columns=['a'])"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_clean"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_clean(" in highlighted or highlighted.startswith(".sem_clean")
+        self._check("y = x.sem_clean(nl_prompt='clean', columns=['a'])", "sem_clean", "sem_clean")
 
     def test_sem_augment_node_and_highlighting(self):
-        """sem_augment: one node, source_range present, highlighted span covers .sem_augment(."""
-        code = "y = x.sem_augment(nl_prompt='augment')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_augment"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_augment(" in highlighted or highlighted.startswith(".sem_augment")
+        self._check("y = x.sem_augment(nl_prompt='augment')", "sem_augment", "sem_augment")
 
     def test_sem_agg_features_node_and_highlighting(self):
-        """sem_agg_features: one node, source_range present, highlighted span covers .sem_agg_features(."""
-        code = "y = x.sem_agg_features(nl_prompt='agg')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_agg_features"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_agg_features(" in highlighted or highlighted.startswith(".sem_agg_features")
+        self._check("y = x.sem_agg_features(nl_prompt='agg')", "sem_agg_features", "sem_agg_features")
 
     def test_sem_refine_node_and_highlighting(self):
-        """sem_refine: one node, source_range present, highlighted span covers .sem_refine(."""
-        code = "y = x.sem_refine(target_column='a', nl_prompt='refine')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_refine"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_refine(" in highlighted or highlighted.startswith(".sem_refine")
+        self._check("y = x.sem_refine(target_column='a', nl_prompt='refine')", "sem_refine", "sem_refine")
 
     def test_sem_select_node_and_highlighting(self):
-        """sem_select: one node, source_range present, highlighted span covers .sem_select(."""
-        code = "y = x.sem_select(nl_prompt='select')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_select"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_select(" in highlighted or highlighted.startswith(".sem_select")
+        self._check("y = x.sem_select(nl_prompt='select')", "sem_select", "sem_select")
 
     def test_sem_distill_node_and_highlighting(self):
-        """sem_distill: one node, source_range present, highlighted span covers .sem_distill(."""
-        code = "y = x.sem_distill(nl_prompt='distill')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1
-        node = nodes[0]
-        assert node.label == "sem_distill"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert ".sem_distill(" in highlighted or highlighted.startswith(".sem_distill")
+        self._check("y = x.sem_distill(nl_prompt='distill')", "sem_distill", "sem_distill")
 
     def test_sem_choose_node_and_highlighting(self):
-        """sem_choose: one node, source_range present, highlighted span covers sem_choose(."""
-        code = "choices = sem_choose(name='x')"
-        nodes, _ = extract_nodes_with_ranges(code)
-        assert len(nodes) == 1, "expected one node"
-        node = nodes[0]
-        assert node.label == "sem_choose"
-        r = node.source_range
-        assert r is not None
-        line = code.split("\n")[r.start_line - 1]
-        highlighted = line[r.start_column - 1 : r.end_column - 1]
-        assert "sem_choose(" in highlighted or highlighted.startswith("sem_choose")
+        """sem_choose is a standalone call (no dot); still no trailing '(' (Rule 2)."""
+        self._check("choices = sem_choose(name='x')", "sem_choose", "sem_choose")
 
 
 class TestMultipleInstancesAndMultiline:
