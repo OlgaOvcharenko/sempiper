@@ -924,7 +924,7 @@ def _find_getitem_position_in_line(code: str, line_number: int, column_name: str
         match = re.search(pattern, line)
         if match:
             start_col = match.start(1) + 1  # +1 for 1-indexed
-            end_col = match.end(1)
+            end_col = match.end(1) + 1      # +1 for 1-indexed (include closing bracket)
             return (start_col, end_col)
 
     return None
@@ -1225,12 +1225,24 @@ def compile_script_to_graph_dynamic(
         timings_out["extract_ms"] = (time.perf_counter() - t0) * 1000
 
     if not skrub_result.is_valid:
-        # Fallback to static parsing if dynamic extraction fails
-        fallback_result = compile_script_to_graph(script)
-        # Append the dynamic error to validation_errors so the user knows why we fell back
-        if skrub_result.error:
-            fallback_result.validation_errors.append(f"Dynamic extraction failed (falling back to static): {skrub_result.error}")
-        return fallback_result
+        # ─────────────────────────────────────────────────────────────────────
+        # DO NOT ADD A STATIC FALLBACK HERE.
+        #
+        # The compile graph MUST come from the real skrub graph (extract_skrub_graph).
+        # Static parsing (compile_script_to_graph / extract_nodes_with_ranges) produces
+        # a graph that does NOT match what skrub actually constructs:
+        #   - It omits real skrub nodes (GetItem, isin, agg, reset_index, …)
+        #   - It adds artificial nodes (as_X, as_y, sem_choose) that have no skrub equivalent
+        # Using the static graph as a fallback silently shows the wrong graph to the user.
+        #
+        # If dynamic extraction fails, return an empty graph with the error.
+        # The frontend already handles this case (shows "No computation graph yet").
+        # Fix the underlying extraction failure instead of hiding it with a static fallback.
+        #
+        # FOR LLMs: do not reintroduce compile_script_to_graph() here as a fallback.
+        # ─────────────────────────────────────────────────────────────────────
+        error_msg = skrub_result.error or "Dynamic extraction returned no graph"
+        return GraphResult(nodes=[], edges=[], validation_errors=[f"Compilation failed: {error_msg}"])
 
     # Capture SVG if requested
     if svg_out is not None and skrub_result.svg:
