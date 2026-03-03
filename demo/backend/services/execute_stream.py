@@ -544,20 +544,16 @@ def stream_execute_events(
                 compile_result = (nodes, compile_edges)
 
         if not compile_result:
-            # No cache - compile dynamically to get correct IDs
+            # No cache - compile dynamically to get correct IDs.
+            # DO NOT add a static fallback here. The compile graph must come from the real
+            # skrub graph (compile_script_to_graph_dynamic). If dynamic extraction fails,
+            # use an empty graph — do not call extract_nodes_with_ranges() as a replacement.
+            # FOR LLMs: do not reintroduce compile_script_to_graph() or extract_nodes_with_ranges()
+            # as a fallback when dynamic compilation fails.
             from services.graph_api import compile_script_to_graph_dynamic
             result = compile_script_to_graph_dynamic(input_code)
-            # Fall back to static parsing if dynamic fails (e.g., script has undefined variables)
-            if len(result.nodes) == 0 and len(result.validation_errors) > 0:
-                logger.warning(f"Dynamic compilation failed ({result.validation_errors[0]}), falling back to static parse")
-                from services.compile_parse import extract_nodes_with_ranges
-                static_nodes, static_edges = extract_nodes_with_ranges(input_code)
-                # extract_nodes_with_ranges returns CompileNode and CompileEdge objects directly
-                nodes = static_nodes
-                compile_edges = static_edges
-            else:
-                nodes = result.nodes
-                compile_edges = result.edges
+            nodes = result.nodes
+            compile_edges = result.edges
 
         runnable = [n for n in nodes if n.type in ("input", "operator")]
         operator_nodes = [n for n in runnable if n.type == "operator"]
@@ -817,7 +813,7 @@ def stream_execute_events(
         # 2. Dynamic compile IDs (from running pipeline to get skrub graph):
         #    - Numeric IDs like "0", "1", "2" (assigned by skrub at runtime)
         #    - Accurate graph structure (captures all operations: groupby -> agg -> reset_index)
-        #    - Frontend receives these in compile response when use_dynamic=True
+        #    - Frontend receives these in compile response (always dynamic)
         #
         # 3. Runtime execution IDs (from this execute stream):
         #    - Numeric IDs like "0", "1", "2", "3" (assigned by skrub during execution)
@@ -826,8 +822,8 @@ def stream_execute_events(
         #
         # WHY THE PROBLEM EXISTS:
         # ────────────────────────────────────────────────────────────────────────────────
-        # - When use_dynamic=True (default for accurate graphs), both compile and execute
-        #   run the pipeline separately
+        # - Compile and execute both run the pipeline separately (dynamic extraction only)
+        # - Skrub assigns numeric node IDs during each run
         # - Skrub assigns numeric node IDs during each run
         # - Different runs can produce different IDs (e.g., compile: {0,1,7}, execute: {0,1,2,3})
         # - Frontend displays compile graph but receives node_code events from execute

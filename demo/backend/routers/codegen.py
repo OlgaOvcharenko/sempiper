@@ -15,7 +15,7 @@ from models.schemas import (
 from pydantic import BaseModel, Field
 from services.cache import CacheFormat, cache_service, make_cache_key
 from services.cache.utils import _normalize_script
-from services.graph_api import compile_script_to_graph, compile_script_to_graph_dynamic, save_svg_to_cache_async
+from services.graph_api import compile_script_to_graph_dynamic, save_svg_to_cache_async
 from services.engine import CodeGenerator, get_sempipes_config, is_sempipes_available
 from services.execute_stream import stream_execute_events
 
@@ -105,7 +105,8 @@ def get_script_content(name: str, mode: str = "normal") -> dict:
 
 class CompileRequest(BaseModel):
     input_code: str
-    use_dynamic: bool = True  # Use dynamic skrub graph for accurate full DAG with all operations
+    # DO NOT ADD use_dynamic=False SUPPORT. Dynamic extraction (real skrub graph) is the only
+    # valid compile path. See graph_api.compile_script_to_graph_dynamic for details.
     script_id: str | None = None  # Script id for SVG caching (simple, medium, full)
     llm_name: str | None = None  # LLM model name for caching
     temperature: float | None = None  # LLM temperature for caching (0-2)
@@ -177,16 +178,13 @@ def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
             return CompileResponse(**cached)
 
     timings: dict[str, float] | None = (
-        {} if (_compile_timing_enabled(request) and req.use_dynamic) else None
+        {} if _compile_timing_enabled(request) else None
     )
     svg_out: list[str] = []
-    if req.use_dynamic:
-        result = compile_script_to_graph_dynamic(req.input_code, timings_out=timings, svg_out=svg_out)
-        # Save SVG to cache asynchronously if cache_key is available
-        if cache_key and svg_out:
-            save_svg_to_cache_async(svg_out[0], cache_key)
-    else:
-        result = compile_script_to_graph(req.input_code)
+    result = compile_script_to_graph_dynamic(req.input_code, timings_out=timings, svg_out=svg_out)
+    # Save SVG to cache asynchronously if cache_key is available
+    if cache_key and svg_out:
+        save_svg_to_cache_async(svg_out[0], cache_key)
     if timings and len(timings) > 0:
         logging.getLogger(__name__).info("compile_timings_ms: %s", timings)
 
@@ -204,7 +202,7 @@ def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
             "llm_name": req.llm_name,
             "temperature": req.temperature,
             "script_id": req.script_id,
-            "use_dynamic": req.use_dynamic,
+            "use_dynamic": True,  # always dynamic; static fallback removed
         }
         cache_service.set(cache_key, "compile", response.model_dump(), metadata=metadata)
 

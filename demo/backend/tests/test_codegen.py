@@ -194,17 +194,17 @@ def test_generate_default_options():
 
 
 def test_compile_returns_200_and_nodes_with_ranges():
+    # Uses a minimal modern sempipes script that dynamic extraction can compile.
+    # Static fallback is removed; this test always goes through compile_script_to_graph_dynamic.
     resp = client.post(
         "/api/compile",
-        json={"input_code": 'p = pipeline(\n  source("input"),\n  op("transform"),\n)', "use_dynamic": False},
+        json={"input_code": "import skrub\nfrom sklearn.preprocessing import StandardScaler\nX = skrub.var(\"X\")\nresult = X.skb.apply(StandardScaler())\n"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert "nodes" in data
     nodes = data["nodes"]
-    assert len(nodes) >= 2
-    ids = {n["id"] for n in nodes}
-    assert "input_input" in ids or any(n["type"] == "input" for n in nodes)
+    assert len(nodes) >= 1
     for n in nodes:
         assert "id" in n and "type" in n and "label" in n
         if n.get("source_range"):
