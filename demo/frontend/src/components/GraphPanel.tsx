@@ -3,13 +3,15 @@
  * Uses Cytoscape.js for graph visualization instead of SVG.
  * Renders interactive DAG: click nodes to select and inspect. Loading icon while pipeline runs.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, Component, type ReactNode } from "react";
 import cytoscape, { type Core, type NodeSingular } from "cytoscape";
-import dagre from "cytoscape-dagre";
 import type { SkrubGraphDict } from "../api/client";
-
-cytoscape.use(dagre);
-import { toSkrubId } from "../utils/graphCodeSync";
+import {
+  buildCyElements,
+  computePresetPositions,
+  PRESET_LAYOUT_CONFIG,
+  EDGE_CURVE_STYLE,
+} from "../utils/graphLayout";
 
 export interface GraphNode {
   id: string;
@@ -49,14 +51,6 @@ const MOCK_NODES: GraphNode[] = [
   { id: "op1", type: "operator", label: "Op" },
 ];
 
-// Calculate node width based on label length (approx 8px per character + padding)
-const calculateNodeWidth = (label: string): number => {
-  const minWidth = 70;
-  const charWidth = 7;
-  const padding = 24;
-  const calculatedWidth = label.length * charWidth + padding;
-  return Math.max(minWidth, calculatedWidth);
-};
 
 export function GraphPanel({
   selectedNodeId,
@@ -81,20 +75,6 @@ export function GraphPanel({
   const hasSkrubDict = Boolean(skrubGraph?.nodes?.length);
   const shouldShowSkrubDict = hasSkrubDict;
 
-  // Helper to infer node type from label
-  // "input" nodes (with "var" in label) get blue color
-  // "operator" nodes get white (non-sempipes) or green (sempipes) based on isSempipesSemantic
-  const inferNodeType = (label: string): "input" | "operator" => {
-    if (!label) return "operator";
-    const low = label.toLowerCase();
-
-    // Nodes with "var" in label are input/data initialization nodes (blue)
-    if (low.includes("var")) return "input";
-
-    // Everything else is an operator (white for non-sempipes, green for sempipes)
-    return "operator";
-  };
-
   // Initialize Cytoscape
   useEffect(() => {
     if (!containerRef.current || !shouldShowSkrubDict || !skrubGraph) {
@@ -103,44 +83,16 @@ export function GraphPanel({
 
     // Destroy existing instance
     if (cyRef.current) {
-      cyRef.current.destroy();
+      try {
+        cyRef.current.destroy();
+      } catch {
+        // Container may already be detached from the DOM
+      }
       cyRef.current = null;
     }
 
-    // Prepare nodes with computed width
-    const cyNodes = skrubGraph.nodes.map((node) => {
-      const nodeId = toSkrubId(node.id);
-      const isSempipesSemantic =
-        skrubGraph.sempipesNodeIds?.includes(node.id) ?? node.is_sempipes_semantic ?? false;
-      const nodeType = inferNodeType(node.label);
-      const nodeWidth = calculateNodeWidth(node.label);
-
-      return {
-        data: {
-          id: nodeId,
-          label: node.label,
-          isSempipesSemantic: isSempipesSemantic ? "true" : "false", // Use string for selector
-          nodeType, // Use nodeType to avoid conflict with Cytoscape's internal 'type'
-          nodeWidth,
-        },
-      };
-    });
-
-    // Prepare edges (from parents dict)
-    const cyEdges: Array<{ data: { id: string; source: string; target: string } }> = [];
-    for (const [nodeId, parentIds] of Object.entries(skrubGraph.parents)) {
-      const targetId = toSkrubId(nodeId);
-      for (const parentId of parentIds) {
-        const sourceId = toSkrubId(parentId);
-        cyEdges.push({
-          data: {
-            id: `${sourceId}-${targetId}`,
-            source: sourceId,
-            target: targetId,
-          },
-        });
-      }
-    }
+    const positions = computePresetPositions(skrubGraph);
+    const { cyNodes, cyEdges } = buildCyElements(skrubGraph, positions);
 
     // Theme-aware colors
     const colors = isDark
@@ -282,7 +234,8 @@ export function GraphPanel({
             "border-style": "solid",
           },
         },
-        // Edge style
+        // Edge style — bezier curves; endpoints are offset toward the target
+        // so edges exit/enter from the side of the node facing the connection
         {
           selector: "edge",
           style: {
@@ -290,20 +243,14 @@ export function GraphPanel({
             "line-color": colors.edgeColor,
             "target-arrow-color": colors.edgeColor,
             "target-arrow-shape": "triangle",
-            "curve-style": "bezier",
+            "curve-style": EDGE_CURVE_STYLE,
+            "source-endpoint": "data(sourceEndpoint)",
+            "target-endpoint": "data(targetEndpoint)",
             "arrow-scale": 0.8,
           },
         },
       ],
-      layout: {
-        name: "dagre",
-        rankDir: "TB",
-        nodeSep: 60,
-        rankSep: 50,
-        nodeDimensionsIncludeLabels: true,
-        fit: true,
-        padding: 30,
-      } as import("cytoscape").LayoutOptions,
+      layout: PRESET_LAYOUT_CONFIG as import("cytoscape").LayoutOptions,
       userZoomingEnabled: true,
       userPanningEnabled: true,
       boxSelectionEnabled: false,
@@ -327,6 +274,7 @@ export function GraphPanel({
 
     // Limit panning to keep graph always in view
     cy.on("viewport", () => {
+      if (cy.elements().length === 0) return;
       const zoom = cy.zoom();
       const pan = cy.pan();
       const width = cy.width();
@@ -367,7 +315,11 @@ export function GraphPanel({
 
     return () => {
       if (cyRef.current) {
-        cyRef.current.destroy();
+        try {
+          cyRef.current.destroy();
+        } catch {
+          // Container may already be detached from the DOM
+        }
         cyRef.current = null;
       }
     };
@@ -450,5 +402,43 @@ export function GraphPanel({
         )}
       </div>
     </div>
+  );
+}
+
+class GraphPanelErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
+          <div className="flex-1 flex flex-col items-center justify-center h-full text-center px-8 gap-3">
+            <div className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">Graph unavailable</div>
+            <div className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
+              An error occurred while rendering the graph. Edit the pipeline code to reload.
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function GraphPanelWithErrorBoundary(props: GraphPanelProps) {
+  return (
+    <GraphPanelErrorBoundary>
+      <GraphPanel {...props} />
+    </GraphPanelErrorBoundary>
   );
 }
