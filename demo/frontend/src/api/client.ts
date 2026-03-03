@@ -441,7 +441,7 @@ export function executePipelineStream(
     .catch((err) => {
       try {
         if (err.name !== "AbortError") {
-          safeOnEvent({ type: "terminal", line: `Error: ${err.message}` });
+          safeOnEvent({ type: "error", message: err.message ?? "Request failed" });
         }
         safeOnEvent({ type: "done" });
       } catch {
