@@ -51,7 +51,7 @@ function getStyles(isDark: boolean, palette: Palette) {
                 "label": "data(formattedScore)",
                 "text-valign": "center",
                 "text-halign": "center",
-                "font-family": "'ui-monospace', 'SFMono-Regular', monospace",
+                "font-family": "ui-monospace, SFMono-Regular, monospace",
                 "font-size": 13,
                 "font-weight": 600,
                 "color": "data(nodeTextColor)",
