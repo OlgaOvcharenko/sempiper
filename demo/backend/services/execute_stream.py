@@ -490,7 +490,63 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
             if label == "groupby":
                 groupby_usage += 1
 
+    # Extend so every runtime node maps to a compile ID (for node_data lookups in the UI).
+    # 1) Map runtime node id to self when it's also a compile node id (e.g. 12 -> 12).
+    # 2) For unmapped nodes, use the compile ID of the nearest ancestor that is mapped.
+    result = _extend_skrub_to_compile_id(graph, result, runnable)
     return result
+
+
+def _extend_skrub_to_compile_id(
+    graph: dict, base_mapping: dict[str, str], runnable: list
+) -> dict[str, str]:
+    """
+    Extend base_mapping so every node in the runtime graph has a compile ID.
+    - If a graph node id equals a compile node id, map it to itself.
+    - Otherwise, map unmapped nodes to the compile ID of their nearest mapped ancestor.
+    """
+    if not graph or not runnable:
+        return dict(base_mapping)
+    compile_ids = {getattr(n, "id", str(n)) for n in runnable}
+    extended = dict(base_mapping)
+    nodes = graph.get("nodes") or []
+    all_skrub_ids = {sn.get("id") for sn in nodes if sn.get("id")}
+    # Also include ids from children/parents in case they're not in nodes
+    children = graph.get("children") or {}
+    parents = graph.get("parents") or {}
+    for pid, cids in children.items():
+        all_skrub_ids.add(pid)
+        all_skrub_ids.update(cids)
+    for cid, pids in parents.items():
+        all_skrub_ids.add(cid)
+        all_skrub_ids.update(pids)
+    # Build parent_of: one parent per node (first parent from "parents" or from "children")
+    parent_of: dict[str, str] = {}
+    for node_id, parent_list in parents.items():
+        if parent_list:
+            parent_of[node_id] = parent_list[0]
+    for parent_id, child_list in children.items():
+        for child_id in child_list:
+            if child_id not in parent_of:
+                parent_of[child_id] = parent_id
+    # 1) Identity for graph nodes that are compile node ids
+    for skid in all_skrub_ids:
+        if skid and skid not in extended and skid in compile_ids:
+            extended[skid] = skid
+    # 2) Unmapped nodes: assign compile ID of nearest mapped ancestor
+    for skid in all_skrub_ids:
+        if not skid or skid in extended:
+            continue
+        current: str | None = skid
+        visited: set[str] = set()
+        while current and current not in visited:
+            visited.add(current)
+            if current in extended:
+                extended[skid] = extended[current]
+                break
+            current = parent_of.get(current)
+        # If we never found a mapped ancestor, leave unmapped (no change from base)
+    return extended
 
 
 def _is_semantic_operator(label: str) -> bool:
