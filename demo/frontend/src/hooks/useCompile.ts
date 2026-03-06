@@ -5,6 +5,10 @@ export interface UseCompileReturn {
   compileNodes: CompileNode[];
   compileEdges: CompileEdge[];
   compileError: string | null;
+  /** Graph validation errors from the last successful compile (empty if none). */
+  compileValidationErrors: string[];
+  /** Compile timing breakdown (ms) when X-Compile-Timing: 1 was sent; null otherwise. */
+  compileTimingsMs: Record<string, number> | null;
   /** Kept in sync with compileNodes; useful for avoiding stale closures in callbacks. */
   compileNodesRef: React.RefObject<CompileNode[]>;
   /** Manually trigger a re-compile (e.g. after changing LLM config). */
@@ -30,6 +34,8 @@ export function useCompile(opts: {
   const [compileNodes, setCompileNodes] = useState<CompileNode[]>([]);
   const [compileEdges, setCompileEdges] = useState<CompileEdge[]>([]);
   const [compileError, setCompileError] = useState<string | null>(null);
+  const [compileValidationErrors, setCompileValidationErrors] = useState<string[]>([]);
+  const [compileTimingsMs, setCompileTimingsMs] = useState<Record<string, number> | null>(null);
 
   const compileAbortRef = useRef<AbortController | null>(null);
   const compileNodesRef = useRef<CompileNode[]>([]);
@@ -56,10 +62,14 @@ export function useCompile(opts: {
       if (compileAbortRef.current !== controller) return;
       setCompileNodes(res.nodes);
       setCompileEdges(res.edges ?? []);
+      setCompileValidationErrors(res.validation_errors ?? []);
+      setCompileTimingsMs(res.compile_timings_ms ?? null);
     } catch (err) {
       if ((err as { name?: string })?.name === "AbortError") return;
       setCompileNodes([]);
       setCompileEdges([]);
+      setCompileValidationErrors([]);
+      setCompileTimingsMs(null);
       setCompileError(err instanceof Error ? err.message : String(err));
     } finally {
       if (compileAbortRef.current === controller) compileAbortRef.current = null;
@@ -78,5 +88,13 @@ export function useCompile(opts: {
     return () => clearTimeout(t);
   }, [refreshCompileGraph]);
 
-  return { compileNodes, compileEdges, compileError, compileNodesRef, refreshCompileGraph };
+  return {
+    compileNodes,
+    compileEdges,
+    compileError,
+    compileValidationErrors,
+    compileTimingsMs,
+    compileNodesRef,
+    refreshCompileGraph,
+  };
 }
