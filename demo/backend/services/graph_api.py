@@ -118,6 +118,7 @@ class SkrubGraphResult:
                 type=_infer_node_type(node.label, node.is_sempipes_semantic),
                 label=node.label,
                 source_range=None,  # Dynamic extraction doesn't provide source ranges
+                is_sempipes_semantic=node.is_sempipes_semantic,
             )
             for node in self.nodes
         ]
@@ -906,32 +907,39 @@ def _extract_getitem_columns_from_code(code: str, line_number: int) -> set[str]:
     return columns
 
 
-def _find_getitem_position_in_line(code: str, line_number: int, column_name: str) -> tuple[int, int] | None:
+def _find_getitem_position_in_line(
+    code: str,
+    line_number: int,
+    column_name: str,
+    occurrence: int = 0,
+) -> tuple[int, int] | None:
     """Find the start and end column positions of a GetItem operation for a specific column.
 
     Captures the variable name and brackets: df["col"] not just ["col"].
-    Returns (start_column, end_column) 1-indexed, or None if not found.
+    When the same column appears multiple times on the line, occurrence (0-based) picks which one.
+    Returns (start_column, end_column) 1-indexed inclusive, or None if not found.
     """
     lines = code.splitlines()
     if line_number < 1 or line_number > len(lines):
         return None
 
     line = lines[line_number - 1]
+    escaped = re.escape(column_name)
 
     # Look for patterns like var[["col"]] or var["col"] with the specific column name
-    # We want to capture the variable name and the brackets
     patterns = [
-        rf'(\w+\[\["{column_name}"\]\])',  # var[["col"]]
-        rf"(\w+\[\['{column_name}'\]\])",  # var[['col']]
-        rf'(\w+\["{column_name}"\])',      # var["col"]
-        rf"(\w+\['{column_name}'\])",      # var['col']
+        rf'(\w+\[\["{escaped}"\]\])',  # var[["col"]]
+        rf"(\w+\[\['{escaped}'\]\])",  # var[['col']]
+        rf'(\w+\["{escaped}"\])',      # var["col"]
+        rf"(\w+\['{escaped}'\])",      # var['col']
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, line)
-        if match:
-            start_col = match.start(1) + 1  # +1 for 1-indexed
-            end_col = match.end(1) + 1      # +1 for 1-indexed (include closing bracket)
+        matches = list(re.finditer(pattern, line))
+        if occurrence < len(matches):
+            match = matches[occurrence]
+            start_col = match.start(1) + 1  # 0-based -> 1-based
+            end_col = match.end(1)          # 1-based inclusive (end(1) is past last in 0-based = last col in 1-based)
             return (start_col, end_col)
 
     return None
@@ -1006,6 +1014,12 @@ def _merge_source_ranges(
 
     # Track which occurrence of each label we've used
     label_usage: dict[str, int] = {}
+
+    # Ensure each source range is assigned to at most one node (avoid duplicate Line X, cols Y–Z)
+    def _range_key(sr: SourceRange) -> tuple[int, int, int, int]:
+        return (sr.start_line, sr.start_column, sr.end_line, sr.end_column)
+
+    used_ranges: set[tuple[int, int, int, int]] = set()
 
     # Update skrub nodes with source ranges where possible
     result = []
@@ -1088,7 +1102,10 @@ def _merge_source_ranges(
         # (no fallback to sem_gen_features when only sem_extract_features in code). When both
         # appear in static, assign in document order: first skrub node gets sem_extract_features
         # range if available, then sem_gen_features.
-        effective_label = node.label
+        # Do not overwrite effective_label when we already set it to "skb.apply" in the
+        # apply_with_sem_choose/tablevectorizer fallback (key becomes *_matched).
+        if not key.endswith("_matched"):
+            effective_label = node.label
         if key == "sem_gen_features":
             if "sem_extract_features" in label_to_ranges:
                 occurrence = label_usage.get("sem_extract_features", 0)
@@ -1131,8 +1148,12 @@ def _merge_source_ranges(
                         ranges = label_to_ranges[candidate_key]
                         if occurrence < len(ranges):
                             base_range = ranges[occurrence]
-                            # Find the actual character position of the GetItem on this line
-                            getitem_pos = _find_getitem_position_in_line(script, base_range.start_line, getitem_col)
+                            # Same column may appear multiple times on one line; use occurrence on that line
+                            line_usage_key = f"getitem_{getitem_col}_line_{base_range.start_line}"
+                            line_occurrence = label_usage.get(line_usage_key, 0)
+                            getitem_pos = _find_getitem_position_in_line(
+                                script, base_range.start_line, getitem_col, occurrence=line_occurrence
+                            )
                             if getitem_pos:
                                 # Use the GetItem's actual position
                                 source_range = SourceRange(
@@ -1145,8 +1166,7 @@ def _merge_source_ranges(
                                 # Fallback to as_X/as_y range if we can't find the GetItem
                                 source_range = base_range
                             label_usage[f"getitem_to_{candidate_key}"] = occurrence + 1
-                            # Also mark this position as used to prevent other GetItem nodes from using it
-                            label_usage[f"getitem_{getitem_col}_line_{base_range.start_line}"] = 1
+                            label_usage[line_usage_key] = line_occurrence + 1
                             effective_label = node.label  # Keep original GetItem label
                             break
 
@@ -1157,21 +1177,22 @@ def _merge_source_ranges(
             if key == "getitem":
                 getitem_col = _extract_column_from_getitem_label(node.label)
                 if getitem_col:
-                    # Search for this GetItem in all lines
-                    for line_num in range(1, len(script.splitlines()) + 1):
-                        pos = _find_getitem_position_in_line(script, line_num, getitem_col)
+                    lines = script.splitlines()
+                    for line_num in range(1, len(lines) + 1):
+                        usage_key = f"getitem_{getitem_col}_line_{line_num}"
+                        line_occurrence = label_usage.get(usage_key, 0)
+                        pos = _find_getitem_position_in_line(
+                            script, line_num, getitem_col, occurrence=line_occurrence
+                        )
                         if pos:
-                            # Check if this line hasn't been used for this column yet
-                            usage_key = f"getitem_{getitem_col}_line_{line_num}"
-                            if label_usage.get(usage_key, 0) == 0:
-                                source_range = SourceRange(
-                                    start_line=line_num,
-                                    start_column=pos[0],
-                                    end_line=line_num,
-                                    end_column=pos[1],
-                                )
-                                label_usage[usage_key] = 1
-                                break
+                            source_range = SourceRange(
+                                start_line=line_num,
+                                start_column=pos[0],
+                                end_line=line_num,
+                                end_column=pos[1],
+                            )
+                            label_usage[usage_key] = line_occurrence + 1
+                            break
             elif key == "isin":
                 # Search for .isin( in all lines
                 for line_num in range(1, len(script.splitlines()) + 1):
@@ -1188,11 +1209,20 @@ def _merge_source_ranges(
                             label_usage[usage_key] = 1
                             break
 
+        # Deduplicate: never assign the same source range to two nodes
+        if source_range is not None:
+            rk = _range_key(source_range)
+            if rk in used_ranges:
+                source_range = None
+            else:
+                used_ranges.add(rk)
+
         result.append(CompileNode(
             id=node.id,
             type=node.type,
             label=effective_label,
             source_range=source_range,
+            is_sempipes_semantic=getattr(node, "is_sempipes_semantic", False),
         ))
     return result
 

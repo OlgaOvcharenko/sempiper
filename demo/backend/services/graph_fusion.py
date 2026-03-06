@@ -298,6 +298,7 @@ def fuse_sempipes_nodes(
             type=node.type,
             label=new_label,
             source_range=node.source_range,
+            is_sempipes_semantic=getattr(node, "is_sempipes_semantic", False),
         ))
 
     # Build new edge list

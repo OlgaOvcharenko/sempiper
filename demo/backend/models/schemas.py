@@ -45,6 +45,8 @@ class CompileNode(BaseModel):
     type: str  # "input" | "operator" | "pipeline"
     label: str
     source_range: SourceRange | None = None
+    """True if this node is a sempipes semantic operator that can produce generated code."""
+    is_sempipes_semantic: bool = False
 
 
 class CompileEdge(BaseModel):
