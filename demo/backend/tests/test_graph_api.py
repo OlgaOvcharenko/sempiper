@@ -430,6 +430,30 @@ class TestIntegrationWithPipelineScripts:
         # Simple pipeline should have these core nodes
         assert "sem_gen_features" in labels or any("gen_features" in l for l in labels)
 
+    def test_simple_pipeline_dynamic_uses_skb_apply_not_apply_with_sem_choose(self):
+        """Simple pipeline uses .skb.apply(), so compiled graph must show skb.apply not apply_with_sem_choose."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        from pathlib import Path
+
+        script_path = Path(__file__).parent.parent.parent.parent / "pipeline_scripts" / "simple.py"
+        if not script_path.exists():
+            pytest.skip("simple.py not found")
+
+        script = script_path.read_text()
+        result = compile_script_to_graph_dynamic(script)
+        if not result.is_valid or not result.nodes:
+            pytest.skip("dynamic compile failed")
+
+        labels = [n.label for n in result.nodes]
+        assert "apply_with_sem_choose" not in labels, (
+            "simple.py uses .skb.apply(), not .skb.apply_with_sem_choose(); graph must show skb.apply"
+        )
+        assert "skb.apply" in labels, "simple.py uses .skb.apply(); graph must contain skb.apply node"
+
     def test_medium_pipeline_script(self):
         """Compile the medium.py pipeline script."""
         from pathlib import Path

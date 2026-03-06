@@ -124,9 +124,71 @@ products = skrub.var("products")
             except json.JSONDecodeError:
                 pass
 
-    # No input_summary events should be emitted when real data is unavailable.
+    # No input_summary events should be emitted when data is unavailable.
     # The frontend shows "Run the pipeline to see..." in this case.
     input_summaries = [e for e in events if e.get("type") == "input_summary"]
     assert len(input_summaries) == 0, (
         f"No input_summary events should be emitted when data is unavailable; got: {input_summaries}"
+    )
+
+
+def _collect_events(resp_text):
+    events = []
+    for line in resp_text.split("\n"):
+        if line.strip().startswith("data: "):
+            try:
+                events.append(json.loads(line.strip()[6:]))
+            except json.JSONDecodeError:
+                pass
+    return events
+
+
+def _get_products_input_summary(events):
+    for e in events:
+        if e.get("type") == "input_summary" and e.get("node_id") and "products" in str(e.get("node_id", "")):
+            return e
+    # Fallback: first input_summary (many scripts only have one var)
+    input_summaries = [e for e in events if e.get("type") == "input_summary"]
+    return input_summaries[0] if input_summaries else None
+
+
+@pytest.mark.parametrize("n", [25, 50, 100])
+def test_runner_extract_var_input_summaries_row_count_matches_subsample_size(n):
+    """Runner must report row_count that matches the actual subsampled size, not the full dataset.
+
+    When the script has products = skrub.var(...).skb.subsample(n=N), the runner's
+    _extract_var_input_summaries materializes the DataOp and reports row_count == N.
+    """
+    pytest.importorskip("skrub")
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    script = f"""import skrub
+dataset = skrub.datasets.fetch_credit_fraud()
+products = skrub.var("products", dataset.products)
+products = products.skb.subsample(n={n}, how="random")
+"""
+    g = {}
+    exec(script, g)
+    summaries = _extract_var_input_summaries(g)
+    products_summary = next((s for s in summaries if s.get("var_name") == "products"), None)
+    assert products_summary is not None, f"Expected summary for 'products', got {[s.get('var_name') for s in summaries]}"
+    assert products_summary["row_count"] == n, (
+        f"row_count must match subsample size n={n}; got {products_summary['row_count']} (full-dataset count would be wrong)"
+    )
+
+
+def test_runner_extract_var_input_summaries_env_subsample_row_count():
+    """When env contains a subsampled DataFrame for a var, runner reports that row_count."""
+    pytest.importorskip("skrub")
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    import skrub
+    dataset = skrub.datasets.fetch_credit_fraud()
+    subsampled = dataset.products.sample(n=50, random_state=42)
+    g = {"env": {"products": subsampled}}
+    summaries = _extract_var_input_summaries(g)
+    products_summary = next((s for s in summaries if s.get("var_name") == "products"), None)
+    assert products_summary is not None
+    assert products_summary["row_count"] == 50, (
+        f"When env['products'] is 50-row sample, row_count must be 50; got {products_summary.get('row_count')}"
     )
