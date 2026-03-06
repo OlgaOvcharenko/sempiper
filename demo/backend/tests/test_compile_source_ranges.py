@@ -792,3 +792,150 @@ result = products.skb.eval()
                 f"Node {curr_node.id} (line {curr_node.source_range.start_line}) should be "
                 f"AFTER {prev_node.id} (line {prev_node.source_range.start_line}), not equal"
             )
+
+
+class TestIsinAndGetCallsInPipeline:
+    """
+    Tests for pipelines containing .isin() and subscript get (df["key"]) calls
+    like those in the simple pipeline:
+
+        kept_products = products[products["basket_ID"].isin(basket_ids["ID"])]
+
+    These calls are not sempipes operators and must not create nodes.
+    They must also not interfere with the source ranges of surrounding nodes.
+
+    All tests use standalone inline snippets, independent of the actual simple.py file,
+    so they remain valid even if that script changes.
+    """
+
+    # Mirrors simple.py: scoped function, isin call, subscript get, real operators.
+    SNIPPET_WITH_ISIN = """\
+def sempipes_pipeline():
+    products = skrub.var("products")
+    baskets = skrub.var("baskets")
+
+    fraud_flags = sempipes.as_y(baskets["fraud_flag"], "Fraud label")
+    basket_ids = sempipes.as_X(baskets[["ID"]], "Shopping baskets")
+
+    kept_products = products[products["basket_ID"].isin(basket_ids["ID"])]
+    kept_products = kept_products.sem_gen_features(
+        nl_prompt="Generate useful features.",
+        name="features",
+        how_many=3,
+    )
+
+    result = kept_products.skb.apply(estimator, y=fraud_flags)
+    return result"""
+
+    def test_isin_call_does_not_create_node(self):
+        """The .isin() call should not produce any node."""
+        nodes, _ = extract_nodes_with_ranges(self.SNIPPET_WITH_ISIN)
+        labels = [n.label for n in nodes]
+        assert "isin" not in labels, "isin should not be parsed as a node"
+
+    def test_subscript_get_does_not_create_node(self):
+        """Subscript access like basket_ids["ID"] should not produce any node."""
+        code = """\
+def sempipes_pipeline():
+    baskets = skrub.var("baskets")
+    basket_ids = sempipes.as_X(baskets[["ID"]], "X")
+    result = basket_ids["ID"].skb.apply(est)
+    return result
+"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        labels = [n.label for n in nodes]
+        # No node for the column key "ID"
+        assert "ID" not in labels
+        # No label should start with "[" (subscript node would be a bug)
+        assert not any((l or "").startswith("[") for l in labels), (
+            f"Unexpected subscript node found: {labels}"
+        )
+
+    def test_all_nodes_have_unique_source_ranges(self):
+        """No two nodes should share the same (start_line, start_column) pair."""
+        nodes, _ = extract_nodes_with_ranges(self.SNIPPET_WITH_ISIN)
+        seen: dict[tuple[int, int], str] = {}
+        for node in nodes:
+            r = node.source_range
+            key = (r.start_line, r.start_column)
+            assert key not in seen, (
+                f"Nodes {seen[key]!r} and {node.id!r} share source range at "
+                f"line {key[0]}, col {key[1]}"
+            )
+            seen[key] = node.id
+
+    def test_as_x_highlighted_text_correct_adjacent_to_isin(self):
+        """as_X should highlight exactly 'as_X' even when the next line has isin."""
+        nodes, _ = extract_nodes_with_ranges(self.SNIPPET_WITH_ISIN)
+        as_x = next(n for n in nodes if n.label == "as_X")
+        r = as_x.source_range
+        line = self.SNIPPET_WITH_ISIN.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert highlighted == "as_X", f"Expected 'as_X', got {highlighted!r}"
+
+    def test_sem_gen_features_highlighted_text_correct_after_isin(self):
+        """sem_gen_features should highlight exactly 'sem_gen_features' even when
+        the previous line has an isin call."""
+        nodes, _ = extract_nodes_with_ranges(self.SNIPPET_WITH_ISIN)
+        sem_gen = next(n for n in nodes if n.label == "sem_gen_features")
+        r = sem_gen.source_range
+        line = self.SNIPPET_WITH_ISIN.split("\n")[r.start_line - 1]
+        highlighted = line[r.start_column - 1 : r.end_column - 1]
+        assert highlighted == "sem_gen_features", (
+            f"Expected 'sem_gen_features', got {highlighted!r}"
+        )
+
+    def test_correct_node_labels_with_isin_and_get(self):
+        """Pipeline with isin/get lines should have exactly the expected operator nodes."""
+        nodes, _ = extract_nodes_with_ranges(self.SNIPPET_WITH_ISIN)
+        labels = [n.label for n in nodes]
+        assert "as_y" in labels
+        assert "as_X" in labels
+        assert "sem_gen_features" in labels
+        assert "skb.apply" in labels
+        assert "isin" not in labels
+        assert not any((l or "").startswith("[") for l in labels)
+
+    def test_isin_line_does_not_contaminate_adjacent_node_ranges(self):
+        """The isin line must not cause any two nodes to share a source range,
+        and both flanking operators must highlight their own name correctly."""
+        code = """\
+def sempipes_pipeline():
+    basket_ids = sempipes.as_X(df[["ID"]], "X")
+    kept = df[df["basket_ID"].isin(basket_ids["ID"])]
+    result = kept.sem_gen_features(nl_prompt="gen")
+    return result
+"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        ranges = [(n.source_range.start_line, n.source_range.start_column) for n in nodes]
+        assert len(ranges) == len(set(ranges)), (
+            f"Duplicate source ranges found: {ranges}"
+        )
+        lines = code.split("\n")
+        for node in nodes:
+            r = node.source_range
+            highlighted = lines[r.start_line - 1][r.start_column - 1 : r.end_column - 1]
+            if node.label == "as_X":
+                assert highlighted == "as_X", f"as_X highlighted {highlighted!r}"
+            elif node.label == "sem_gen_features":
+                assert highlighted == "sem_gen_features", (
+                    f"sem_gen_features highlighted {highlighted!r}"
+                )
+
+    def test_get_call_in_as_x_argument_does_not_create_extra_nodes(self):
+        """baskets[["ID"]] inside as_X(...) should not create a separate subscript node."""
+        code = """\
+def sempipes_pipeline():
+    baskets = skrub.var("baskets")
+    basket_ids = sempipes.as_X(baskets[["ID"]], "Shopping baskets")
+    result = basket_ids.sem_gen_features(nl_prompt="gen")
+    return result
+"""
+        nodes, _ = extract_nodes_with_ranges(code)
+        # Expect exactly: var_baskets, as_X, sem_gen_features
+        assert len(nodes) == 3, (
+            f"Expected 3 nodes, got {len(nodes)}: {[n.label for n in nodes]}"
+        )
+        labels = {n.label for n in nodes}
+        assert "as_X" in labels
+        assert "sem_gen_features" in labels
