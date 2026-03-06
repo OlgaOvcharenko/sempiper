@@ -238,10 +238,10 @@ export function compileToSkrubGraph(
     if (!children[e.source].includes(e.target)) children[e.source].push(e.target);
   }
 
-  // Only mark nodes as sempipes if their label starts with "sem_" (actual sempipes semantic operators)
+  // Mark nodes as sempipes if their label starts with "sem_" or is apply_with_sem_choose/sem_choose
   const isSempipesLabel = (label: string): boolean => {
     const low = (label ?? "").toLowerCase();
-    return low.startsWith("sem_");
+    return low.startsWith("sem_") || low === "apply_with_sem_choose" || low === "sem_choose";
   };
 
   const sempipesNodeIds = runnable
