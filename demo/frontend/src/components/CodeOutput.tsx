@@ -71,9 +71,9 @@ export function CodeOutput({ code, language, isLoading, isExpanded = false, isDa
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full w-full rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800">
+      <div className="flex items-center justify-center h-full w-full rounded-lg border border-slate-200 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 py-6">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          <div className="w-12 h-12 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
           <span className="text-slate-600 dark:text-zinc-400 text-sm">Generating...</span>
         </div>
       </div>
