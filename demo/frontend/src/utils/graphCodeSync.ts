@@ -30,7 +30,9 @@ export function toSkrubId(rawId: string): string {
 
 /**
  * Find compile node IDs that correspond to a graph node.
- * Uses, in order: backend mapping → label match → runnable index.
+ * Uses only compile-time data so code–graph mapping is stable and does not change after run.
+ * Order: direct id match (graph id = compile id) → label match → runnable index.
+ * Do not use skrubToCompileId here — that mapping is for re-keying run artifacts only.
  */
 export function graphNodeToCompileIds(
   graphNodeId: string,
@@ -41,25 +43,18 @@ export function graphNodeToCompileIds(
     runnableNodeIds?: string[];
   }
 ): string[] {
-  const { skrubToCompileId = {}, runnableNodeIds = [] } = options;
+  const { runnableNodeIds = [] } = options;
 
-  // 1. Backend mapping (most reliable, from execute stream)
-  const mappedId = skrubToCompileId[graphNodeId];
-  if (mappedId) {
-    const match = compileNodes.find((n) => n.id === mappedId);
-    return match ? [mappedId] : [];
-  }
-
-  // 2. Direct id match (preview mode: graph ids = compile ids)
+  // 1. Direct id match (display graph is from compile; graph node id = compile node id)
   const byId = compileNodes.filter((n) => n.id === graphNodeId);
   if (byId.length > 0) return byId.map((n) => n.id);
 
-  // 3. Label match
+  // 2. Label match
   const label = graphNode.label ?? "";
   const byLabel = compileNodes.filter((n) => (n.label ?? "") === label);
   if (byLabel.length > 0) return byLabel.map((n) => n.id);
 
-  // 4. Runnable index (post-run: skrub uses "0","1","2")
+  // 3. Runnable index (graph node position in runnable order)
   const idx = parseInt(graphNodeId, 10);
   if (!isNaN(idx) && idx >= 0 && idx < runnableNodeIds.length) {
     const cid = runnableNodeIds[idx];

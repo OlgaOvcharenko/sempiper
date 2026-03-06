@@ -30,10 +30,8 @@ describe("graphCodeSync", () => {
       { id: "sem_fillna_2", label: "sem_fillna", source_range: { start_line: 2, start_column: 1, end_line: 2, end_column: 25 } },
     ];
 
-    it("uses backend mapping when available", () => {
-      const ids = graphNodeToCompileIds("0", { id: "0", label: "as_X" }, compileNodes, {
-        skrubToCompileId: { "0": "as_X_1" },
-      });
+    it("matches by id or label (compile-time only; skrubToCompileId not used for code-graph sync)", () => {
+      const ids = graphNodeToCompileIds("0", { id: "0", label: "as_X" }, compileNodes, {});
       expect(ids).toEqual(["as_X_1"]);
     });
 
@@ -97,26 +95,22 @@ describe("graphCodeSync", () => {
     });
   });
 
-  describe("graphNodeToCompileIds (backend mapping precedence)", () => {
+  describe("graphNodeToCompileIds (compile-time only; run does not change mapping)", () => {
     const compileNodes = [
       { id: "as_X_1", label: "as_X", source_range: null },
       { id: "sem_fillna_2", label: "sem_fillna", source_range: null },
     ];
 
-    it("prefers backend skrubToCompileId over label match", () => {
+    it("uses label match not runtime skrubToCompileId so mapping is stable after run", () => {
       const ids = graphNodeToCompileIds("0", { id: "0", label: "as_X" }, compileNodes, {
         skrubToCompileId: { "0": "sem_fillna_2" },
       });
-      expect(ids).toEqual(["sem_fillna_2"]);
+      expect(ids).toEqual(["as_X_1"]);
     });
 
-    it("handles multiple skrub nodes with backend mapping", () => {
-      const ids1 = graphNodeToCompileIds("0", { id: "0", label: "as_X" }, compileNodes, {
-        skrubToCompileId: { "0": "as_X_1", "1": "sem_fillna_2" },
-      });
-      const ids2 = graphNodeToCompileIds("1", { id: "1", label: "sem_fillna" }, compileNodes, {
-        skrubToCompileId: { "0": "as_X_1", "1": "sem_fillna_2" },
-      });
+    it("handles multiple graph nodes by label / runnable index", () => {
+      const ids1 = graphNodeToCompileIds("0", { id: "0", label: "as_X" }, compileNodes, {});
+      const ids2 = graphNodeToCompileIds("1", { id: "1", label: "sem_fillna" }, compileNodes, {});
       expect(ids1).toEqual(["as_X_1"]);
       expect(ids2).toEqual(["sem_fillna_2"]);
     });
