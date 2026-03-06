@@ -13,9 +13,13 @@ export default function App() {
 
   // Sync tab favicon with app theme so the tab icon matches light/dark
   useEffect(() => {
-    const href = `${isDark ? "/favicon-32-dark.png" : "/favicon-32.png"}?v=${isDark ? "d" : "l"}`;
-    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"][sizes="32x32"]');
-    if (link) link.href = href;
+    const href16 = `${isDark ? "/favicon-16-dark.png" : "/favicon-16.png"}?v=${isDark ? "d" : "l"}`;
+    const href32 = `${isDark ? "/favicon-32-dark.png" : "/favicon-32.png"}?v=${isDark ? "d" : "l"}`;
+    document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]').forEach((link) => {
+      const sizes = link.getAttribute("sizes") ?? "";
+      if (sizes.includes("16")) link.href = href16;
+      else if (sizes.includes("32")) link.href = href32;
+    });
   }, [isDark]);
 
   return (
