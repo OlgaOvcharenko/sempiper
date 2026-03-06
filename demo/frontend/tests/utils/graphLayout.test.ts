@@ -13,7 +13,8 @@ import {
   countEdgeCrossings,
   buildCyElements,
 } from "../../src/utils/graphLayout";
-import type { SkrubGraphDict } from "../../src/api/client";
+import type { SkrubGraphDict, } from "../../src/api/client";
+import type { LayoutPosition } from "../../src/utils/graphLayout";
 
 // ---------------------------------------------------------------------------
 // Spacing constants — overlap-prevention constraints
@@ -630,5 +631,118 @@ describe("buildCyElements — edge construction", () => {
     const { cyEdges } = buildCyElements(diamond);
     const ids = cyEdges.map((e) => e.data.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computePresetPositions — no overlapping node positions
+// ---------------------------------------------------------------------------
+
+function allPositionsUnique(positions: Map<string, LayoutPosition>): boolean {
+  const seen = new Set<string>();
+  for (const [, pos] of positions) {
+    const key = `${pos.x},${pos.y}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
+describe("computePresetPositions — no overlapping node positions", () => {
+  it("linear chain: all nodes get distinct (x, y) positions", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+        { id: "d", label: "d" },
+      ],
+      parents: { a: [], b: ["a"], c: ["b"], d: ["c"] },
+      children: { a: ["b"], b: ["c"], c: ["d"], d: [] },
+    };
+    expect(allPositionsUnique(computePresetPositions(g))).toBe(true);
+  });
+
+  it("diamond DAG: all four nodes get distinct (x, y) positions", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "root", label: "root" },
+        { id: "left", label: "left" },
+        { id: "right", label: "right" },
+        { id: "sink", label: "sink" },
+      ],
+      parents: { root: [], left: ["root"], right: ["root"], sink: ["left", "right"] },
+      children: { root: ["left", "right"], left: ["sink"], right: ["sink"], sink: [] },
+    };
+    expect(allPositionsUnique(computePresetPositions(g))).toBe(true);
+  });
+
+  it("simple-pipeline topology (7 nodes): all nodes get distinct (x, y) positions", () => {
+    // Mirrors simple.py structure:
+    //   var_products(0) ────────────────────────► sem_gen(2) ──► sem_agg(3) ──► skb_apply(4)
+    //   var_baskets(0) ──► as_y(1) ─────────────────────────────────────────► skb_apply(4)
+    //                   ──► as_X(1) ────────────► sem_gen(2),  sem_agg(3)
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "var_products", label: "<Var 'products'>" },
+        { id: "var_baskets", label: "<Var 'baskets'>" },
+        { id: "as_y", label: "as_y" },
+        { id: "as_X", label: "as_X" },
+        { id: "sem_gen_features", label: "sem_gen_features" },
+        { id: "sem_agg_features", label: "sem_agg_features" },
+        { id: "skb_apply", label: "skb.apply" },
+      ],
+      parents: {
+        var_products: [],
+        var_baskets: [],
+        as_y: ["var_baskets"],
+        as_X: ["var_baskets"],
+        sem_gen_features: ["var_products", "as_X"],
+        sem_agg_features: ["as_X", "sem_gen_features"],
+        skb_apply: ["as_y", "sem_agg_features"],
+      },
+      children: {
+        var_products: ["sem_gen_features"],
+        var_baskets: ["as_y", "as_X"],
+        as_y: ["skb_apply"],
+        as_X: ["sem_gen_features", "sem_agg_features"],
+        sem_gen_features: ["sem_agg_features"],
+        sem_agg_features: ["skb_apply"],
+        skb_apply: [],
+      },
+    };
+    const positions = computePresetPositions(g);
+    expect(positions.size).toBe(7);
+    expect(allPositionsUnique(positions)).toBe(true);
+  });
+
+  it("three sibling source nodes each get a different position", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+        { id: "sink", label: "sink" },
+      ],
+      parents: { a: [], b: [], c: [], sink: ["a", "b", "c"] },
+      children: { a: ["sink"], b: ["sink"], c: ["sink"], sink: [] },
+    };
+    expect(allPositionsUnique(computePresetPositions(g))).toBe(true);
+  });
+
+  it("nodes in the same layer all have different x values", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "root", label: "root" },
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+      ],
+      parents: { root: [], a: ["root"], b: ["root"], c: ["root"] },
+      children: { root: ["a", "b", "c"], a: [], b: [], c: [] },
+    };
+    const positions = computePresetPositions(g);
+    const layer1Xs = (["a", "b", "c"] as const).map((id) => positions.get(id)!.x);
+    expect(new Set(layer1Xs).size).toBe(3);
   });
 });
