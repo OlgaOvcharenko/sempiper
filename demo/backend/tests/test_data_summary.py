@@ -192,3 +192,27 @@ def test_runner_extract_var_input_summaries_env_subsample_row_count():
     assert products_summary["row_count"] == 50, (
         f"When env['products'] is 50-row sample, row_count must be 50; got {products_summary.get('row_count')}"
     )
+
+
+def test_runner_input_summary_products_filtered_by_baskets():
+    """When env has subsampled baskets and full products (credit_fraud pattern), products summary
+    uses the filtered row count (products in those baskets), not the full table size."""
+    pytest.importorskip("skrub")
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    import skrub
+    dataset = skrub.datasets.fetch_credit_fraud()
+    baskets = dataset.baskets.sample(n=50, random_state=42)
+    products = dataset.products
+    g = {"env": {"baskets": baskets, "products": products}}
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+    assert "baskets" in by_var
+    assert "products" in by_var
+    assert by_var["baskets"]["row_count"] == 50
+    # Products should be filtered to rows whose basket_ID is in the 50 baskets
+    expected_products_count = len(products[products["basket_ID"].isin(baskets["ID"])])
+    assert by_var["products"]["row_count"] == expected_products_count, (
+        f"products row_count must match filtered size ({expected_products_count}), "
+        f"not full table ({len(products)}); got {by_var['products']['row_count']}"
+    )
