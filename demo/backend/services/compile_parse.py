@@ -654,3 +654,18 @@ def extract_nodes_with_ranges(
     )
 
     return nodes, edges
+
+
+def get_var_producer(input_code: str) -> dict[str, str]:
+    """
+    Return a mapping var_name -> node_id for each variable produced by an assignment
+    that contains a pipeline call. Uses the same parsing as extract_nodes_with_ranges
+    (no pruning). Used by the backend to map VAR_PREVIEW events to compile node IDs.
+    """
+    lines = input_code.split("\n")
+    scope = _find_pipeline_scope(lines)
+    raw = _find_call_ranges(input_code)
+    if not raw:
+        return {}
+    edges, var_producer = _infer_edges_from_flow(raw, lines, scope=scope)
+    return dict(var_producer)
