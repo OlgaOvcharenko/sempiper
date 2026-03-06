@@ -294,10 +294,23 @@ def _is_sempipes_semantic_label(label):
     low = label.strip().lower()
     if low.startswith("sem_"):
         return True
-    if low in ("apply_with_sem_choose", "sem_choose", "apply"):
+    if low in ("apply_with_sem_choose", "sem_choose"):
         return True
-    # Skrub labels Apply nodes as "Apply <Estimator>" (e.g. Apply ImputedLearner, Apply LLMImputer).
-    if low.startswith("apply "):
+    # Specific sempipes estimator class names (from "Apply <Estimator>" runtime labels).
+    # Only the classes that ARE sempipes semantic operators; standard ML estimators like
+    # HistGradientBoostingClassifier are NOT semantic (they come from plain skb.apply()).
+    _SEMANTIC_ESTIMATORS = (
+        "llmimputer", "learnedimputer", "imputedlearner",
+        "semfillnawithllm", "semfillnalllmplusmodel",
+        "llmfeaturegenerator", "codebasedfeatureextractor", "caafe",
+        "codedataaugmentor", "directdataaugmentor", "codeaugmentor",
+        "llmcleaner", "semcleanwithllm",
+        "llmdeduplicator", "semrefinewithllm",
+        "llmcodegensemaggfeaturesestimator", "llmcodegensemaaggjoinfeaturesoperator", "semaggfeatures",
+        "codedatadistiller", "semdistilldata",
+        "llmfeatureextractor", "semextractfeaturesllm",
+    )
+    if any(e in low for e in _SEMANTIC_ESTIMATORS):
         return True
     return False
 

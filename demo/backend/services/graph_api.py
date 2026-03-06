@@ -515,16 +515,23 @@ def _is_sempipes_semantic_label(label: str) -> bool:
     low = label.strip().lower()
     if low.startswith("sem_"):
         return True
-    if low in ("apply_with_sem_choose", "sem_choose", "apply"):
+    if low in ("apply_with_sem_choose", "sem_choose"):
         return True
-    if low.startswith("apply ") or low.startswith("<apply "):
-        return True
-    # Handle raw skrub labels like <Apply LLMImputer>
-    if "llmimputer" in low or "learnedimputer" in low or "imputedlearner" in low:
-        return True
-    if "llmfeaturegenerator" in low or "codebasedfeatureextractor" in low:
-        return True
-    if "codedataaugmentor" in low or "codeaugmentor" in low:
+    # Handle raw skrub labels like <Apply LLMImputer> — only for sempipes estimators.
+    # Standard ML estimators (e.g. HistGradientBoostingClassifier) used via plain
+    # skb.apply() are NOT semantic and must not return True here.
+    _SEMANTIC_ESTIMATORS = (
+        "llmimputer", "learnedimputer", "imputedlearner",
+        "semfillnawithllm", "semfillnallmplusmodel",
+        "llmfeaturegenerator", "codebasedfeatureextractor", "caafe",
+        "codedataaugmentor", "directdataaugmentor", "codeaugmentor",
+        "llmcleaner", "semcleanwithllm",
+        "llmdeduplicator", "semrefinewithllm",
+        "llmcodegensemaggfeaturesestimator", "semaggfeatures",
+        "codedatadistiller", "semdistilldata",
+        "llmfeatureextractor", "semextractfeaturesllm",
+    )
+    if any(e in low for e in _SEMANTIC_ESTIMATORS):
         return True
     return False
 
@@ -1004,6 +1011,7 @@ def _merge_source_ranges(
     result = []
     for node in skrub_nodes:
         source_range = None
+        effective_label = node.label  # default; may be overridden in special-case branches below
 
         # Try direct match first
         key = node.label.lower()
@@ -1038,7 +1046,11 @@ def _merge_source_ranges(
                     # Also keep legacy counter for tablevectorizer for backwards compat
                     if key == "tablevectorizer":
                         label_usage["tablevectorizer_to_skb_apply"] = label_usage["skb_apply_consumed"]
-                    effective_label = node.label
+                    # Relabel to "skb.apply": both tablevectorizer and apply_with_sem_choose nodes
+                    # that fall back to the skb.apply static range come from plain skb.apply() calls
+                    # (not apply_with_sem_choose) — use the correct label so they are not treated
+                    # as semantic operators.
+                    effective_label = "skb.apply"
                     key = f"{key}_matched"
                     getitem_needs_matching = False  # Already matched
 

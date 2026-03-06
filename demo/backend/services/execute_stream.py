@@ -447,9 +447,7 @@ def _is_semantic_operator(label: str) -> bool:
     low = label.strip().lower()
     if low.startswith("sem_"):
         return True
-    if low in ("apply_with_sem_choose", "sem_choose", "apply"):
-        return True
-    if low.startswith("apply "):  # Raw Apply nodes from skrub
+    if low in ("apply_with_sem_choose", "sem_choose"):
         return True
     return False
 
