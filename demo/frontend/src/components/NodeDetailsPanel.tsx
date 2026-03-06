@@ -197,6 +197,8 @@ export function NodeDetailsPanel({
     summaryMap[selectedNodeId] ?? summaryMap[rawNodeId] ??
     (compileId && summaryMap[compileId]) ??
     (compileId && summaryMap[`skrub_${compileId}`]) ?? undefined;
+  // For "Output data (preview)", prefer node_data; fall back to input_summary so input nodes and nodes with summary show data
+  const outputPreviewData = nodeData ?? inputSummary;
 
   const hasCompileDetails =
     compileNode != null ||
@@ -310,8 +312,8 @@ export function NodeDetailsPanel({
               <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
                 Output data (preview)
               </h3>
-              {nodeData ? (
-                <InputSummaryView summary={nodeData} />
+              {outputPreviewData ? (
+                <InputSummaryView summary={outputPreviewData} />
               ) : isExecuting ? (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400 italic py-3">
                   Running pipeline… output data will appear here when this node is processed.

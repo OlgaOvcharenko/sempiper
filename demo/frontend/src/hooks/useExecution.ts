@@ -85,6 +85,7 @@ export function useExecution(opts: {
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
 
   const executeAbortRef = useRef<AbortController | null>(null);
+  const skrubToCompileIdRef = useRef<Record<string, string>>({});
 
   // Keep callback refs so handlePlay doesn't need to be recreated when callbacks change.
   const onTemperatureInvalidRef = useRef(opts.onTemperatureInvalid);
@@ -101,6 +102,7 @@ export function useExecution(opts: {
     setLastRunCostUsd(null);
     setLastRunDurationMs(null);
     setSkrubToCompileId({});
+    skrubToCompileIdRef.current = {};
   }, []);
 
   const handlePlay = useCallback(async () => {
@@ -126,6 +128,7 @@ export function useExecution(opts: {
     setNodeDataByNode({});
     setLastRunCostUsd(null);
     setSkrubToCompileId({});
+    skrubToCompileIdRef.current = {};
     setLastRunDurationMs(null);
     setLastRunError(null);
 
@@ -159,9 +162,10 @@ export function useExecution(opts: {
     ): Record<string, T> => {
       const updated = { ...prev };
       for (const [skrubId, compileId] of Object.entries(mapping)) {
-        if (prev[skrubId] !== undefined) {
-          updated[compileId] = prev[skrubId];
-          updated[`skrub_${compileId}`] = prev[skrubId];
+        const value = prev[skrubId] ?? prev[`skrub_${skrubId}`];
+        if (value !== undefined) {
+          updated[compileId] = value;
+          updated[`skrub_${compileId}`] = value;
         }
       }
       return updated;
@@ -172,25 +176,34 @@ export function useExecution(opts: {
       (event) => {
         try {
           if (event.type === "input_summary") {
-            setInputSummaryByNode((prev) => ({
-              ...prev,
-              [event.node_id]: {
-                node_id: event.node_id,
-                schema: event.schema,
-                sample: event.sample,
-                row_count: event.row_count,
-              },
-            }));
+            const summary = {
+              node_id: event.node_id,
+              schema: event.schema,
+              sample: event.sample,
+              row_count: event.row_count,
+            };
+            setInputSummaryByNode((prev) => ({ ...prev, [event.node_id]: summary }));
+            // Also store in nodeDataByNode so "Output data (preview)" shows it without fallback
+            setNodeDataByNode((prev) => ({ ...prev, [event.node_id]: summary }));
           } else if (event.type === "node_data") {
-            setNodeDataByNode((prev) => ({
-              ...prev,
-              [event.node_id]: {
-                node_id: event.node_id,
-                schema: event.schema,
-                sample: event.sample,
-                row_count: event.row_count,
-              },
-            }));
+            const data = {
+              node_id: event.node_id,
+              schema: event.schema,
+              sample: event.sample,
+              row_count: event.row_count,
+            };
+            setNodeDataByNode((prev) => {
+              const next = { ...prev, [event.node_id]: data };
+              // If this is a skrub_ ID and we have a mapping, also set under compile ID so
+              // the panel finds it when the graph uses compile IDs (avoids depending on rekey timing)
+              const mapping = skrubToCompileIdRef.current;
+              if (mapping && event.node_id.startsWith("skrub_")) {
+                const skid = event.node_id.slice(6);
+                const compileId = mapping[skid];
+                if (compileId) next[compileId] = data;
+              }
+              return next;
+            });
           } else if (event.type === "node_code") {
             const nodeId = event.node_id;
             // Store under both the raw ID and the skrub-prefixed ID so NodeDetailsPanel
@@ -234,6 +247,7 @@ export function useExecution(opts: {
             // but do NOT replace the display graph — the compile graph is canonical.
             if (event.skrubToCompileId) {
               const mapping = event.skrubToCompileId as Record<string, string>;
+              skrubToCompileIdRef.current = mapping;
               setSkrubToCompileId(mapping);
               // Re-key all live maps so NodeDetailsPanel can find data via compile IDs
               // (the compile graph uses compile IDs, but node_code events used runtime IDs).
@@ -241,12 +255,20 @@ export function useExecution(opts: {
               setLiveNodeRetries((prev) => rekey(prev, mapping));
               setLiveFallbackByNode((prev) => rekey(prev, mapping));
               setLiveNodeCostUsd((prev) => rekey(prev, mapping));
+              setNodeDataByNode((prev) => rekey(prev, mapping));
+              setInputSummaryByNode((prev) => rekey(prev, mapping));
             }
           } else if (event.type === "done") {
             if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
             if (event.duration_ms != null) setLastRunDurationMs(event.duration_ms);
             setIsExecuting(false);
             executeAbortRef.current = null;
+            // Rekey again so node_data that arrived after skrub_graph get copied to compile IDs (e.g. cache replay)
+            const mapping = skrubToCompileIdRef.current;
+            if (mapping && Object.keys(mapping).length > 0) {
+              setNodeDataByNode((prev) => rekey(prev, mapping));
+              setInputSummaryByNode((prev) => rekey(prev, mapping));
+            }
           }
         } catch (e) {
           setLastRunError(e instanceof Error ? e.message : String(e));
