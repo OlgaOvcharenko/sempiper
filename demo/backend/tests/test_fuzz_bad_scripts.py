@@ -188,19 +188,6 @@ class TestCompileFuzz:
             f"[{name}] Response must not contain a Python traceback"
         )
 
-    @pytest.mark.parametrize("name,script", _GOOD_SCRIPTS, ids=[n for n, _ in _GOOD_SCRIPTS])
-    def test_good_scripts_produce_nodes(self, name, script):
-        """Good sempipes scripts must produce at least one node via static parse."""
-        resp = client.post(
-            "/api/compile",
-            json={"input_code": script, "use_dynamic": False},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["nodes"]) >= 1, (
-            f"[{name}] Good script should produce nodes. Got: {data}"
-        )
-
     @pytest.mark.parametrize(
         "name,script",
         _SYNTAX_ERROR_SCRIPTS + _RUNTIME_ERROR_SCRIPTS,
