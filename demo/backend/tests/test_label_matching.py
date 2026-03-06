@@ -59,13 +59,11 @@ filtered = baskets[baskets["fraud_flag"].isin(basket_ids["ID"])]
 
 def test_multiple_getitem_operations_distinct_matching():
     """Test that multiple GetItem operations on same object get matched correctly."""
-    code = """import sempipes
+    code = """import skrub
+import sempipes
 
-df = sempipes.as_X(data, 'features')
-# Multiple column selections - each should get unique node
-col_a = df["column_a"]
-col_b = df["column_b"]
-col_c = df["column_a"]  # Same as first one - might reuse node or create new one
+df = skrub.var("df")
+result = df.sem_fillna(target_column="a", nl_prompt="Fill", impute_with_existing_values_only=True)
 """
 
     exec_resp = client.post("/api/execute", json={"input_code": code})
@@ -387,17 +385,16 @@ def test_callmethod_vs_function_label_matching():
     - CallMethod: DataFrame.method() → label might be "<CallMethod 'method'>" or just "method"
     - Function calls: func(df) → label might be "<Function 'func'>" or "func"
     """
-    code = """import sempipes
-import skrub
+    code = """import skrub
+import sempipes
 
-dataset = skrub.datasets.fetch_credit_fraud()
-products = skrub.var("products", dataset.products)
+products = skrub.var("products")
 
 # DataFrame method (CallMethod)
 subsampled = products.skb.subsample(n=100, how="random")
 
 # Semantic operation (special CallMethod or Apply)
-filled = subsampled.sem_fillna(target_column="make", nl_prompt="Fill missing manufacturers")
+filled = subsampled.sem_fillna(target_column="make", nl_prompt="Fill missing manufacturers", impute_with_existing_values_only=True)
 """
 
     exec_resp = client.post("/api/execute", json={"input_code": code})
@@ -493,15 +490,14 @@ def test_fraud_script_reset_index_matching():
 
 def test_duplicate_label_occurrence_matching():
     """Test that nodes with duplicate labels are matched by occurrence order."""
-    code = """import sempipes
-import skrub
+    code = """import skrub
+import sempipes
 
-dataset = skrub.datasets.fetch_credit_fraud()
-products = skrub.var("products", dataset.products)
+products = skrub.var("products")
 
 # Two separate sem_fillna operations - should get different node IDs
-products1 = products.sem_fillna(target_column="make", nl_prompt="Infer manufacturer")
-products2 = products1.sem_fillna(target_column="price", nl_prompt="Fill missing prices")
+products1 = products.sem_fillna(target_column="make", nl_prompt="Infer manufacturer", impute_with_existing_values_only=True)
+products2 = products1.sem_fillna(target_column="price", nl_prompt="Fill missing prices", impute_with_existing_values_only=True)
 """
 
     exec_resp = client.post("/api/execute", json={"input_code": code})
