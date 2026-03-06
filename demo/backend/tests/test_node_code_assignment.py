@@ -27,10 +27,9 @@ def test_is_semantic_operator_classification():
     assert _is_semantic_operator("sem_distill") is True
     assert _is_semantic_operator("apply_with_sem_choose") is True
     assert _is_semantic_operator("sem_choose") is True
-    assert _is_semantic_operator("apply") is True
-    assert _is_semantic_operator("Apply some operator") is True  # Raw skrub Apply nodes
-
     # Non-semantic operators (should NOT generate code - should get data summaries)
+    assert _is_semantic_operator("apply") is False
+    assert _is_semantic_operator("Apply some operator") is False  # Plain skb.apply raw label
     assert _is_semantic_operator("skb.subsample") is False
     assert _is_semantic_operator("skb.eval") is False
     assert _is_semantic_operator("skb.apply") is False
@@ -70,9 +69,9 @@ def test_multiple_semantic_operators_in_sequence(monkeypatch):
 import skrub
 import sempipes
 
-df = skrub.var("df", dataset.employee)
+df = skrub.var("df")
 df = df.sem_fillna(nl_prompt="Fill missing", target_column="name", impute_with_existing_values_only=True)
-df = df.sem_clean(nl_prompt="Clean data", target_column="address")
+df = df.sem_clean(nl_prompt="Clean data", columns=["address"])
 df = df.sem_gen_features(nl_prompt="Generate features", name="features", how_many=2)
 result = df.skb.eval()
 """
@@ -104,19 +103,15 @@ result = df.skb.eval()
 
     node_code_events = [e for e in events if e.get("type") == "node_code"]
 
-    # Find events for each operator
-    fillna_events = [e for e in node_code_events if "sem_fillna" in str(e.get("node_id", "")).lower()]
-    clean_events = [e for e in node_code_events if "sem_clean" in str(e.get("node_id", "")).lower()]
-    gen_events = [e for e in node_code_events if "sem_gen_features" in str(e.get("node_id", "")).lower()]
+    # With dynamic compile, node IDs are numeric (e.g. "1", "2", "8"); match by code content instead.
+    # The runner emits codes[0] for the 1st semantic op, codes[1] for 2nd, codes[2] for 3rd.
+    fillna_events = [e for e in node_code_events if codes[0] in e.get("generated_code", "")]
+    clean_events = [e for e in node_code_events if codes[1] in e.get("generated_code", "")]
+    gen_events = [e for e in node_code_events if codes[2] in e.get("generated_code", "")]
 
-    assert len(fillna_events) > 0, "Should have sem_fillna event"
-    assert len(clean_events) > 0, "Should have sem_clean event"
-    assert len(gen_events) > 0, "Should have sem_gen_features event"
-
-    # Verify each gets its own code
-    assert codes[0] in fillna_events[0]["generated_code"], "sem_fillna should have its code"
-    assert codes[1] in clean_events[0]["generated_code"], "sem_clean should have its code"
-    assert codes[2] in gen_events[0]["generated_code"], "sem_gen_features should have its code"
+    assert len(fillna_events) > 0, "Should have event with sem_fillna code"
+    assert len(clean_events) > 0, "Should have event with sem_clean code"
+    assert len(gen_events) > 0, "Should have event with sem_gen_features code"
 
     # Verify all are not fallbacks
     assert fillna_events[0]["is_fallback"] is False
