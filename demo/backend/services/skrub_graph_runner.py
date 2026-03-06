@@ -633,17 +633,50 @@ def _df_to_summary(df, var_name: str) -> dict | None:
         return None
 
 
+def _try_dataop_to_dataframe(val):
+    """If val is a DataOp, materialize to a DataFrame via .skb.preview() or .skb.eval().
+
+    Prefer .skb.preview() so that for a subsample DataOp we get the actual subsampled
+    row count (e.g. 50), not the Var's default size from .skb.eval().
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    if not hasattr(val, "skb"):
+        return None
+    skb = val.skb
+    # Prefer preview() so subsample etc. report correct row count
+    if hasattr(skb, "preview") and callable(skb.preview):
+        try:
+            out = skb.preview()
+            if isinstance(out, pd.DataFrame):
+                return out
+        except Exception:
+            pass
+    if hasattr(skb, "eval") and callable(skb.eval):
+        try:
+            out = skb.eval()
+            if isinstance(out, pd.DataFrame):
+                return out
+        except Exception:
+            pass
+    return None
+
+
 def _extract_var_input_summaries(g: dict) -> list[dict]:
     """
     Extract real data summaries for pipeline input variables after exec().
 
-    Looks in two places (in priority order):
-    1. g["env"] — set by pipeline.skb.get_data(); contains the actual DataFrames fed to
-       the pipeline (e.g. env["products"] = dataset.products).
-    2. g directly — plain DataFrame variables assigned at script top-level.
+    Looks in three places. We prefer the materialized pipeline result (DataOp) so that
+    when the script does e.g. products = skrub.var(...).skb.subsample(n=50), we report
+    row_count 50, not the full dataset size from env or Var default.
 
-    Returns list of dicts: {var_name, schema, sample, row_count}.
-    Never returns placeholder data — skips variables that cannot be summarised.
+    Priority order:
+    1. Top-level DataOps (e.g. products = ... .skb.subsample(n=50)) — materialize with
+       .skb.eval() so row_count reflects the actual subsampled size.
+    2. g["env"] — set by pipeline.skb.get_data(); use when script explicitly sets env.
+    3. Top-level DataFrame variables in g (plain pandas DataFrames).
     """
     try:
         import pandas as pd
@@ -653,18 +686,30 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
     summaries: list[dict] = []
     seen: set[str] = set()
 
-    # Priority 1: g["env"] (pipeline data environment)
+    # Priority 1: top-level DataOps — materialize so row_count matches subsample / pipeline result
+    for var_name, val in g.items():
+        if var_name.startswith("_") or not isinstance(var_name, str):
+            continue
+        df = _try_dataop_to_dataframe(val)
+        if df is not None:
+            s = _df_to_summary(df, var_name)
+            if s:
+                summaries.append(s)
+                seen.add(var_name)
+
+    # Priority 2: g["env"] (pipeline data environment)
     env = g.get("env")
     if isinstance(env, dict):
         for var_name, val in env.items():
-            if isinstance(var_name, str) and not var_name.startswith("_"):
-                if isinstance(val, pd.DataFrame):
-                    s = _df_to_summary(val, var_name)
-                    if s:
-                        summaries.append(s)
-                        seen.add(var_name)
+            if var_name in seen or not isinstance(var_name, str) or var_name.startswith("_"):
+                continue
+            if isinstance(val, pd.DataFrame):
+                s = _df_to_summary(val, var_name)
+                if s:
+                    summaries.append(s)
+                    seen.add(var_name)
 
-    # Priority 2: top-level DataFrame variables in g
+    # Priority 3: top-level DataFrame variables in g
     for var_name, val in g.items():
         if var_name in seen or var_name.startswith("_") or not isinstance(var_name, str):
             continue
