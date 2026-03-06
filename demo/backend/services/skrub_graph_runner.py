@@ -186,6 +186,7 @@ _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
 _SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 _NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
+_VAR_PREVIEW_MARKER = "##VAR_PREVIEW##"
 _EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
 _NODE_INPUT_SUMMARY_MARKER = "##NODE_INPUT_SUMMARY##"
 
@@ -484,73 +485,96 @@ def _graph_to_serializable(raw):
     }
 
 
+def _dataframe_to_preview_dict(preview_data, node_id):
+    """Build preview dict (node_id, schema, sample, row_count) from a pandas DataFrame."""
+    try:
+        import pandas as pd
+        is_dataframe = isinstance(preview_data, pd.DataFrame)
+    except ImportError:
+        is_dataframe = hasattr(preview_data, "columns") and hasattr(preview_data, "dtypes")
+    if not is_dataframe:
+        return None
+    schema = [
+        {"name": str(col), "dtype": str(preview_data[col].dtype)}
+        for col in preview_data.columns
+    ]
+    sample = preview_data.head(5).to_dict(orient="records")
+    for row in sample:
+        for key, val in list(row.items()):
+            if hasattr(val, "item"):
+                row[key] = val.item()
+            elif val is None or (isinstance(val, float) and (val != val)):
+                row[key] = None
+    return {
+        "node_id": node_id,
+        "schema": schema,
+        "sample": sample,
+        "row_count": len(preview_data),
+    }
+
+
 def _extract_preview_from_dataop(node_obj, node_id):
     """
-    Extract preview data (schema, sample, row_count) from a DataOp using .skb.preview().
-    Returns dict with node_id, schema, sample, row_count; or None if preview fails.
+    Extract preview data (schema, sample, row_count) from a DataOp using .skb.preview()
+    and, if that fails or returns non-DataFrame, .skb.eval().
+    Returns dict with node_id, schema, sample, row_count; or None if both fail.
     """
     try:
-        # Check if this object has .skb.preview()
         skb = getattr(node_obj, "skb", None)
         if skb is None:
             return None
-        preview_func = getattr(skb, "preview", None)
-        if not callable(preview_func):
-            return None
 
-        # Get preview data
-        preview_data = preview_func()
-        if preview_data is None:
-            return None
-
-        # Import pandas to check DataFrame type
         try:
             import pandas as pd
-            is_dataframe = isinstance(preview_data, pd.DataFrame)
         except ImportError:
-            is_dataframe = hasattr(preview_data, "columns") and hasattr(preview_data, "dtypes")
+            pd = None
 
-        if is_dataframe:
-            # Extract schema (column names and dtypes)
-            schema = [
-                {"name": str(col), "dtype": str(preview_data[col].dtype)}
-                for col in preview_data.columns
-            ]
-            # Extract sample rows (first 5 rows as dicts)
-            sample = preview_data.head(5).to_dict(orient="records")
-            # Clean up sample values for JSON serialization
-            for row in sample:
-                for key, val in list(row.items()):
-                    if hasattr(val, "item"):  # numpy scalar
-                        row[key] = val.item()
-                    elif val is None or (isinstance(val, float) and (val != val)):  # NaN
-                        row[key] = None
-            row_count = len(preview_data)
-            return {
-                "node_id": node_id,
-                "schema": schema,
-                "sample": sample,
-                "row_count": row_count,
-            }
-        else:
-            # Non-DataFrame preview (e.g. Series, scalar)
-            # Try to convert to a simple representation
+        preview_data = None
+        # Try preview() first
+        preview_func = getattr(skb, "preview", None)
+        if callable(preview_func):
+            try:
+                preview_data = preview_func()
+            except Exception:
+                pass
+
+        # If preview returned a DataFrame, use it
+        if preview_data is not None and pd is not None and isinstance(preview_data, pd.DataFrame):
+            result = _dataframe_to_preview_dict(preview_data, node_id)
+            if result:
+                return result
+
+        # If preview was None or not DataFrame, try eval()
+        eval_func = getattr(skb, "eval", None)
+        if callable(eval_func):
+            try:
+                eval_data = eval_func()
+                if eval_data is not None and (pd is None or isinstance(eval_data, pd.DataFrame)):
+                    result = _dataframe_to_preview_dict(eval_data, node_id)
+                    if result:
+                        return result
+            except Exception:
+                pass
+
+        # Non-DataFrame from preview (e.g. Series, scalar): keep minimal representation
+        if preview_data is not None:
             return {
                 "node_id": node_id,
                 "schema": [{"name": "value", "dtype": str(type(preview_data).__name__)}],
                 "sample": [{"value": str(preview_data)[:200]}],
                 "row_count": 1,
             }
+        return None
     except Exception as e:
-        # Preview failed - this is expected for some node types
         print(f"Warning: Could not get preview for node {node_id}: {e}", file=sys.stderr)
         return None
 
 
 def _extract_all_previews(raw_graph):
     """
-    Extract preview data for all nodes in the graph using .skb.preview().
+    Extract preview data for all nodes in the graph using .skb.preview() / .skb.eval().
     Returns list of preview dicts (node_id, schema, sample, row_count).
+    Walks every node in raw_graph["nodes"] (handles both list and dict).
     """
     if not raw_graph or not isinstance(raw_graph, dict):
         return []
@@ -771,6 +795,33 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
     return summaries
 
 
+def _extract_var_previews(code: str, g: dict) -> list[dict]:
+    """
+    Build preview summaries (var_name, schema, sample, row_count) for each assigned
+    variable that holds a DataFrame or DataOp. Used to fill node_data for compile nodes
+    via var_producer mapping in the backend.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return []
+    result = []
+    for var_name in _assignments_in_order(code):
+        if var_name not in g or var_name.startswith("_"):
+            continue
+        val = g[var_name]
+        df = None
+        if isinstance(val, pd.DataFrame):
+            df = val
+        elif _is_dataop(val):
+            df = _try_dataop_to_dataframe(val)
+        if df is not None:
+            s = _df_to_summary(df, var_name)
+            if s:
+                result.append(s)
+    return result
+
+
 def main():
     code = sys.stdin.read()
 
@@ -831,6 +882,12 @@ def main():
     for preview in previews:
         print(_NODE_PREVIEW_MARKER)
         print(json.dumps(preview))
+        print(_SKRUB_GRAPH_END)
+
+    # Emit var previews (per-assignment DataFrame/DataOp) for backend to map to compile nodes
+    for var_preview in _extract_var_previews(code, g):
+        print(_VAR_PREVIEW_MARKER)
+        print(json.dumps(var_preview))
         print(_SKRUB_GRAPH_END)
 
     # Emit execution stats (duration and cost)

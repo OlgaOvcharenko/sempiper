@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 
-from services.compile_parse import extract_nodes_with_ranges
+from services.compile_parse import extract_nodes_with_ranges, get_var_producer
 from services.data_summary_extractor import get_data_summary
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
 _SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 _NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
+_VAR_PREVIEW_MARKER = "##VAR_PREVIEW##"
 _EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
 _NODE_INPUT_SUMMARY_MARKER = "##NODE_INPUT_SUMMARY##"
 
@@ -123,6 +124,69 @@ def _parse_node_previews_from_stdout(stdout_str: str) -> list[dict]:
         except (json.JSONDecodeError, TypeError):
             continue
     return previews
+
+
+def _parse_var_previews_from_stdout(stdout_str: str) -> list[dict]:
+    """
+    Parse ##VAR_PREVIEW##\\n{json}\\n##END## blocks from runner stdout.
+    Returns list of dicts with var_name, schema, sample, row_count.
+    """
+    previews: list[dict] = []
+    pattern = re.compile(
+        re.escape(_VAR_PREVIEW_MARKER) + r"\s*\n([^\n]+)\n" + re.escape(_SKRUB_GRAPH_END)
+    )
+    for m in pattern.finditer(stdout_str):
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict) and "var_name" in obj:
+                previews.append(obj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return previews
+
+
+def _build_static_to_dynamic_id(static_nodes: list, runnable: list) -> dict[str, str]:
+    """
+    Map static parse node IDs to display (dynamic) node IDs by matching (label, index).
+    Used to emit node_data for VAR_PREVIEW under the compile node ID the frontend shows.
+    """
+    if not static_nodes or not runnable:
+        return {}
+    # Static: sort by source line, group by label
+    def static_sort_key(n):
+        sr = getattr(n, "source_range", None)
+        return (sr.start_line, sr.start_column) if sr else (999999, 0)
+
+    static_by_label: dict[str, list[str]] = {}
+    for n in sorted(static_nodes, key=static_sort_key):
+        label = (getattr(n, "label", "") or "").lower()
+        nid = getattr(n, "id", str(n))
+        if label not in static_by_label:
+            static_by_label[label] = []
+        static_by_label[label].append(nid)
+    # Dynamic/runnable: sort by id (numeric if possible), group by label
+    def dynamic_sort_key(n):
+        i = getattr(n, "id", str(n))
+        try:
+            return (0, int(i))
+        except (ValueError, TypeError):
+            return (1, i)
+
+    dynamic_by_label: dict[str, list[str]] = {}
+    for n in sorted(runnable, key=dynamic_sort_key):
+        label = (getattr(n, "label", "") or "").lower()
+        nid = getattr(n, "id", str(n))
+        if label not in dynamic_by_label:
+            dynamic_by_label[label] = []
+        dynamic_by_label[label].append(nid)
+    # For each label, map i-th static to i-th dynamic
+    result: dict[str, str] = {}
+    for label, static_ids in static_by_label.items():
+        dynamic_ids = dynamic_by_label.get(label, [])
+        for i, static_id in enumerate(static_ids):
+            if i < len(dynamic_ids):
+                result[static_id] = dynamic_ids[i]
+    return result
 
 
 def _parse_execution_stats_from_stdout(stdout_str: str) -> dict | None:
@@ -565,6 +629,7 @@ def stream_execute_events(
         graph_from_run: dict | None = None
         svg_from_run: str | None = None
         node_previews: list[dict] = []
+        var_previews: list[dict] = []
         runner_input_summaries: dict[str, dict] = {}
         e2e_mode = os.environ.get("DEMO_E2E") == "1"
         if e2e_mode:
@@ -652,6 +717,7 @@ def stream_execute_events(
                     graph_from_run = _parse_skrub_graph_from_stdout(decoded)
                     svg_from_run = _parse_skrub_svg_from_stdout(decoded)
                     node_previews = _parse_node_previews_from_stdout(decoded)
+                    var_previews = _parse_var_previews_from_stdout(decoded)
                     runner_input_summaries = _parse_node_input_summaries_from_stdout(decoded)
                     exec_stats = _parse_execution_stats_from_stdout(decoded)
                     if exec_stats:
@@ -924,6 +990,7 @@ def stream_execute_events(
             # No need to emit them again here
 
         # Emit node_data for each node preview (intermediate data from .skb.preview())
+        compile_ids_with_node_data: set[str] = set()
         for preview in node_previews:
             # Preview node_id is "0", "1", etc. (skrub graph node id); emit with skrub_ prefix
             skid = preview.get("node_id", "")
@@ -940,6 +1007,7 @@ def stream_execute_events(
                 skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
                 compile_id = skrub_to_compile.get(skid)
                 if compile_id:
+                    compile_ids_with_node_data.add(compile_id)
                     payload_compile = {
                         "type": "node_data",
                         "node_id": compile_id,
@@ -948,6 +1016,31 @@ def stream_execute_events(
                         "row_count": preview.get("row_count", 0),
                     }
                     yield f"data: {json.dumps(payload_compile)}\n\n".encode()
+
+        # Emit node_data for VAR_PREVIEW (per-variable) for compile nodes not already covered
+        if var_previews and runnable:
+            var_producer = get_var_producer(input_code)
+            try:
+                static_nodes, _ = extract_nodes_with_ranges(input_code, prune=False)
+                static_to_dynamic = _build_static_to_dynamic_id(static_nodes, runnable)
+            except Exception:
+                static_to_dynamic = {}
+            for vp in var_previews:
+                var_name = vp.get("var_name")
+                if not var_name:
+                    continue
+                static_id = var_producer.get(var_name)
+                compile_id = static_to_dynamic.get(static_id) if static_id else None
+                if compile_id and compile_id not in compile_ids_with_node_data:
+                    compile_ids_with_node_data.add(compile_id)
+                    payload = {
+                        "type": "node_data",
+                        "node_id": compile_id,
+                        "schema": vp.get("schema", []),
+                        "sample": vp.get("sample", []),
+                        "row_count": vp.get("row_count", 0),
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n".encode()
 
         # Emit error if subprocess failed
         if exec_failed:
