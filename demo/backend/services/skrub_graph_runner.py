@@ -633,6 +633,53 @@ def _df_to_summary(df, var_name: str) -> dict | None:
         return None
 
 
+def _effective_env_df(env: dict, var_name: str, df: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Return the DataFrame that should be used for this var's input summary when env
+    contains multiple tables. When the script subsamples one input (e.g. baskets to 50)
+    and uses it to filter another (e.g. products by basket_ID), we report the filtered
+    size so summaries adhere to the script (e.g. products row_count = rows in those 50
+    baskets, not the full table).
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return df
+    if not isinstance(env, dict) or not isinstance(df, pd.DataFrame):
+        return df
+    for other_name, other_val in env.items():
+        if other_name == var_name or not isinstance(other_val, pd.DataFrame):
+            continue
+        if len(other_val) >= len(df):
+            continue
+        # Other table is smaller (e.g. subsampled baskets). Check if we have a FK to it.
+        pk_col = None
+        if "ID" in other_val.columns:
+            pk_col = "ID"
+        else:
+            pk_col = other_val.columns[0] if len(other_val.columns) else None
+        if not pk_col:
+            continue
+        # Common pattern: products.basket_ID -> baskets.ID
+        fk_col = None
+        stem = other_name.rstrip("s")
+        candidate = f"{stem}_ID" if stem else None
+        if candidate and candidate in df.columns:
+            fk_col = candidate
+        elif "basket_ID" in df.columns and "basket" in other_name.lower() and "ID" in other_val.columns:
+            fk_col = "basket_ID"
+            pk_col = "ID"
+        if fk_col is None:
+            continue
+        try:
+            filtered = df[df[fk_col].isin(other_val[pk_col])]
+            if len(filtered) < len(df):
+                return filtered
+        except Exception:
+            continue
+    return df
+
+
 def _try_dataop_to_dataframe(val):
     """If val is a DataOp, materialize to a DataFrame via .skb.preview() or .skb.eval().
 
@@ -698,13 +745,15 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
                 seen.add(var_name)
 
     # Priority 2: g["env"] (pipeline data environment)
+    # Use effective df (filtered by subsampled tables when applicable) so row_count matches script intent.
     env = g.get("env")
     if isinstance(env, dict):
         for var_name, val in env.items():
             if var_name in seen or not isinstance(var_name, str) or var_name.startswith("_"):
                 continue
             if isinstance(val, pd.DataFrame):
-                s = _df_to_summary(val, var_name)
+                effective = _effective_env_df(env, var_name, val)
+                s = _df_to_summary(effective, var_name)
                 if s:
                     summaries.append(s)
                     seen.add(var_name)
