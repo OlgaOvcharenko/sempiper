@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CodeGenDemo } from "./components/CodeGenDemo";
 import { OptimizerDemo } from "./components/OptimizerDemo";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTheme } from "./hooks/useTheme";
 
 const queryClient = new QueryClient();
@@ -10,6 +10,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'codegen' | 'optimizer'>('codegen');
   const [layoutMode, setLayoutMode] = useState<'toggled' | 'left-split'>('toggled');
   const { isDark, toggle: toggleTheme } = useTheme();
+
+  // Sync tab favicon with app theme so the tab icon matches light/dark
+  useEffect(() => {
+    const href = `${isDark ? "/favicon-32-dark.png" : "/favicon-32.png"}?v=${isDark ? "d" : "l"}`;
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"][sizes="32x32"]');
+    if (link) link.href = href;
+  }, [isDark]);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -66,7 +73,14 @@ export default function App() {
           </div>
 
           <div className="absolute inset-x-0 inset-y-0 flex items-center justify-center pointer-events-none">
-            <h1 className="text-2xl font-bold tracking-tight pointer-events-auto" style={{ fontFamily: "'Outfit', sans-serif" }}>
+            <h1 className="text-2xl font-bold tracking-tight pointer-events-auto flex items-center gap-2" style={{ fontFamily: "'Outfit', sans-serif" }}>
+              <img
+                key={isDark ? "dark" : "light"}
+                src={`${isDark ? "/favicon-dark.png" : "/favicon.png"}?v=${isDark ? "d" : "l"}`}
+                alt=""
+                className="h-8 w-auto object-contain"
+                aria-hidden
+              />
               <span className="text-rose-400">Sem</span>
               <span className="text-slate-500 dark:text-slate-400">Pipes</span>
             </h1>
