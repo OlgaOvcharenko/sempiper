@@ -161,8 +161,8 @@ describe("api/client (pipeline scripts)", () => {
       const result = compileToSkrubGraph(nodes, edges);
       expect(result).not.toBeNull();
       expect(result!.nodes).toHaveLength(2);
-      expect(result!.nodes[0]).toEqual({ id: "as_X_1", label: "as_X", is_sempipes_semantic: false });
-      expect(result!.nodes[1]).toEqual({ id: "sem_fillna_2", label: "sem_fillna", is_sempipes_semantic: true });
+      expect(result!.nodes[0]).toEqual({ id: "as_X_1", label: "as_X", type: "input", is_sempipes_semantic: false });
+      expect(result!.nodes[1]).toEqual({ id: "sem_fillna_2", label: "sem_fillna", type: "operator", is_sempipes_semantic: true });
       expect(result!.parents["as_X_1"]).toEqual([]);
       expect(result!.parents["sem_fillna_2"]).toEqual(["as_X_1"]);
       expect(result!.children["as_X_1"]).toEqual(["sem_fillna_2"]);

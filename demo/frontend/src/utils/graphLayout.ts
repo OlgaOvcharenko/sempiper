@@ -312,13 +312,16 @@ export function buildCyElements(
       skrubGraph.sempipesNodeIds?.includes(node.id) ??
       node.is_sempipes_semantic ??
       false;
+    // Use backend-provided type when present; otherwise infer from label for legacy data
+    const nodeType: "input" | "operator" =
+      node.type === "input" ? "input" : node.type === "operator" || node.type === "pipeline" ? "operator" : inferNodeType(node.label);
 
     const cyNode: CyNode = {
       data: {
         id: nodeId,
         label: node.label,
         isSempipesSemantic: isSempipesSemantic ? "true" : "false",
-        nodeType: inferNodeType(node.label),
+        nodeType,
         nodeWidth: calculateNodeWidth(node.label),
       },
     };

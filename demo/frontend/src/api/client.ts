@@ -60,6 +60,8 @@ export interface CompileNode {
   type: string;
   label: string;
   source_range: SourceRange | null;
+  /** True if this node is a sempipes semantic operator that can produce generated code. */
+  is_sempipes_semantic?: boolean;
 }
 
 export interface CompileEdge {
@@ -200,7 +202,14 @@ export type ExecuteEvent =
 
 /** Skrub DAG from _Graph().run(dag): nodes, parents, children (interactive viz). */
 export interface SkrubGraphDict {
-  nodes: Array<{ id: string; label: string; is_sempipes_semantic?: boolean }>;
+  nodes: Array<{
+    id: string;
+    label: string;
+    /** From compile: "input" | "operator" | "pipeline". Drives node color (input vs operator). */
+    type?: "input" | "operator" | "pipeline";
+    /** From compile: true if this node can have generated code (sempipes semantic operator). */
+    is_sempipes_semantic?: boolean;
+  }>;
   parents: Record<string, string[]>;
   children: Record<string, string[]>;
   /** Sempipes semantic operator node ids in execution (topo) order; index matches captured code. */
@@ -238,21 +247,28 @@ export function compileToSkrubGraph(
     if (!children[e.source].includes(e.target)) children[e.source].push(e.target);
   }
 
-  // Mark nodes as sempipes if their label starts with "sem_" or is apply_with_sem_choose/sem_choose
-  const isSempipesLabel = (label: string): boolean => {
+  // Backend-provided is_sempipes_semantic when present; fallback to label-based inference for older responses
+  const isSempipesFromLabel = (label: string): boolean => {
     const low = (label ?? "").toLowerCase();
     return low.startsWith("sem_") || low === "apply_with_sem_choose" || low === "sem_choose";
   };
+  const isSempipes = (n: CompileNode): boolean =>
+    n.is_sempipes_semantic === true || ((n.type ?? "").toLowerCase() === "operator" && isSempipesFromLabel(n.label));
 
-  const sempipesNodeIds = runnable
-    .filter((n) => (n.type ?? "").toLowerCase() === "operator" && isSempipesLabel(n.label))
-    .map((n) => n.id);
+  const sempipesNodeIds = runnable.filter((n) => isSempipes(n)).map((n) => n.id);
+
+  const nodeType = (n: CompileNode): "input" | "operator" | "pipeline" => {
+    const t = (n.type ?? "").toLowerCase();
+    if (t === "input" || t === "operator" || t === "pipeline") return t as "input" | "operator" | "pipeline";
+    return t === "input" ? "input" : "operator";
+  };
 
   return {
     nodes: runnable.map((n) => ({
       id: n.id,
       label: n.label,
-      is_sempipes_semantic: (n.type ?? "").toLowerCase() === "operator" && isSempipesLabel(n.label),
+      type: nodeType(n),
+      is_sempipes_semantic: isSempipes(n),
     })),
     parents,
     children,
