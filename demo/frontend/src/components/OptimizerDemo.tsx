@@ -147,7 +147,12 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     loadedScriptId,
     onCodeChange: resetLiveState,
   });
-  const { compileNodes, compileEdges } = compile;
+  const {
+    compileNodes,
+    compileEdges,
+    compileValidationErrors,
+    compileTimingsMs,
+  } = compile;
 
   // ── Wrap handleLoadScript to clear optimizer trial on script change ────────
   const handleLoadScript = useCallback(
@@ -216,13 +221,8 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   );
 
   const highlightedSkrubIds = useMemo(() => {
-    return highlightedNodeIds
-      .map((hid) => {
-        const match = Object.entries(skrubToCompileId).find(([, cid]) => cid === hid);
-        return match ? match[0] : hid;
-      })
-      .map((id) => (id.startsWith("skrub_") ? id : `skrub_${id}`));
-  }, [highlightedNodeIds, skrubToCompileId]);
+    return highlightedNodeIds.map((id) => (id.startsWith("skrub_") ? id : `skrub_${id}`));
+  }, [highlightedNodeIds]);
 
   const selectedNode = selectedNodeId && !selectedNodeId.startsWith("skrub_")
     ? compileNodes.find((n) => n.id === selectedNodeId)
@@ -231,6 +231,29 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const inputSummaryForSelectedNode = selectedNodeId
     ? inputSummaryByNode[selectedNodeId] || nodeDataByNode[selectedNodeId]
     : undefined;
+
+  // Graph node id = compile node id (display graph is from compile; run must not change this)
+  const selectedCompileNodeId = selectedNodeId
+    ? selectedNodeId.startsWith("skrub_")
+      ? skrubIdToRaw(selectedNodeId)
+      : selectedNodeId
+    : null;
+  const selectedCompileNode =
+    selectedCompileNodeId != null
+      ? compileNodes.find((n) => n.id === selectedCompileNodeId) ?? null
+      : null;
+  const idToLabel = new Map(compileNodes.map((n) => [n.id, n.label]));
+  const edges = compileEdges ?? [];
+  const upstreamNodeLabels =
+    selectedCompileNodeId != null
+      ? [...new Set(edges.filter((e) => e.target === selectedCompileNodeId).map((e) => e.source))]
+          .map((id) => idToLabel.get(id) ?? id)
+      : [];
+  const downstreamNodeLabels =
+    selectedCompileNodeId != null
+      ? [...new Set(edges.filter((e) => e.source === selectedCompileNodeId).map((e) => e.target))]
+          .map((id) => idToLabel.get(id) ?? id)
+      : [];
 
   // ── Graph ↔ editor sync ───────────────────────────────────────────────────
   const handleGraphNodeSelect = useCallback(
@@ -247,7 +270,6 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
       if (!graphNode) return;
 
       const matchingIds = graphNodeToCompileIds(graphNodeId, graphNode, compileNodes, {
-        skrubToCompileId,
         runnableNodeIds,
       });
       if (matchingIds.length > 0) {
@@ -258,7 +280,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
         if (withRange) setCursorFocusNodeId(withRange.id);
       }
     },
-    [displayGraph?.nodes, compileNodes, skrubToCompileId, runnableNodeIds]
+    [displayGraph?.nodes, compileNodes, runnableNodeIds]
   );
 
   // ── Panel widths ──────────────────────────────────────────────────────────
@@ -508,6 +530,11 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                   nodeDataByNode={nodeDataByNode}
                   isExecuting={isExecuting}
                   skrubToCompileId={skrubToCompileId}
+                  compileNode={selectedCompileNode}
+                  upstreamNodeLabels={upstreamNodeLabels}
+                  downstreamNodeLabels={downstreamNodeLabels}
+                  compileValidationErrors={compileValidationErrors}
+                  compileTimingsMs={compileTimingsMs}
                   isExpanded={expandedPanel === "right"}
                   expandButton={<ExpandBtn panel="right" />}
                 />

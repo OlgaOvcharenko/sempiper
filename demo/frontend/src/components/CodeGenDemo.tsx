@@ -105,7 +105,13 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     loadedScriptId,
     onCodeChange: resetLiveState,
   });
-  const { compileNodes, compileEdges, compileError } = compile;
+  const {
+    compileNodes,
+    compileEdges,
+    compileError,
+    compileValidationErrors,
+    compileTimingsMs,
+  } = compile;
 
   // ── Cache clear ───────────────────────────────────────────────────────────
   const handleClearCache = useCallback(async () => {
@@ -156,18 +162,18 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
       const nid = skrubIdToRaw(selectedNodeId);
       const graphNode = displayGraph.nodes.find((n) => n.id === nid);
       if (graphNode) {
-        const compileNodeId = skrubToCompileId[nid];
-        const compileNode = compileNodeId
-          ? compileNodes.find((n) => n.id === compileNodeId)
-          : compileNodes.find((n) => n.id === nid);
-        const compileType = (compileNode?.type ?? "").toLowerCase();
+        const compileNode = compileNodes.find((n) => n.id === nid);
+        const compileType = (compileNode?.type ?? graphNode.type ?? "").toLowerCase();
         const isOperator =
           compileType === "operator" ||
           compileType === "pipeline" ||
           Boolean(displayGraph.sempipesNodeIds?.includes(nid));
+        const nodeType = graphNode.type === "input" || graphNode.type === "operator"
+          ? graphNode.type
+          : (isOperator ? "operator" : "input");
         return {
           id: selectedNodeId,
-          type: (isOperator ? "operator" : "input") as "input" | "operator",
+          type: nodeType as "input" | "operator",
           label: graphNode.label,
         };
       }
@@ -195,6 +201,29 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     return compileNode ? inputSummaryByNode[compileNode.id] : undefined;
   })();
 
+  // Graph node id = compile node id (display graph is from compile; run must not change this)
+  const selectedCompileNodeId = selectedNodeId
+    ? selectedNodeId.startsWith("skrub_")
+      ? skrubIdToRaw(selectedNodeId)
+      : selectedNodeId
+    : null;
+  const selectedCompileNode =
+    selectedCompileNodeId != null
+      ? compileNodes.find((n) => n.id === selectedCompileNodeId) ?? null
+      : null;
+  const idToLabel = new Map(compileNodes.map((n) => [n.id, n.label]));
+  const edges = compileEdges ?? [];
+  const upstreamNodeLabels =
+    selectedCompileNodeId != null
+      ? [...new Set(edges.filter((e) => e.target === selectedCompileNodeId).map((e) => e.source))]
+          .map((id) => idToLabel.get(id) ?? id)
+      : [];
+  const downstreamNodeLabels =
+    selectedCompileNodeId != null
+      ? [...new Set(edges.filter((e) => e.source === selectedCompileNodeId).map((e) => e.target))]
+          .map((id) => idToLabel.get(id) ?? id)
+      : [];
+
   // ── Graph ↔ editor sync ───────────────────────────────────────────────────
   const handleGraphNodeSelect = useCallback(
     (nodeId: string | null) => {
@@ -210,7 +239,6 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
       if (!graphNode) return;
 
       const matchingIds = graphNodeToCompileIds(graphNodeId, graphNode, compileNodes, {
-        skrubToCompileId,
         runnableNodeIds,
       });
       if (matchingIds.length > 0) {
@@ -221,7 +249,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
         if (withRange) setCursorFocusNodeId(withRange.id);
       }
     },
-    [displayGraph?.nodes, compileNodes, skrubToCompileId, runnableNodeIds]
+    [displayGraph?.nodes, compileNodes, runnableNodeIds]
   );
 
   // ── Panel widths ──────────────────────────────────────────────────────────
@@ -573,6 +601,11 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
             isExecuting={isExecuting}
             nodeMetadata={null}
             skrubToCompileId={skrubToCompileId}
+            compileNode={selectedCompileNode}
+            upstreamNodeLabels={upstreamNodeLabels}
+            downstreamNodeLabels={downstreamNodeLabels}
+            compileValidationErrors={compileValidationErrors}
+            compileTimingsMs={compileTimingsMs}
             isExpanded={expandedPanel === "right"}
             expandButton={
               <button

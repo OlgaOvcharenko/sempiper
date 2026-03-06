@@ -2,8 +2,9 @@
  * Right panel: contextual content for the selected graph node.
  * - Input nodes: data summary (schema, sample, stats).
  * - Sempipes/operator nodes: generated code, LLM prompt stats, etc.
+ * - From compile: code location, data flow (upstream/downstream), validation, timings.
  */
-import type { InputSummary } from "../api/client";
+import type { CompileNode, InputSummary } from "../api/client";
 import type { GraphNode } from "./GraphPanel";
 import { CodeOutput } from "./CodeOutput";
 
@@ -97,6 +98,16 @@ interface NodeDetailsPanelProps {
   skrubToCompileId?: Record<string, string>;
   /** Dark mode flag */
   isDark?: boolean;
+  /** Compile node for the selected graph node (id, type, label, source_range). */
+  compileNode?: CompileNode | null;
+  /** Labels of nodes that feed into this one (upstream / depends on). */
+  upstreamNodeLabels?: string[];
+  /** Labels of nodes this one feeds into (downstream). */
+  downstreamNodeLabels?: string[];
+  /** Graph validation errors from the last compile. */
+  compileValidationErrors?: string[];
+  /** Compile timing breakdown (ms) when available. */
+  compileTimingsMs?: Record<string, number> | null;
 }
 
 export function NodeDetailsPanel({
@@ -115,6 +126,11 @@ export function NodeDetailsPanel({
   expandButton = null,
   isExpanded = false,
   skrubToCompileId = {},
+  compileNode = null,
+  upstreamNodeLabels = [],
+  downstreamNodeLabels = [],
+  compileValidationErrors = [],
+  compileTimingsMs = null,
 }: NodeDetailsPanelProps) {
   if (!selectedNodeId || !selectedNode) {
     return (
@@ -130,13 +146,9 @@ export function NodeDetailsPanel({
     );
   }
 
-  // Try multiple ID formats to find code:
-  // 1. selectedNodeId (e.g., "skrub_1")
-  // 2. rawNodeId (e.g., "1")
-  // 3. compileId from mapping (e.g., "subsample_5")
-  // 4. skrub-prefixed compileId (e.g., "skrub_subsample_5")
+  // Graph node id = compile node id (display graph is from compile). Use that for run-data lookups.
   const rawNodeId = selectedNodeId.startsWith("skrub_") ? selectedNodeId.slice(6) : selectedNodeId;
-  const compileId = rawNodeId ? skrubToCompileId[rawNodeId] : undefined;
+  const compileId = compileNode?.id ?? (rawNodeId ? skrubToCompileId[rawNodeId] : undefined) ?? rawNodeId;
 
   // Direct lookups trying all ID formats
   const liveMap = liveGeneratedCodeByNode ?? {};
@@ -148,7 +160,15 @@ export function NodeDetailsPanel({
   const effectiveCode =
     liveCodeForNode !== undefined ? liveCodeForNode : (!isExecuting ? generatedCode ?? null : null);
   const isLive = liveCodeForNode !== undefined;
-  const waitingForCode = isExecuting && selectedNode.type === "operator" && liveCodeForNode === undefined;
+  const hasGeneratedCodeSectionFlag = compileNode?.is_sempipes_semantic === true;
+  const labelLooksSempipes =
+    (compileNode?.label ?? selectedNode?.label ?? "").toLowerCase().match(/^sem_|^apply_with_sem_choose$|^sem_choose$/);
+  const isInput = (compileNode?.type ?? selectedNode.type) === "input";
+  // Show generated code for sempipes semantic operators: backend flag, or operator with sempipes-style label
+  const hasGeneratedCodeSection =
+    hasGeneratedCodeSectionFlag ||
+    (selectedNode.type === "operator" && (compileNode == null || !!labelLooksSempipes));
+  const waitingForCode = isExecuting && hasGeneratedCodeSection && liveCodeForNode === undefined;
   const hasCodeToShow = (effectiveCode != null && effectiveCode !== "") || waitingForCode;
 
   // Look up other per-node data using all ID formats (including compile ID from mapping)
@@ -178,7 +198,28 @@ export function NodeDetailsPanel({
     (compileId && summaryMap[compileId]) ??
     (compileId && summaryMap[`skrub_${compileId}`]) ?? undefined;
 
-  const isInput = selectedNode.type === "input";
+  const hasCompileDetails =
+    compileNode != null ||
+    (compileNode?.source_range != null) ||
+    upstreamNodeLabels.length > 0 ||
+    downstreamNodeLabels.length > 0 ||
+    compileValidationErrors.length > 0 ||
+    (compileTimingsMs != null && Object.keys(compileTimingsMs).length > 0);
+
+  const hasIdMapping =
+    selectedNodeId != null &&
+    selectedNodeId.startsWith("skrub_") &&
+    compileId != null &&
+    rawNodeId !== compileId;
+
+  const formatSourceRange = (r: NonNullable<CompileNode["source_range"]>) => {
+    if (r.start_line === r.end_line) {
+      return r.start_column === r.end_column
+        ? `Line ${r.start_line}`
+        : `Line ${r.start_line}, columns ${r.start_column}–${r.end_column}`;
+    }
+    return `Lines ${r.start_line}–${r.end_line}`;
+  };
 
   return (
     <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
@@ -211,56 +252,60 @@ export function NodeDetailsPanel({
           </>
         ) : (
           <>
-            <section key={`generated-code-${selectedNodeId}`}>
-              <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
-                Generated code
-                {isLive && <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-normal">(live)</span>}
-              </h3>
-              {waitingForCode ? (
-                <CodeOutput code="" language="python" isLoading={true} isExpanded={isExpanded} />
-              ) : hasCodeToShow ? (
-                <CodeOutput code={effectiveCode || ""} language="python" isLoading={false} isExpanded={isExpanded} />
-              ) : (
-                <p className="text-sm text-zinc-500 dark:text-zinc-400 italic py-3">
-                  No generated code for this sempipes operator. Run the pipeline to generate code for each operator.
-                </p>
-              )}
-            </section>
-            <section>
-              <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
-                LLM / prompt stats
-              </h3>
-              {nodeFallback === true && (
-                <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-3 py-2 mb-2">
-                  Placeholder code shown above (LLM unavailable or failed). Configure sempipes with an API key for real generated code.
-                </p>
-              )}
-              {(nodeRetries != null || (nodeCostUsd != null && nodeCostUsd > 0)) && (
-                <div className="flex flex-wrap gap-3 text-sm text-zinc-600 dark:text-zinc-300 mb-2">
-                  {nodeRetries != null && (
-                    <span title={nodeFallback ? "Attempts before falling back to placeholder" : "Number of LLM calls for this node"}>
-                      Attempts: {nodeRetries}
-                      {nodeFallback && " (LLM failed, placeholder shown)"}
-                    </span>
+            {hasGeneratedCodeSection && (
+              <>
+                <section key={`generated-code-${selectedNodeId}`}>
+                  <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
+                    Generated code
+                    {isLive && <span className="ml-2 text-emerald-600 dark:text-emerald-400 font-normal">(live)</span>}
+                  </h3>
+                  {waitingForCode ? (
+                    <CodeOutput code="" language="python" isLoading={true} isExpanded={isExpanded} />
+                  ) : hasCodeToShow ? (
+                    <CodeOutput code={effectiveCode || ""} language="python" isLoading={false} isExpanded={isExpanded} />
+                  ) : (
+                    <p className="text-sm text-zinc-500 dark:text-zinc-400 italic py-3">
+                      No generated code for this sempipes operator. Run the pipeline to generate code for each operator.
+                    </p>
                   )}
-                  {nodeCostUsd != null && nodeCostUsd > 0 && (
-                    <span title="LLM cost for this node (USD)">
-                      Cost: ${nodeCostUsd.toFixed(6)}
-                    </span>
+                </section>
+                <section>
+                  <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
+                    LLM / prompt stats
+                  </h3>
+                  {nodeFallback === true && (
+                    <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-3 py-2 mb-2">
+                      Placeholder code shown above (LLM unavailable or failed). Configure sempipes with an API key for real generated code.
+                    </p>
                   )}
-                </div>
-              )}
-              {nodeFallback !== true && (
-                <p className="text-sm text-zinc-600 dark:text-zinc-300">
-                  Prompt statistics and node-specific metadata will appear here when available.
-                </p>
-              )}
-              {nodeMetadata && Object.keys(nodeMetadata).length > 0 && (
-                <pre className="text-xs bg-slate-100 dark:bg-zinc-800 rounded p-3 mt-2 overflow-x-auto text-zinc-700 dark:text-zinc-300 font-mono border border-slate-200 dark:border-zinc-700">
-                  {JSON.stringify(nodeMetadata, null, 2)}
-                </pre>
-              )}
-            </section>
+                  {(nodeRetries != null || (nodeCostUsd != null && nodeCostUsd > 0)) && (
+                    <div className="flex flex-wrap gap-3 text-sm text-zinc-600 dark:text-zinc-300 mb-2">
+                      {nodeRetries != null && (
+                        <span title={nodeFallback ? "Attempts before falling back to placeholder" : "Number of LLM calls for this node"}>
+                          Attempts: {nodeRetries}
+                          {nodeFallback && " (LLM failed, placeholder shown)"}
+                        </span>
+                      )}
+                      {nodeCostUsd != null && nodeCostUsd > 0 && (
+                        <span title="LLM cost for this node (USD)">
+                          Cost: ${nodeCostUsd.toFixed(6)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {nodeFallback !== true && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                      Prompt statistics and node-specific metadata will appear here when available.
+                    </p>
+                  )}
+                  {nodeMetadata && Object.keys(nodeMetadata).length > 0 && (
+                    <pre className="text-xs bg-slate-100 dark:bg-zinc-800 rounded p-3 mt-2 overflow-x-auto text-zinc-700 dark:text-zinc-300 font-mono border border-slate-200 dark:border-zinc-700">
+                      {JSON.stringify(nodeMetadata, null, 2)}
+                    </pre>
+                  )}
+                </section>
+              </>
+            )}
             <section>
               <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
                 Output data (preview)
@@ -278,6 +323,87 @@ export function NodeDetailsPanel({
               )}
             </section>
           </>
+        )}
+        {hasCompileDetails && (
+          <section>
+            <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">From compile</h3>
+            <div className="space-y-3 text-sm">
+              <div>
+                <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-0.5">ID</p>
+                <div className="space-y-0.5 text-zinc-700 dark:text-zinc-300 font-mono text-xs">
+                  <p>Graph: {selectedNodeId}</p>
+                  {compileNode?.id != null && (
+                    <p className="text-zinc-600 dark:text-zinc-400">Compile: {compileNode.id}</p>
+                  )}
+                </div>
+              </div>
+              {hasIdMapping && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-0.5">ID mapping</p>
+                  <p className="text-zinc-700 dark:text-zinc-300 font-mono text-xs">
+                    {selectedNodeId} → {compileId}
+                  </p>
+                  <p className="text-zinc-500 dark:text-zinc-400 text-[10px] mt-0.5">
+                    Graph/skrub ID maps to compile node ID for lookups.
+                  </p>
+                </div>
+              )}
+              {compileNode?.source_range != null && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-0.5">Code location</p>
+                  <p className="text-zinc-700 dark:text-zinc-300 font-mono text-xs">
+                    {formatSourceRange(compileNode.source_range)}
+                  </p>
+                </div>
+              )}
+              {(upstreamNodeLabels.length > 0 || downstreamNodeLabels.length > 0) && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-1">Data flow</p>
+                  <div className="space-y-1 text-zinc-700 dark:text-zinc-300">
+                    {upstreamNodeLabels.length > 0 && (
+                      <p>
+                        <span className="text-zinc-500 dark:text-zinc-400">Depends on:</span>{" "}
+                        {upstreamNodeLabels.join(", ")}
+                      </p>
+                    )}
+                    {downstreamNodeLabels.length > 0 && (
+                      <p>
+                        <span className="text-zinc-500 dark:text-zinc-400">Feeds into:</span>{" "}
+                        {downstreamNodeLabels.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {compileValidationErrors.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mb-0.5">Validation errors</p>
+                  <ul className="list-disc list-inside text-amber-700 dark:text-amber-300 text-xs space-y-0.5">
+                    {compileValidationErrors.map((err, i) => (
+                      <li key={i}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {compileTimingsMs != null && Object.keys(compileTimingsMs).length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300 mb-0.5">Compile timings (ms)</p>
+                  <div className="rounded border border-slate-200 dark:border-zinc-700 overflow-hidden">
+                    <table className="min-w-full text-xs text-zinc-700 dark:text-zinc-300">
+                      <tbody>
+                        {Object.entries(compileTimingsMs).map(([key, ms]) => (
+                          <tr key={key} className="border-b border-slate-100 dark:border-zinc-700 last:border-0">
+                            <td className="py-1 px-2 font-medium">{key}</td>
+                            <td className="py-1 px-2 font-mono text-right">{ms.toFixed(1)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
         )}
       </div>
     </div>
