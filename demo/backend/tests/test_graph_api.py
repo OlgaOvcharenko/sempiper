@@ -8,6 +8,7 @@ This test file covers:
 """
 
 import pytest
+from pathlib import Path
 from unittest.mock import Mock
 
 from services.graph_api import (
@@ -956,3 +957,88 @@ x = x.sem_extract_features(nl_prompt="Second", name="b", input_columns=["d"], ge
         exec_ms = timings_out.get("exec_ms")
         assert exec_ms is not None, "timings_out should contain exec_ms"
         assert exec_ms < 5000, f"exec_ms should be under 5s (no real LLM). Got {exec_ms} ms"
+
+
+class TestOptimizerScriptsDynamicCompile:
+    """Parse and construct a valid graph for optimizer scripts via compile_script_to_graph_dynamic."""
+
+    _ROOT = Path(__file__).resolve().parents[3]  # repo root (tests -> backend -> demo -> root)
+
+    def _load_optimizer_script(self, filename: str) -> str:
+        path = self._ROOT / "optimizer_scripts" / filename
+        if not path.exists():
+            pytest.skip(f"optimizer_scripts/{filename} not found")
+        return path.read_text()
+
+    def test_optimise_fraud_produces_valid_graph(self):
+        """optimise_fraud.py: dynamic compile produces a valid graph (nodes and edges)."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        script = self._load_optimizer_script("optimise_fraud.py")
+        result = compile_script_to_graph_dynamic(script)
+
+        assert result.is_valid, f"Expected valid graph: {result.validation_errors}"
+        assert len(result.nodes) > 0, "Graph should have nodes"
+        assert len(result.edges) > 0, "Graph should have edges"
+        labels = {n.label for n in result.nodes}
+        assert "skb.apply" in labels or any("apply" in (n.label or "") for n in result.nodes), (
+            f"Expected at least one apply-like node. Got: {labels}"
+        )
+
+    def test_optimise_museums_produces_valid_graph(self):
+        """optimise_museums.py: dynamic compile produces a valid graph (nodes and edges)."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+
+        script = self._load_optimizer_script("optimise_museums.py")
+        result = compile_script_to_graph_dynamic(script)
+
+        assert result.is_valid, f"Expected valid graph: {result.validation_errors}"
+        assert len(result.nodes) > 0, "Graph should have nodes"
+        assert len(result.edges) > 0, "Graph should have edges"
+
+    @pytest.mark.skipif(
+        __import__("importlib").util.find_spec("duckdb") is None,
+        reason="optimise_house requires duckdb (and tabpfn); skip when not installed",
+    )
+    def test_optimise_house_produces_valid_graph_when_deps_available(self):
+        """optimise_house.py: dynamic compile produces valid graph when duckdb/tabpfn are installed."""
+        try:
+            import skrub
+            import duckdb
+        except ImportError:
+            pytest.skip("skrub or duckdb not available")
+
+        script = self._load_optimizer_script("optimise_house.py")
+        result = compile_script_to_graph_dynamic(script)
+
+        assert result.is_valid, f"Expected valid graph when deps present: {result.validation_errors}"
+        assert len(result.nodes) > 0, "Graph should have nodes"
+        assert len(result.edges) > 0, "Graph should have edges"
+
+    def test_optimise_house_returns_structured_error_when_deps_missing(self):
+        """optimise_house.py: when duckdb is missing, compile returns invalid result with clear error."""
+        try:
+            import skrub
+        except ImportError:
+            pytest.skip("skrub not available")
+        try:
+            import duckdb
+        except ImportError:
+            pass  # duckdb missing: we expect compile to fail
+        else:
+            pytest.skip("duckdb is installed; test only runs when duckdb is missing")
+
+        script = self._load_optimizer_script("optimise_house.py")
+        result = compile_script_to_graph_dynamic(script)
+
+        assert not result.is_valid, "Expected invalid graph when duckdb missing"
+        assert len(result.validation_errors) > 0
+        assert any("duckdb" in e.lower() or "compilation failed" in e.lower() for e in result.validation_errors), (
+            f"Error should mention duckdb or compilation failure: {result.validation_errors}"
+        )
