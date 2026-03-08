@@ -513,6 +513,22 @@ def _dataframe_to_preview_dict(preview_data, node_id):
     }
 
 
+def _evaluate_and_cache_all_nodes(result_dataop, env):
+    """Evaluate the full graph once with clear=False so all node results are cached.
+
+    After this call, every node in the graph has its result stored in
+    node._skrub_impl.results["fit_transform"], enabling O(1) lookups
+    in _extract_preview_from_dataop without re-executing the pipeline.
+    """
+    try:
+        from skrub._data_ops._evaluation import evaluate
+        evaluate(result_dataop, mode="fit_transform", environment=env, clear=False)
+        return True
+    except Exception as e:
+        print(f"Warning: single-pass evaluate failed, previews may be incomplete: {e}", file=sys.stderr)
+        return False
+
+
 def _to_dataframe(val):
     """Convert Series or ndarray to DataFrame; return DataFrame as-is; return None otherwise."""
     try:
