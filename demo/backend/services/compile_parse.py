@@ -309,7 +309,11 @@ def _extract_produces_consumes(
     """
     left = line[: call_start + 1]
     lhs_match = re.search(r"(\w+)\s*=\s*[^=]*$", left)
-    produces = lhs_match.group(1) if lhs_match else None
+    # Only claim to produce a var when not nested inside another call (paren depth == 0).
+    # Example: "house_data = as_X(houses.drop(...))" — when processing the inline drop,
+    # left = "...as_X(houses.d" which has depth=1, so drop must NOT claim house_data.
+    _paren_depth = left[:-1].count("(") - left[:-1].count(")")
+    produces = (lhs_match.group(1) if lhs_match else None) if _paren_depth == 0 else None
 
     consumes: list[str] = []
     if node_label in ("as_X", "as_y"):
@@ -318,7 +322,17 @@ def _extract_produces_consumes(
         search_text = (line_context or line)
         first_arg_match = re.search(r"(?:as_X|as_y)\s*\(\s*(\w+)", search_text)
         if first_arg_match:
-            consumes.append(first_arg_match.group(1))
+            first_arg_var = first_arg_match.group(1)
+            # When the first arg is a chained call like df.drop(...), as_X/as_y does NOT
+            # directly consume df — the inline node does. Detect by checking the character
+            # immediately after the first-arg identifier (position-based, not regex on context,
+            # to avoid false positives when a nearby line has as_X(df.drop(...))).
+            pos_after_var = first_arg_match.start(1) + len(first_arg_var)
+            while pos_after_var < len(search_text) and search_text[pos_after_var] in " \t\n\r":
+                pos_after_var += 1
+            is_chained = pos_after_var < len(search_text) and search_text[pos_after_var] == "."
+            if not is_chained:
+                consumes.append(first_arg_var)
         return produces, consumes
     # Method call: search full line for receiver before the method.
     # Note: more specific patterns (skb.apply_func, skb.drop) must appear before their prefixes
@@ -549,15 +563,18 @@ def _infer_edges_from_flow(
     # Pass 3: inline drop-in-argument → as_X/as_y
     # When as_X(df.drop(...), ...) or as_y(df.drop(...), ...), the drop result is the actual
     # input to as_X/as_y, so add edge drop_node → as_X/as_y.  We detect this by checking
-    # whether the as_X/as_y line-context contains "identifier.drop(" as the first argument.
-    inline_drop_re = re.compile(r"(?:as_X|as_y)\s*\(\s*\w+\.drop\s*\(")
+    # whether the as_X/as_y call text (bounded to its own parentheses via _extract_call_text)
+    # contains "identifier.drop(".  Using the call text rather than _line_context avoids
+    # false positives: a nearby as_X(df.drop(...)) on the next line must not trigger an edge
+    # into an unrelated as_y that precedes it.
+    _inline_drop_in_call_re = re.compile(r"\w+\.drop\s*\(")
     for r in raw:
         if r.label not in ("as_X", "as_y"):
             continue
-        ctx = _line_context(lines, r.start_line)
-        if not inline_drop_re.search(ctx):
+        call_text = _extract_call_text(lines, r.start_line, r.start_col - 1)
+        if not _inline_drop_in_call_re.search(call_text):
             continue
-        # Find a drop raw entry whose start line falls within the as_X call's context window
+        # Find a drop raw entry whose start line falls within the as_X/as_y call's span
         for drop_r in raw:
             if drop_r.label != "drop":
                 continue
