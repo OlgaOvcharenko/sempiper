@@ -548,41 +548,36 @@ def _to_dataframe(val):
     return None
 
 
-def _extract_preview_from_dataop(node_obj, node_id, env=None):
+def _extract_preview_from_dataop(node_obj, node_id):
     """
     Extract preview data (schema, sample, row_count) from a DataOp node.
 
-    Tries .skb.preview() first, then .skb.eval(env). Handles DataFrame, Series, and
-    ndarray results. Returns None (no preview) when neither path yields tabular data --
-    never emits a placeholder row like {"value": "preview"}.
+    Reads from the node's internal results cache (populated by a prior
+    _evaluate_and_cache_all_nodes call), falling back to .skb.preview().
+    Never calls .skb.eval() -- avoids re-executing the pipeline per node.
     """
     try:
+        # 1. Check the internal results cache (populated by single-pass evaluate)
+        impl = getattr(node_obj, "_skrub_impl", None)
+        if impl is not None:
+            cached = getattr(impl, "results", {}).get("fit_transform")
+            if cached is not None:
+                df = _to_dataframe(cached)
+                if df is not None:
+                    result = _dataframe_to_preview_dict(df, node_id)
+                    if result:
+                        return result
+
+        # 2. Fall back to .skb.preview() (reads "preview" mode cache)
         skb = getattr(node_obj, "skb", None)
         if skb is None:
             return None
-
-        # 1. Try preview() (uses cached result if present)
         preview_func = getattr(skb, "preview", None)
         if callable(preview_func):
             try:
                 df = _to_dataframe(preview_func())
                 if df is not None:
-                    result = _dataframe_to_preview_dict(df, node_id)
-                    if result:
-                        return result
-            except Exception:
-                pass
-
-        # 2. Try eval(env) so pipeline nodes with variables get real data
-        eval_func = getattr(skb, "eval", None)
-        if callable(eval_func):
-            try:
-                raw = eval_func(env) if (env is not None and isinstance(env, dict)) else eval_func()
-                df = _to_dataframe(raw)
-                if df is not None:
-                    result = _dataframe_to_preview_dict(df, node_id)
-                    if result:
-                        return result
+                    return _dataframe_to_preview_dict(df, node_id)
             except Exception:
                 pass
 
@@ -592,12 +587,14 @@ def _extract_preview_from_dataop(node_obj, node_id, env=None):
         return None
 
 
-def _extract_all_previews(raw_graph, env=None):
+def _extract_all_previews(raw_graph):
     """
-    Extract preview data for all nodes in the graph using .skb.preview() / .skb.eval(env).
+    Extract preview data for all nodes in the graph.
     Returns list of preview dicts (node_id, schema, sample, row_count).
     Walks every node in raw_graph["nodes"] (handles both list and dict).
-    env: optional execution environment (e.g. from pipeline.skb.get_data()) so eval(env) can run nodes.
+
+    Expects that _evaluate_and_cache_all_nodes was called beforehand so each
+    node has its result cached in _skrub_impl.results["fit_transform"].
     """
     if not raw_graph or not isinstance(raw_graph, dict):
         return []
@@ -609,7 +606,7 @@ def _extract_all_previews(raw_graph, env=None):
     missing_ids = []
     for i, node_obj in enumerate(node_list):
         node_id = str(i)
-        preview = _extract_preview_from_dataop(node_obj, node_id, env=env)
+        preview = _extract_preview_from_dataop(node_obj, node_id)
         if preview:
             previews.append(preview)
         else:
@@ -658,8 +655,11 @@ def _get_skrub_dag_dict(code, globals_dict):
             graph_dict = _graph_to_serializable(raw_graph)
         except Exception:
             pass
+        # Single-pass evaluate: populate all node caches so _extract_all_previews
+        # reads results in O(1) per node instead of re-executing the pipeline.
+        _evaluate_and_cache_all_nodes(result, env)
         try:
-            previews = _extract_all_previews(raw_graph, env=env)
+            previews = _extract_all_previews(raw_graph)
         except Exception:
             pass
 

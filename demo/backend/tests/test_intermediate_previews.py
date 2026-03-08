@@ -211,16 +211,14 @@ def test_extract_preview_skips_placeholder():
     assert result is None, "should not emit placeholder row like {'value': 'preview'}"
 
 
-def test_extract_preview_prefers_eval_env_over_placeholder():
-    """When preview() returns a placeholder but eval(env) returns a DataFrame, use the DataFrame."""
+def test_extract_preview_reads_cached_fit_transform_result():
+    """When _skrub_impl.results has a cached fit_transform DataFrame, use it directly."""
     df = pd.DataFrame({"x": [10, 20], "y": [30, 40]})
-    skb = SimpleNamespace(
-        preview=lambda: "preview",
-        eval=lambda env: df,
-    )
-    node_obj = SimpleNamespace(skb=skb)
+    impl = SimpleNamespace(results={"fit_transform": df})
+    skb = SimpleNamespace(preview=lambda: "preview")
+    node_obj = SimpleNamespace(_skrub_impl=impl, skb=skb)
 
-    result = _extract_preview_from_dataop(node_obj, "9", env={"baskets": df})
+    result = _extract_preview_from_dataop(node_obj, "9")
     assert result is not None
     assert result["node_id"] == "9"
     assert result["row_count"] == 2
