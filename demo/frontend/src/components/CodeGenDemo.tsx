@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { clearCache, compileToSkrubGraph, type CompileNode } from "../api/client";
 import {
   graphNodeToCompileIds,
@@ -64,10 +64,12 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
   const [expandedPanel, setExpandedPanel] = useState<"left" | "middle" | "right" | null>(null);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
+  const scriptLoadInProgressRef = useRef(false);
   const scripts = useScriptManager({
     mode: "normal",
     initialCode: INITIAL_PIPELINE_CODE,
     defaultScriptId: "simple",
+    scriptLoadInProgressRef,
   });
   const { pipelineCode, loadedScriptId, pipelineScripts } = scripts;
 
@@ -104,6 +106,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     temperature,
     loadedScriptId,
     onCodeChange: resetLiveState,
+    scriptLoadInProgressRef,
   });
   const {
     compileNodes,

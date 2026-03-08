@@ -28,8 +28,10 @@ export function useCompile(opts: {
   loadedScriptId: string | null;
   /** Called when pipelineCode changes — use to reset execution live state. */
   onCodeChange?: () => void;
+  /** When true, skip debounce and compile immediately (e.g. after loading a script). Cleared by this hook. */
+  scriptLoadInProgressRef?: React.MutableRefObject<boolean>;
 }): UseCompileReturn {
-  const { pipelineCode, llmName, temperature, loadedScriptId } = opts;
+  const { pipelineCode, llmName, temperature, loadedScriptId, scriptLoadInProgressRef } = opts;
 
   const [compileNodes, setCompileNodes] = useState<CompileNode[]>([]);
   const [compileEdges, setCompileEdges] = useState<CompileEdge[]>([]);
@@ -51,6 +53,18 @@ export function useCompile(opts: {
     const controller = new AbortController();
     compileAbortRef.current = controller;
     setCompileError(null);
+    if (typeof performance !== "undefined" && performance.mark) {
+      performance.mark("compile-request-start");
+      try {
+        performance.measure(
+          "load-to-compile-request",
+          "pipeline-script-load-code-set",
+          "compile-request-start"
+        );
+      } catch {
+        // Ignore if measure fails (e.g. start mark missing)
+      }
+    }
     try {
       const tempValue = parseFloat(temperature);
       const res = await compilePipeline(pipelineCode, {
@@ -60,6 +74,8 @@ export function useCompile(opts: {
         temperature: isNaN(tempValue) ? undefined : tempValue,
       });
       if (compileAbortRef.current !== controller) return;
+      if (typeof performance !== "undefined" && performance.mark)
+        performance.mark("compile-request-end");
       setCompileNodes(res.nodes);
       setCompileEdges(res.edges ?? []);
       setCompileValidationErrors(res.validation_errors ?? []);
@@ -82,11 +98,14 @@ export function useCompile(opts: {
     onCodeChangeRef.current?.();
   }, [pipelineCode]);
 
-  // Debounce: re-compile 400 ms after any compile dependency changes.
+  // Debounce: re-compile after dependency changes. Skip debounce when code was just set by script load.
   useEffect(() => {
-    const t = setTimeout(refreshCompileGraph, 400);
+    const skipDebounce = scriptLoadInProgressRef?.current === true;
+    if (skipDebounce && scriptLoadInProgressRef) scriptLoadInProgressRef.current = false;
+    const delayMs = skipDebounce ? 0 : 400;
+    const t = setTimeout(refreshCompileGraph, delayMs);
     return () => clearTimeout(t);
-  }, [refreshCompileGraph]);
+  }, [refreshCompileGraph, scriptLoadInProgressRef]);
 
   return {
     compileNodes,

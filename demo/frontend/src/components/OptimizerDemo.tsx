@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { clearCache, compileToSkrubGraph, type CompileNode } from "../api/client";
 import { graphNodeToCompileIds, skrubIdToRaw } from "../utils/graphCodeSync";
 import { fetchOptimizerStatus } from "../api/client";
@@ -92,12 +92,14 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const [replayTrigger, setReplayTrigger] = useState(0);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
+  const scriptLoadInProgressRef = useRef(false);
   const scripts = useScriptManager({
     mode: "optimizer",
     initialCode: INITIAL_PIPELINE_CODE,
     defaultScriptId: DEFAULT_SCRIPT_ID,
     prependEntries: [{ id: NEW_PIPELINE_ID, label: "— New Editable Pipeline —" }],
     syntheticNewId: NEW_PIPELINE_ID,
+    scriptLoadInProgressRef,
   });
   const { pipelineCode, loadedScriptId, pipelineScripts } = scripts;
 
@@ -146,6 +148,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     temperature,
     loadedScriptId,
     onCodeChange: resetLiveState,
+    scriptLoadInProgressRef,
   });
   const {
     compileNodes,

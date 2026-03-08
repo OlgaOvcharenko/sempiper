@@ -30,6 +30,8 @@ export function useScriptManager(opts: {
   prependEntries?: PipelineScriptEntry[];
   /** If loading this ID, set code to initialCode instead of fetching from backend. */
   syntheticNewId?: string;
+  /** When set, set to true before updating pipelineCode from a script load so compile can skip debounce. */
+  scriptLoadInProgressRef?: React.MutableRefObject<boolean>;
 }): UseScriptManagerReturn {
   const [pipelineScripts, setPipelineScripts] = useState<PipelineScriptEntry[]>([]);
   const [pipelineCode, setPipelineCode] = useState(opts.initialCode ?? "");
@@ -47,6 +49,7 @@ export function useScriptManager(opts: {
       defaultScriptId,
       prependEntries = [],
       syntheticNewId,
+      scriptLoadInProgressRef,
     } = initRef.current;
 
     let cancelled = false;
@@ -69,11 +72,21 @@ export function useScriptManager(opts: {
         if (effectiveDefaultId) {
           setLoadedScriptId(effectiveDefaultId);
           if (syntheticNewId && effectiveDefaultId === syntheticNewId) {
-            if (!cancelled) setPipelineCode(initialCode);
+            if (!cancelled) {
+              if (scriptLoadInProgressRef) scriptLoadInProgressRef.current = true;
+              if (typeof performance !== "undefined" && performance.mark)
+                performance.mark("pipeline-script-load-code-set");
+              setPipelineCode(initialCode);
+            }
           } else {
             getPipelineScriptContent(effectiveDefaultId, mode)
               .then(({ content }) => {
-                if (!cancelled) setPipelineCode(content);
+                if (!cancelled) {
+                  if (scriptLoadInProgressRef) scriptLoadInProgressRef.current = true;
+                  if (typeof performance !== "undefined" && performance.mark)
+                    performance.mark("pipeline-script-load-code-set");
+                  setPipelineCode(content);
+                }
               })
               .catch(() => {
                 if (!cancelled)
@@ -101,20 +114,30 @@ export function useScriptManager(opts: {
     };
   }, []); // intentionally run only once on mount
 
+  const scriptLoadRef = opts.scriptLoadInProgressRef;
   const handleLoadScript = useCallback(async (id: string) => {
     const { mode, initialCode = "", syntheticNewId } = initRef.current;
     setLoadedScriptId(id);
     if (syntheticNewId && id === syntheticNewId) {
+      if (scriptLoadRef) scriptLoadRef.current = true;
+      if (typeof performance !== "undefined" && performance.mark)
+        performance.mark("pipeline-script-load-code-set");
       setPipelineCode(initialCode);
       return;
     }
     try {
       const { content } = await getPipelineScriptContent(id, mode);
+      if (scriptLoadRef) scriptLoadRef.current = true;
+      if (typeof performance !== "undefined" && performance.mark)
+        performance.mark("pipeline-script-load-code-set");
       setPipelineCode(content);
     } catch {
+      if (scriptLoadRef) scriptLoadRef.current = true;
+      if (typeof performance !== "undefined" && performance.mark)
+        performance.mark("pipeline-script-load-code-set");
       setPipelineCode(`# Failed to load script: ${id}\n`);
     }
-  }, []);
+  }, [scriptLoadRef]);
 
   const handleFileUpload = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
