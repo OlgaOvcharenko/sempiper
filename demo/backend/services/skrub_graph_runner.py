@@ -513,68 +513,75 @@ def _dataframe_to_preview_dict(preview_data, node_id):
     }
 
 
-def _extract_preview_from_dataop(node_obj, node_id):
+def _to_dataframe(val):
+    """Convert Series or ndarray to DataFrame; return DataFrame as-is; return None otherwise."""
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    if isinstance(val, pd.DataFrame):
+        return val
+    if isinstance(val, pd.Series):
+        return val.to_frame()
+    try:
+        import numpy as np
+        if isinstance(val, np.ndarray) and val.ndim <= 2:
+            return pd.DataFrame(val)
+    except ImportError:
+        pass
+    return None
+
+
+def _extract_preview_from_dataop(node_obj, node_id, env=None):
     """
-    Extract preview data (schema, sample, row_count) from a DataOp using .skb.preview()
-    and, if that fails or returns non-DataFrame, .skb.eval().
-    Returns dict with node_id, schema, sample, row_count; or None if both fail.
+    Extract preview data (schema, sample, row_count) from a DataOp node.
+
+    Tries .skb.preview() first, then .skb.eval(env). Handles DataFrame, Series, and
+    ndarray results. Returns None (no preview) when neither path yields tabular data --
+    never emits a placeholder row like {"value": "preview"}.
     """
     try:
         skb = getattr(node_obj, "skb", None)
         if skb is None:
             return None
 
-        try:
-            import pandas as pd
-        except ImportError:
-            pd = None
-
-        preview_data = None
-        # Try preview() first
+        # 1. Try preview() (uses cached result if present)
         preview_func = getattr(skb, "preview", None)
         if callable(preview_func):
             try:
-                preview_data = preview_func()
-            except Exception:
-                pass
-
-        # If preview returned a DataFrame, use it
-        if preview_data is not None and pd is not None and isinstance(preview_data, pd.DataFrame):
-            result = _dataframe_to_preview_dict(preview_data, node_id)
-            if result:
-                return result
-
-        # If preview was None or not DataFrame, try eval()
-        eval_func = getattr(skb, "eval", None)
-        if callable(eval_func):
-            try:
-                eval_data = eval_func()
-                if eval_data is not None and (pd is None or isinstance(eval_data, pd.DataFrame)):
-                    result = _dataframe_to_preview_dict(eval_data, node_id)
+                df = _to_dataframe(preview_func())
+                if df is not None:
+                    result = _dataframe_to_preview_dict(df, node_id)
                     if result:
                         return result
             except Exception:
                 pass
 
-        # Non-DataFrame from preview (e.g. Series, scalar): keep minimal representation
-        if preview_data is not None:
-            return {
-                "node_id": node_id,
-                "schema": [{"name": "value", "dtype": str(type(preview_data).__name__)}],
-                "sample": [{"value": str(preview_data)[:200]}],
-                "row_count": 1,
-            }
+        # 2. Try eval(env) so pipeline nodes with variables get real data
+        eval_func = getattr(skb, "eval", None)
+        if callable(eval_func):
+            try:
+                raw = eval_func(env) if (env is not None and isinstance(env, dict)) else eval_func()
+                df = _to_dataframe(raw)
+                if df is not None:
+                    result = _dataframe_to_preview_dict(df, node_id)
+                    if result:
+                        return result
+            except Exception:
+                pass
+
         return None
     except Exception as e:
         print(f"Warning: Could not get preview for node {node_id}: {e}", file=sys.stderr)
         return None
 
 
-def _extract_all_previews(raw_graph):
+def _extract_all_previews(raw_graph, env=None):
     """
-    Extract preview data for all nodes in the graph using .skb.preview() / .skb.eval().
+    Extract preview data for all nodes in the graph using .skb.preview() / .skb.eval(env).
     Returns list of preview dicts (node_id, schema, sample, row_count).
     Walks every node in raw_graph["nodes"] (handles both list and dict).
+    env: optional execution environment (e.g. from pipeline.skb.get_data()) so eval(env) can run nodes.
     """
     if not raw_graph or not isinstance(raw_graph, dict):
         return []
@@ -583,11 +590,25 @@ def _extract_all_previews(raw_graph):
     node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
 
     previews = []
+    missing_ids = []
     for i, node_obj in enumerate(node_list):
         node_id = str(i)
-        preview = _extract_preview_from_dataop(node_obj, node_id)
+        preview = _extract_preview_from_dataop(node_obj, node_id, env=env)
         if preview:
             previews.append(preview)
+        else:
+            missing_ids.append(node_id)
+
+    total = len(node_list)
+    got = len(previews)
+    if missing_ids:
+        print(
+            f"Preview extraction: {got}/{total} nodes got previews; "
+            f"missing node indices: {missing_ids}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Preview extraction: {got}/{total} nodes got previews (all covered)", file=sys.stderr)
 
     return previews
 
@@ -615,13 +636,14 @@ def _get_skrub_dag_dict(code, globals_dict):
     except Exception:
         raw_graph = None
 
+    env = globals_dict.get("env") if isinstance(globals_dict.get("env"), dict) else None
     if raw_graph and isinstance(raw_graph, dict) and "nodes" in raw_graph:
         try:
             graph_dict = _graph_to_serializable(raw_graph)
         except Exception:
             pass
         try:
-            previews = _extract_all_previews(raw_graph)
+            previews = _extract_all_previews(raw_graph, env=env)
         except Exception:
             pass
 
@@ -823,6 +845,7 @@ def _extract_var_previews(code: str, g: dict) -> list[dict]:
 
 
 def main():
+    t_main_start = time.perf_counter()
     code = sys.stdin.read()
 
     # Set up capture patch BEFORE preparing globals (which may trigger operator imports).
@@ -830,6 +853,7 @@ def main():
     _setup_capture_patch()
 
     g = _prepare_globals()
+    startup_ms = (time.perf_counter() - t_main_start) * 1000
     exec_failed = False
 
     # Clear per-operator costs and attempts from any previous run (e.g. if module is reused)
@@ -845,9 +869,11 @@ def main():
             exec_failed = True
     exec_duration_ms = (time.perf_counter() - exec_start) * 1000
     total_cost_usd = sum(_per_operator_costs)
+    t_post_start = time.perf_counter()
 
     # Emit real data summaries for input variables (from g["env"] or top-level DataFrames).
     # Only emitted when actual data is available — never placeholder/fake data.
+    # These feed the UI node details for input nodes (single pipeline run, no extra subprocess).
     input_summaries = _extract_var_input_summaries(g)
     for s in input_summaries:
         print(_NODE_INPUT_SUMMARY_MARKER)
@@ -890,9 +916,22 @@ def main():
         print(json.dumps(var_preview))
         print(_SKRUB_GRAPH_END)
 
-    # Emit execution stats (duration and cost)
+    # Data statistics for node details (schema, sample, row_count) are extracted here as part of
+    # the single pipeline execution. No separate subprocess is used. The backend parses these
+    # blocks and emits input_summary (input nodes) and node_data (operator outputs) for the UI.
+    # - NODE_INPUT_SUMMARY: per input variable (var_name, schema, sample, row_count)
+    # - NODE_PREVIEW: per graph node from .skb.preview() (node_id, schema, sample, row_count)
+    # - VAR_PREVIEW: per variable assignment for backend var_producer → compile node mapping
+
+    post_exec_ms = (time.perf_counter() - t_post_start) * 1000
+    # Emit execution stats (duration and cost) plus profiling breakdown
     print(_EXECUTION_STATS_MARKER)
-    print(json.dumps({"duration_ms": exec_duration_ms, "cost_usd": total_cost_usd}))
+    print(json.dumps({
+        "duration_ms": exec_duration_ms,
+        "cost_usd": total_cost_usd,
+        "startup_ms": startup_ms,
+        "post_exec_ms": post_exec_ms,
+    }))
     print(_SKRUB_GRAPH_END)
 
     if exec_failed:
