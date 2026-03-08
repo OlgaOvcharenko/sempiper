@@ -216,3 +216,190 @@ def test_runner_input_summary_products_filtered_by_baskets():
         f"products row_count must match filtered size ({expected_products_count}), "
         f"not full table ({len(products)}); got {by_var['products']['row_count']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Synthetic-data tests: fast (no network), deterministic, cover multiple N values
+# and both code patterns (with helper function / without helper function).
+# ---------------------------------------------------------------------------
+
+def _make_baskets_products(n_total_baskets: int = 100, products_per_basket: int = 2):
+    """Synthetic baskets+products DataFrames with a known basket_ID FK.
+
+    baskets: columns ID, fraud_flag  (n_total_baskets rows)
+    products: columns basket_ID, item  (n_total_baskets * products_per_basket rows,
+              exactly products_per_basket rows per basket)
+    """
+    import pandas as pd
+    baskets = pd.DataFrame({
+        "ID": list(range(n_total_baskets)),
+        "fraud_flag": [0] * n_total_baskets,
+    })
+    products = pd.DataFrame({
+        "basket_ID": list(range(n_total_baskets)) * products_per_basket,
+        "item": ["widget"] * (n_total_baskets * products_per_basket),
+    })
+    return baskets, products
+
+
+@pytest.mark.parametrize("n", [5, 10, 25, 50, 75])
+def test_baskets_row_count_equals_sample_n_synthetic(n):
+    """baskets row_count == sample size N regardless of how many baskets exist total."""
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    baskets, products = _make_baskets_products()
+    sampled = baskets.sample(n=n, random_state=0)
+    g = {"env": {"baskets": sampled, "products": products}}
+
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+
+    assert "baskets" in by_var, f"Expected 'baskets' summary; got {list(by_var)}"
+    assert by_var["baskets"]["row_count"] == n, (
+        f"baskets row_count must be {n} (sample size); "
+        f"got {by_var['baskets']['row_count']}"
+    )
+
+
+@pytest.mark.parametrize("n,products_per_basket", [
+    (5, 1),
+    (10, 2),
+    (25, 3),
+    (50, 2),
+])
+def test_products_filtered_count_matches_sample_size_synthetic(n, products_per_basket):
+    """products row_count == n * products_per_basket after filtering by N-row basket sample."""
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    baskets, products = _make_baskets_products(products_per_basket=products_per_basket)
+    sampled = baskets.sample(n=n, random_state=0)
+    g = {"env": {"baskets": sampled, "products": products}}
+
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+
+    expected = n * products_per_basket  # deterministic with synthetic data
+    assert "products" in by_var, f"Expected 'products' summary; got {list(by_var)}"
+    assert by_var["products"]["row_count"] == expected, (
+        f"products row_count must be {expected} (n={n} baskets × {products_per_basket} products each); "
+        f"got {by_var['products']['row_count']} (full table has {len(products)} rows)"
+    )
+
+
+def test_products_count_decreases_with_fewer_baskets_synthetic():
+    """Sampling fewer baskets produces strictly fewer products (monotonicity)."""
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    baskets, products = _make_baskets_products(n_total_baskets=100, products_per_basket=2)
+
+    for n_small, n_large in [(5, 25), (10, 50), (20, 80)]:
+        small = baskets.sample(n=n_small, random_state=0)
+        large = baskets.sample(n=n_large, random_state=0)
+
+        small_summaries = {s["var_name"]: s for s in _extract_var_input_summaries({"env": {"baskets": small, "products": products}})}
+        large_summaries = {s["var_name"]: s for s in _extract_var_input_summaries({"env": {"baskets": large, "products": products}})}
+
+        small_count = small_summaries["products"]["row_count"]
+        large_count = large_summaries["products"]["row_count"]
+
+        assert small_count == n_small * 2, f"n={n_small}: expected {n_small * 2} products, got {small_count}"
+        assert large_count == n_large * 2, f"n={n_large}: expected {n_large * 2} products, got {large_count}"
+        assert small_count < large_count, (
+            f"Fewer baskets ({n_small}) should give fewer products than {n_large} baskets; "
+            f"got {small_count} vs {large_count}"
+        )
+
+
+def test_flat_script_no_helper_function_env_dict_synthetic():
+    """Flat script pattern (no helper function): env set as a plain dict, not via pipeline.skb.get_data().
+
+    This simulates a script where the pipeline is written at module level and env is
+    constructed explicitly, without wrapping in a function.
+    """
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    n = 30
+    baskets, products = _make_baskets_products(products_per_basket=3)
+    sampled = baskets.sample(n=n, random_state=7)
+
+    # Flat-script pattern: env is just a plain dict (no pipeline.skb.get_data())
+    g = {"env": {"baskets": sampled, "products": products}}
+
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+
+    assert by_var["baskets"]["row_count"] == n, (
+        f"Flat script: baskets row_count must be {n}; got {by_var['baskets']['row_count']}"
+    )
+    expected_products = n * 3
+    assert by_var["products"]["row_count"] == expected_products, (
+        f"Flat script: products row_count must be {expected_products}; "
+        f"got {by_var['products']['row_count']}"
+    )
+
+
+def test_helper_function_pattern_module_level_baskets_plus_env_synthetic():
+    """Helper function pattern (like simple.py): module-level 'baskets' var AND env dict both present.
+
+    In simple.py, 'baskets = dataset.baskets.sample(n=50)' is a module-level assignment
+    AND env["baskets"] = baskets is set later. Both exist in g at the same time.
+    _extract_var_input_summaries must report baskets=N and products=filtered correctly.
+    """
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    n = 40
+    baskets, products = _make_baskets_products(products_per_basket=2)
+    sampled = baskets.sample(n=n, random_state=3)
+
+    # Simulates simple.py after exec: module-level 'baskets' DataFrame + env dict
+    g = {
+        "baskets": sampled,               # module-level variable (like simple.py global)
+        "env": {
+            "baskets": sampled,           # same sampled baskets in env
+            "products": products,         # full products in env
+        },
+    }
+
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+
+    assert by_var.get("baskets", {}).get("row_count") == n, (
+        f"Helper function pattern: baskets row_count must be {n}; "
+        f"got {by_var.get('baskets', {}).get('row_count')}"
+    )
+    expected_products = n * 2
+    assert by_var.get("products", {}).get("row_count") == expected_products, (
+        f"Helper function pattern: products row_count must be {expected_products}; "
+        f"got {by_var.get('products', {}).get('row_count')}"
+    )
+
+
+def test_flat_script_top_level_dataframes_no_env_synthetic():
+    """Flat script with no env dict: summaries come from top-level DataFrames (Priority 3).
+
+    When a script defines variables directly at module level without building an env dict,
+    _extract_var_input_summaries falls through to Priority 3 (plain DataFrames in g).
+    In this case no FK-based filtering is applied — each var reports its own row count.
+    """
+    from services.skrub_graph_runner import _extract_var_input_summaries
+
+    n = 20
+    baskets, products = _make_baskets_products()
+    sampled = baskets.sample(n=n, random_state=1)
+
+    # No env dict — just raw top-level DataFrames (flat script, no env construction)
+    g = {"baskets": sampled, "products": products}
+
+    summaries = _extract_var_input_summaries(g)
+    by_var = {s["var_name"]: s for s in summaries}
+
+    # Without env, baskets reports its own row count (sampled)
+    assert by_var.get("baskets", {}).get("row_count") == n, (
+        f"No-env pattern: baskets row_count must be {n}; "
+        f"got {by_var.get('baskets', {}).get('row_count')}"
+    )
+    # Without env, products reports its own (unfiltered) row count
+    assert by_var.get("products", {}).get("row_count") == len(products), (
+        f"No-env pattern: products row_count must be full table ({len(products)}); "
+        f"got {by_var.get('products', {}).get('row_count')}"
+    )
