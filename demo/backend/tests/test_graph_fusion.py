@@ -70,6 +70,11 @@ class TestInternalNodeDetection:
     def test_store_sem_choices_is_internal(self):
         assert _is_sempipes_internal_node("<Call 'store_sem_choices'>")
 
+    def test_value_dict_is_internal(self):
+        # <Value dict> is a skrub-internal node used by sem_agg_features to bundle inputs
+        assert _is_sempipes_internal_node("<Value dict>")
+        assert _is_sempipes_internal_node("<value dict>")  # case-insensitive
+
     def test_internal_vars_detected_as_internal_nodes(self):
         assert _is_sempipes_internal_node("<Var 'sempipes_inspirations__features'>")
         assert _is_sempipes_internal_node("<Var 'sempipes_memory__features'>")

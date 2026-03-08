@@ -103,6 +103,11 @@ def _is_sempipes_internal_node(label: str) -> bool:
     if "store_sem_choices" in low:
         return True
 
+    # <Value dict> and <Value ...> are skrub-internal constant nodes (e.g. the dict
+    # that sem_agg_features uses to bundle its left/right inputs) — hide from users.
+    if re.match(r"<value\b", low):
+        return True
+
     return False
 
 
