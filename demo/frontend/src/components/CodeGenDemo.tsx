@@ -95,6 +95,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     lastRunCostUsd,
     lastRunDurationMs,
     lastRunError,
+    lastRunProfile,
     skrubToCompileId,
     handlePlay,
     resetLiveState,
@@ -485,27 +486,77 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
 
           {/* Stats footer — shown after a completed run */}
           {!isExecuting && lastRunDurationMs != null && (
-            <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 flex items-center gap-3 text-xs">
-              {lastRunError ? (
-                <span className="text-red-600 flex items-center gap-1">
-                  <span>✗</span> Failed
-                </span>
-              ) : (
-                <span className="text-emerald-600 flex items-center gap-1">
-                  <span>✓</span> Completed
-                </span>
-              )}
-              <span className="text-zinc-400 dark:text-zinc-500">·</span>
-              <span className="text-zinc-600 dark:text-zinc-300" title="Execution time">
-                {formatDuration(lastRunDurationMs)}
-              </span>
-              {lastRunCostUsd != null && lastRunCostUsd > 0 && (
-                <>
-                  <span className="text-zinc-400 dark:text-zinc-500">·</span>
-                  <span className="text-zinc-600 dark:text-zinc-300" title="LLM cost">
-                    ${lastRunCostUsd.toFixed(6)}
+            <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 flex flex-col gap-2">
+              <div className="flex items-center gap-3 text-xs">
+                {lastRunError ? (
+                  <span className="text-red-600 flex items-center gap-1">
+                    <span>✗</span> Failed
                   </span>
-                </>
+                ) : (
+                  <span className="text-emerald-600 flex items-center gap-1">
+                    <span>✓</span> Completed
+                  </span>
+                )}
+                <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                <span className="text-zinc-600 dark:text-zinc-300" title="Execution time">
+                  {formatDuration(lastRunDurationMs)}
+                </span>
+                {lastRunCostUsd != null && lastRunCostUsd > 0 && (
+                  <>
+                    <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                    <span className="text-zinc-600 dark:text-zinc-300" title="LLM cost">
+                      ${lastRunCostUsd.toFixed(6)}
+                    </span>
+                  </>
+                )}
+              </div>
+              {lastRunProfile && Object.keys(lastRunProfile).length > 0 && (
+                <table className="text-[10px] text-zinc-600 dark:text-zinc-400 w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-zinc-600">
+                      <th className="text-left py-0.5 pr-2 font-medium">Phase</th>
+                      <th className="text-right py-0.5 font-medium">Time (ms)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lastRunProfile.prepare_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Backend: prepare (cache + compile)</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.prepare_ms}</td>
+                      </tr>
+                    )}
+                    {lastRunProfile.runner_startup_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Runner: startup (imports)</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.runner_startup_ms}</td>
+                      </tr>
+                    )}
+                    {lastRunProfile.runner_exec_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Runner: pipeline execution (data + LLM + fit)</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.runner_exec_ms}</td>
+                      </tr>
+                    )}
+                    {lastRunProfile.runner_post_exec_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Runner: post-exec (graph, summaries)</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.runner_post_exec_ms}</td>
+                      </tr>
+                    )}
+                    {lastRunProfile.subprocess_wall_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Backend: subprocess wall</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.subprocess_wall_ms}</td>
+                      </tr>
+                    )}
+                    {lastRunProfile.emit_ms != null && (
+                      <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                        <td className="py-0.5 pr-2">Backend: emit events</td>
+                        <td className="text-right tabular-nums">{lastRunProfile.emit_ms}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               )}
             </div>
           )}

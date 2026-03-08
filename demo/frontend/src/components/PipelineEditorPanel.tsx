@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { InputEditor } from "./InputEditor";
-import type { PipelineScriptEntry, CompileNode } from "../api/client";
+import type { PipelineScriptEntry, CompileNode, ExecuteProfile } from "../api/client";
 
 interface PipelineEditorPanelProps {
     width?: string;
@@ -36,6 +36,7 @@ interface PipelineEditorPanelProps {
     compileError?: string | null;
     lastRunDurationMs?: number | null;
     lastRunCostUsd?: number | null;
+    lastRunProfile?: ExecuteProfile | null;
     showNewOption?: boolean;
     className?: string;
 }
@@ -83,6 +84,7 @@ export function PipelineEditorPanel({
     lastRunError,
     lastRunDurationMs,
     lastRunCostUsd,
+    lastRunProfile,
     className = "",
 }: PipelineEditorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +219,57 @@ export function PipelineEditorPanel({
                         <span className="shrink-0 text-emerald-600 dark:text-emerald-400 font-medium">· ${lastRunCostUsd.toFixed(4)}</span>
                     )}
                 </div>
+
+                {lastRunProfile && Object.keys(lastRunProfile).length > 0 && (
+                    <div className="mt-1.5 overflow-x-auto">
+                        <table className="text-[10px] text-zinc-600 dark:text-zinc-400 w-full border-collapse">
+                            <thead>
+                                <tr className="border-b border-slate-200 dark:border-zinc-600">
+                                    <th className="text-left py-0.5 pr-2 font-medium">Phase</th>
+                                    <th className="text-right py-0.5 font-medium">Time (ms)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {lastRunProfile.prepare_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Backend: prepare (cache + compile)</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.prepare_ms}</td>
+                                    </tr>
+                                )}
+                                {lastRunProfile.runner_startup_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Runner: startup (imports)</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.runner_startup_ms}</td>
+                                    </tr>
+                                )}
+                                {lastRunProfile.runner_exec_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Runner: pipeline execution (data + LLM + fit)</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.runner_exec_ms}</td>
+                                    </tr>
+                                )}
+                                {lastRunProfile.runner_post_exec_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Runner: post-exec (graph, summaries)</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.runner_post_exec_ms}</td>
+                                    </tr>
+                                )}
+                                {lastRunProfile.subprocess_wall_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Backend: subprocess wall</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.subprocess_wall_ms}</td>
+                                    </tr>
+                                )}
+                                {lastRunProfile.emit_ms != null && (
+                                    <tr className="border-b border-slate-100 dark:border-zinc-700/50">
+                                        <td className="py-0.5 pr-2">Backend: emit events</td>
+                                        <td className="text-right tabular-nums">{lastRunProfile.emit_ms}</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
 
             {lastRunError && (

@@ -197,8 +197,24 @@ export type ExecuteEvent =
     row_count: number;
   }
   | { type: "cost"; total_usd: number }
-  | { type: "done"; total_cost_usd?: number; duration_ms?: number }
+  | {
+      type: "done";
+      total_cost_usd?: number;
+      duration_ms?: number;
+      /** Timing breakdown (backend + runner phases). */
+      profile?: ExecuteProfile;
+    }
   | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string; skrubToCompileId?: Record<string, string> };
+
+/** Per-phase timings from execute (ms). */
+export interface ExecuteProfile {
+  prepare_ms?: number;
+  subprocess_wall_ms?: number;
+  emit_ms?: number;
+  runner_startup_ms?: number;
+  runner_exec_ms?: number;
+  runner_post_exec_ms?: number;
+}
 
 /** Skrub DAG from _Graph().run(dag): nodes, parents, children (interactive viz). */
 export interface SkrubGraphDict {

@@ -137,6 +137,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     lastRunCostUsd,
     lastRunDurationMs,
     lastRunError,
+    lastRunProfile,
     skrubToCompileId,
     handlePlay,
     resetLiveState,
@@ -390,6 +391,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
             lastRunError={lastRunError}
             lastRunDurationMs={lastRunDurationMs}
             lastRunCostUsd={lastRunCostUsd}
+            lastRunProfile={lastRunProfile}
             isReadOnly={loadedScriptId !== NEW_PIPELINE_ID}
             className={`${
               layoutMode === "left-split" && isGraphExpanded

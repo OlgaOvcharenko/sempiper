@@ -3,6 +3,7 @@ import {
   executePipelineStream,
   updateSempipesConfig,
   type InputSummary,
+  type ExecuteProfile,
 } from "../api/client";
 
 export interface UseExecutionReturn {
@@ -16,6 +17,7 @@ export interface UseExecutionReturn {
   lastRunCostUsd: number | null;
   lastRunDurationMs: number | null;
   lastRunError: string | null;
+  lastRunProfile: ExecuteProfile | null;
   skrubToCompileId: Record<string, string>;
   /**
    * Starts execution, or aborts it if already running.
@@ -82,6 +84,7 @@ export function useExecution(opts: {
   const [lastRunCostUsd, setLastRunCostUsd] = useState<number | null>(null);
   const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
+  const [lastRunProfile, setLastRunProfile] = useState<ExecuteProfile | null>(null);
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
 
   const executeAbortRef = useRef<AbortController | null>(null);
@@ -101,6 +104,7 @@ export function useExecution(opts: {
     setNodeDataByNode({});
     setLastRunCostUsd(null);
     setLastRunDurationMs(null);
+    setLastRunProfile(null);
     setSkrubToCompileId({});
     skrubToCompileIdRef.current = {};
   }, []);
@@ -130,6 +134,7 @@ export function useExecution(opts: {
     setSkrubToCompileId({});
     skrubToCompileIdRef.current = {};
     setLastRunDurationMs(null);
+    setLastRunProfile(null);
     setLastRunError(null);
 
     // Extension point: caller can intercept before SSE starts (e.g. simulation replay).
@@ -261,6 +266,7 @@ export function useExecution(opts: {
           } else if (event.type === "done") {
             if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
             if (event.duration_ms != null) setLastRunDurationMs(event.duration_ms);
+            if (event.profile) setLastRunProfile(event.profile);
             setIsExecuting(false);
             executeAbortRef.current = null;
             // Rekey again so node_data that arrived after skrub_graph get copied to compile IDs (e.g. cache replay)
@@ -298,6 +304,7 @@ export function useExecution(opts: {
     lastRunCostUsd,
     lastRunDurationMs,
     lastRunError,
+    lastRunProfile,
     skrubToCompileId,
     handlePlay,
     resetLiveState,
