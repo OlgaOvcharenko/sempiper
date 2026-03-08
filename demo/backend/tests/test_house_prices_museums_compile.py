@@ -603,8 +603,37 @@ def _nodes_with_label(nodes, label):
     return [n for n in nodes if n.label == label]
 
 
+def _nth_node(nodes, label, n=0):
+    """Return the n-th node (0-indexed) with given label, sorted by source line."""
+    matches = sorted(
+        [nd for nd in nodes if nd.label == label],
+        key=lambda nd: nd.source_range.start_line,
+    )
+    if n >= len(matches):
+        raise AssertionError(
+            f"No node #{n} with label {label!r} (found {len(matches)})"
+        )
+    return matches[n]
+
+
+def _inline_drop(nodes, edges):
+    """Return the drop node that is the direct parent of as_X (inline drop in argument)."""
+    as_x_id = _node(nodes, "as_X").id
+    for e in edges:
+        if e.target == as_x_id:
+            src = next((nd for nd in nodes if nd.id == e.source and nd.label == "drop"), None)
+            if src:
+                return src
+    return None
+
+
 def _highlight(body: str, node) -> str:
-    """Extract the source text that would be highlighted for this node."""
+    """Extract the source text that would be highlighted for this node.
+
+    Uses the node's own source_range so the check is self-consistent: if the
+    parser reports the wrong line/column the highlighted text will not match the
+    expected operator name.
+    """
     lines = body.split("\n")
     line = lines[node.source_range.start_line - 1]
     sc = node.source_range.start_column - 1   # 0-indexed start
@@ -745,40 +774,54 @@ class TestHousePricesExactGraph:
         """Full HOUSE_PRICES_PIPELINE_BODY (prune=True): exact edge set."""
         nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY)
         ep = _edges(nodes, edges)
+        facts_id = _node(nodes, "<Var 'facts'>").id
+        cities_id = _node(nodes, "<Var 'cities'>").id
+        images_id = _node(nodes, "<Var 'images'>").id
+        merge_id = _node(nodes, "merge").id
+        as_y_id = _node(nodes, "as_y").id
+        as_x_id = _node(nodes, "as_X").id
+        drop_id = _inline_drop(nodes, edges).id
+        sem_clean_id = _node(nodes, "sem_clean").id
+        sem_extract_id = _node(nodes, "sem_extract_features").id
+        sem_gen_id = _node(nodes, "sem_gen_features").id
+        apply_0_id = _nth_node(nodes, "skb.apply", 0).id
+        apply_1_id = _nth_node(nodes, "skb.apply", 1).id
         # Input nodes feed merge
-        assert ("var_facts_3", "merge_7") in ep
-        assert ("var_cities_4", "merge_7") in ep
-        assert ("var_images_5", "merge_7") in ep
+        assert (facts_id, merge_id) in ep
+        assert (cities_id, merge_id) in ep
+        assert (images_id, merge_id) in ep
         # merge feeds as_y and drop (inline drop of as_X)
-        assert ("merge_7", "as_y_9") in ep
-        assert ("merge_7", "drop_15") in ep
+        assert (merge_id, as_y_id) in ep
+        assert (merge_id, drop_id) in ep
         # NO direct merge → as_X (drop is the intermediary)
-        assert ("merge_7", "as_X_14") not in ep, "Redundant merge→as_X present"
+        assert (merge_id, as_x_id) not in ep, "Redundant merge→as_X present"
         # Inline drop feeds as_X
-        assert ("drop_15", "as_X_14") in ep
+        assert (drop_id, as_x_id) in ep
         # Semantic chain
-        assert ("as_X_14", "sem_clean_19") in ep
-        assert ("sem_clean_19", "sem_extract_features_28") in ep
-        assert ("sem_extract_features_28", "sem_gen_features_35") in ep
-        assert ("sem_gen_features_35", "skb_apply_42") in ep
+        assert (as_x_id, sem_clean_id) in ep
+        assert (sem_clean_id, sem_extract_id) in ep
+        assert (sem_extract_id, sem_gen_id) in ep
+        assert (sem_gen_id, apply_0_id) in ep
         # TableVectorizer apply
-        assert ("skb_apply_42", "skb_apply_48") in ep
+        assert (apply_0_id, apply_1_id) in ep
         # as_y feeds final apply (y=price)
-        assert ("as_y_9", "skb_apply_48") in ep
-        # Total: 12 edges (apply_func_52 is pruned as dead-end)
+        assert (as_y_id, apply_1_id) in ep
+        # Total: 12 edges (apply_func is pruned as dead-end)
         assert len(edges) == 12, f"Expected 12 edges, got {len(edges)}: {ep}"
 
     def test_no_redundant_merge_to_as_x(self):
         """Dedicated regression: merge must not bypass drop to reach as_X."""
         nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
         ep = _edges(nodes, edges)
-        assert ("merge_7", "as_X_14") not in ep
+        assert (_node(nodes, "merge").id, _node(nodes, "as_X").id) not in ep
 
     def test_drop_is_only_intermediary_to_as_x(self):
-        """drop_15 is the only parent of as_X_14."""
+        """Inline drop is the only parent of as_X."""
         nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
-        parents_of_as_x = {e.source for e in edges if e.target == "as_X_14"}
-        assert parents_of_as_x == {"drop_15"}, f"Unexpected parents of as_X: {parents_of_as_x}"
+        as_x_id = _node(nodes, "as_X").id
+        drop_id = _inline_drop(nodes, edges).id
+        parents_of_as_x = {e.source for e in edges if e.target == as_x_id}
+        assert parents_of_as_x == {drop_id}, f"Unexpected parents of as_X: {parents_of_as_x}"
 
     def test_source_range_var_facts(self):
         """<Var 'facts'> source range covers 'skrub.var' on line 3."""
@@ -809,12 +852,11 @@ class TestHousePricesExactGraph:
         assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "as_X"
 
     def test_source_range_inline_drop(self):
-        """Inline drop source range covers 'drop' on line 15 (inside as_X args)."""
-        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
-        drop_nodes = _nodes_with_label(nodes, "drop")
-        drop_15 = next((n for n in drop_nodes if n.source_range.start_line == 15), None)
-        assert drop_15 is not None, "drop node on line 15 not found"
-        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, drop_15) == "drop"
+        """Inline drop (parent of as_X) source range covers the 'drop' operator name."""
+        nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        drop = _inline_drop(nodes, edges)
+        assert drop is not None, "Inline drop node not found"
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, drop) == "drop"
 
     def test_source_range_sem_clean(self):
         """sem_clean source range covers 'sem_clean' on line 19."""
@@ -877,25 +919,37 @@ class TestMuseumsExactGraph:
         """Full MUSEUMS_PIPELINE_BODY (prune=True): exact edge set."""
         nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY)
         ep = _edges(nodes, edges)
-        # Input node feeds apply_func (spaCy)
-        assert ("var_artworks_3", "skb_apply_func_4") in ep
+        artworks_id = _node(nodes, "<Var 'artworks'>").id
+        apply_func_0_id = _nth_node(nodes, "skb.apply_func", 0).id
+        apply_func_1_id = _nth_node(nodes, "skb.apply_func", 1).id
+        as_y_id = _node(nodes, "as_y").id
+        as_x_id = _node(nodes, "as_X").id
+        inline_drop_id = _inline_drop(nodes, edges).id
+        sem_extract_id = _node(nodes, "sem_extract_features").id
+        sem_gen_id = _node(nodes, "sem_gen_features").id
+        sem_refine_id = _node(nodes, "sem_refine").id
+        standalone_drop_id = _nth_node(nodes, "drop", 1).id
+        apply_0_id = _nth_node(nodes, "skb.apply", 0).id
+        apply_1_id = _nth_node(nodes, "skb.apply", 1).id
+        # Input node feeds first apply_func (spaCy)
+        assert (artworks_id, apply_func_0_id) in ep
         # apply_func feeds as_y and drop (inline drop of as_X)
-        assert ("skb_apply_func_4", "as_y_6") in ep
-        assert ("skb_apply_func_4", "drop_12") in ep
+        assert (apply_func_0_id, as_y_id) in ep
+        assert (apply_func_0_id, inline_drop_id) in ep
         # NO direct apply_func → as_X (drop is the intermediary)
-        assert ("skb_apply_func_4", "as_X_11") not in ep, "Redundant apply_func→as_X present"
+        assert (apply_func_0_id, as_x_id) not in ep, "Redundant apply_func→as_X present"
         # Inline drop feeds as_X
-        assert ("drop_12", "as_X_11") in ep
+        assert (inline_drop_id, as_x_id) in ep
         # Semantic chain through artwork_data
-        assert ("as_X_11", "sem_extract_features_16") in ep
-        assert ("sem_extract_features_16", "sem_gen_features_24") in ep
-        assert ("sem_gen_features_24", "skb_apply_func_29") in ep
-        assert ("skb_apply_func_29", "sem_refine_31") in ep
-        assert ("sem_refine_31", "drop_37") in ep
-        assert ("drop_37", "skb_apply_39") in ep
-        assert ("skb_apply_39", "skb_apply_42") in ep
+        assert (as_x_id, sem_extract_id) in ep
+        assert (sem_extract_id, sem_gen_id) in ep
+        assert (sem_gen_id, apply_func_1_id) in ep
+        assert (apply_func_1_id, sem_refine_id) in ep
+        assert (sem_refine_id, standalone_drop_id) in ep
+        assert (standalone_drop_id, apply_0_id) in ep
+        assert (apply_0_id, apply_1_id) in ep
         # as_y feeds final apply (y=culture_target)
-        assert ("as_y_6", "skb_apply_42") in ep
+        assert (as_y_id, apply_1_id) in ep
         # Total: 12 edges
         assert len(edges) == 12, f"Expected 12 edges, got {len(edges)}: {ep}"
 
@@ -903,19 +957,23 @@ class TestMuseumsExactGraph:
         """Dedicated regression: skb.apply_func must not bypass drop to reach as_X."""
         nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
         ep = _edges(nodes, edges)
-        assert ("skb_apply_func_4", "as_X_11") not in ep
+        assert (_nth_node(nodes, "skb.apply_func", 0).id, _node(nodes, "as_X").id) not in ep
 
     def test_drop_is_only_intermediary_to_as_x(self):
-        """drop_12 is the only parent of as_X_11."""
+        """Inline drop is the only parent of as_X."""
         nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
-        parents_of_as_x = {e.source for e in edges if e.target == "as_X_11"}
-        assert parents_of_as_x == {"drop_12"}, f"Unexpected parents of as_X: {parents_of_as_x}"
+        as_x_id = _node(nodes, "as_X").id
+        drop_id = _inline_drop(nodes, edges).id
+        parents_of_as_x = {e.source for e in edges if e.target == as_x_id}
+        assert parents_of_as_x == {drop_id}, f"Unexpected parents of as_X: {parents_of_as_x}"
 
     def test_standalone_drop_not_confused_with_inline_drop(self):
-        """The standalone drop_37 (drop columns) must not connect to as_X."""
+        """The standalone drop (second by line) must not connect to as_X."""
         nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
         ep = _edges(nodes, edges)
-        assert ("drop_37", "as_X_11") not in ep
+        standalone_drop_id = _nth_node(nodes, "drop", 1).id
+        as_x_id = _node(nodes, "as_X").id
+        assert (standalone_drop_id, as_x_id) not in ep
 
     def test_source_range_var_artworks(self):
         """<Var 'artworks'> source range covers 'skrub.var' on line 3."""
@@ -925,12 +983,10 @@ class TestMuseumsExactGraph:
         assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "skrub.var"
 
     def test_source_range_first_apply_func(self):
-        """First skb.apply_func (spaCy) is on line 4; highlighted text is 'skb.apply_func'."""
+        """First skb.apply_func (spaCy) highlighted text is 'skb.apply_func'."""
         nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
-        apply_funcs = _nodes_with_label(nodes, "skb.apply_func")
-        n4 = next((n for n in apply_funcs if n.source_range.start_line == 4), None)
-        assert n4 is not None
-        assert _highlight(MUSEUMS_PIPELINE_BODY, n4) == "skb.apply_func"
+        n = _nth_node(nodes, "skb.apply_func", 0)
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "skb.apply_func"
 
     def test_source_range_as_y(self):
         """as_y source range covers 'as_y' on line 6."""
@@ -947,12 +1003,11 @@ class TestMuseumsExactGraph:
         assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "as_X"
 
     def test_source_range_inline_drop(self):
-        """Inline drop (inside as_X args) source range covers 'drop' on line 12."""
-        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
-        drop_nodes = _nodes_with_label(nodes, "drop")
-        drop_12 = next((n for n in drop_nodes if n.source_range.start_line == 12), None)
-        assert drop_12 is not None, "drop node on line 12 not found"
-        assert _highlight(MUSEUMS_PIPELINE_BODY, drop_12) == "drop"
+        """Inline drop (parent of as_X) source range covers the 'drop' operator name."""
+        nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        drop = _inline_drop(nodes, edges)
+        assert drop is not None, "Inline drop node not found"
+        assert _highlight(MUSEUMS_PIPELINE_BODY, drop) == "drop"
 
     def test_source_range_sem_extract_features(self):
         """sem_extract_features source range covers the operator name on line 16."""
@@ -969,12 +1024,10 @@ class TestMuseumsExactGraph:
         assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "sem_refine"
 
     def test_source_range_standalone_drop(self):
-        """Standalone drop_37 source range covers 'drop' on line 37."""
+        """Standalone drop (second by line, not parent of as_X) highlights 'drop'."""
         nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
-        drop_nodes = _nodes_with_label(nodes, "drop")
-        drop_37 = next((n for n in drop_nodes if n.source_range.start_line == 37), None)
-        assert drop_37 is not None, "drop node on line 37 not found"
-        assert _highlight(MUSEUMS_PIPELINE_BODY, drop_37) == "drop"
+        drop = _nth_node(nodes, "drop", 1)
+        assert _highlight(MUSEUMS_PIPELINE_BODY, drop) == "drop"
 
     def test_source_range_two_skb_apply_nodes(self):
         """Both skb.apply nodes (lines 39, 42) highlight 'skb.apply'."""
