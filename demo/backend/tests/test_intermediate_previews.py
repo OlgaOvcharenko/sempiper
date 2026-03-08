@@ -146,3 +146,88 @@ def test_execute_stream_emits_node_data_when_mock_stdout_has_node_preview(monkey
     one = node_data_events[0]
     assert "schema" in one and "sample" in one and "row_count" in one
     assert len(one["schema"]) >= 1 and one["row_count"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for _to_dataframe and _extract_preview_from_dataop (Series / placeholder)
+# ---------------------------------------------------------------------------
+
+import pandas as pd
+import numpy as np
+from types import SimpleNamespace
+from services.skrub_graph_runner import _to_dataframe, _extract_preview_from_dataop
+
+
+def test_to_dataframe_returns_dataframe_as_is():
+    df = pd.DataFrame({"a": [1, 2]})
+    assert _to_dataframe(df) is df
+
+
+def test_to_dataframe_converts_series():
+    s = pd.Series([10, 20, 30], name="col")
+    result = _to_dataframe(s)
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 3
+
+
+def test_to_dataframe_converts_ndarray():
+    arr = np.array([[1, 2], [3, 4]])
+    result = _to_dataframe(arr)
+    assert isinstance(result, pd.DataFrame)
+    assert result.shape == (2, 2)
+
+
+def test_to_dataframe_returns_none_for_string():
+    assert _to_dataframe("preview") is None
+
+
+def test_to_dataframe_returns_none_for_int():
+    assert _to_dataframe(42) is None
+
+
+def test_extract_preview_handles_series():
+    """When skb.preview() returns a Series, _extract_preview_from_dataop returns a proper preview dict."""
+    series = pd.Series([1, 2, 3], name="ID")
+    skb = SimpleNamespace(preview=lambda: series, eval=lambda: None)
+    node_obj = SimpleNamespace(skb=skb)
+
+    result = _extract_preview_from_dataop(node_obj, "7")
+    assert result is not None
+    assert result["node_id"] == "7"
+    assert result["row_count"] == 3
+    assert len(result["schema"]) >= 1
+    assert any(c["name"] == "ID" for c in result["schema"])
+
+
+def test_extract_preview_skips_placeholder():
+    """When preview() returns a non-tabular placeholder and eval fails, return None (not a fake row)."""
+    skb = SimpleNamespace(
+        preview=lambda: "preview",
+        eval=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no data")),
+    )
+    node_obj = SimpleNamespace(skb=skb)
+
+    result = _extract_preview_from_dataop(node_obj, "5")
+    assert result is None, "should not emit placeholder row like {'value': 'preview'}"
+
+
+def test_extract_preview_prefers_eval_env_over_placeholder():
+    """When preview() returns a placeholder but eval(env) returns a DataFrame, use the DataFrame."""
+    df = pd.DataFrame({"x": [10, 20], "y": [30, 40]})
+    skb = SimpleNamespace(
+        preview=lambda: "preview",
+        eval=lambda env: df,
+    )
+    node_obj = SimpleNamespace(skb=skb)
+
+    result = _extract_preview_from_dataop(node_obj, "9", env={"baskets": df})
+    assert result is not None
+    assert result["node_id"] == "9"
+    assert result["row_count"] == 2
+    assert len(result["schema"]) == 2
+
+
+def test_extract_preview_returns_none_when_no_skb():
+    """Node without .skb attribute yields None."""
+    node_obj = SimpleNamespace()
+    assert _extract_preview_from_dataop(node_obj, "0") is None
