@@ -347,6 +347,46 @@ def _remove_cross_validate_calls(script: str) -> str:
     return "\n".join(result_lines)
 
 
+def _find_matching_closing_paren(lines: list[str], start_line_i: int, open_col: int) -> int:
+    """
+    Find the line index where the parenthesis at (start_line_i, open_col) is closed.
+    Counts nested '(' and ')' so we don't break on ')' inside nested calls (e.g. EvolutionarySearch(...)).
+    Returns the 0-based line index of the line containing the closing ')'.
+    """
+    depth = 1  # we are already inside the opening '('
+    in_string = None  # '"', "'", or None
+    escape = False
+    for line_i in range(start_line_i, len(lines)):
+        line = lines[line_i]
+        col_start = open_col + 1 if line_i == start_line_i else 0  # skip the opening '('
+        i = col_start
+        while i < len(line):
+            if escape:
+                escape = False
+                i += 1
+                continue
+            ch = line[i]
+            if in_string:
+                if ch == "\\":
+                    escape = True
+                elif ch == in_string:
+                    in_string = None
+                i += 1
+                continue
+            if ch in ('"', "'") and (i == 0 or line[i - 1] != "\\"):
+                in_string = ch
+                i += 1
+                continue
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return line_i
+            i += 1
+    return start_line_i
+
+
 def _remove_optimise_colopro_calls(script: str) -> str:
     """
     Remove optimise_colopro calls and replace with assignment to dag_sink.
@@ -355,6 +395,7 @@ def _remove_optimise_colopro_calls(script: str) -> str:
         outcomes = optimise_colopro(dag_sink=pipeline, ...)
     To:
         outcomes = pipeline
+    Uses parenthesis counting so nested calls (e.g. EvolutionarySearch(population_size=6)) don't end the range early.
     """
     lines = script.split('\n')
     result_lines = []
@@ -364,17 +405,12 @@ def _remove_optimise_colopro_calls(script: str) -> str:
         match = re.search(r"^(\s*)(\w+)\s*=\s*optimise_colopro\s*\(", line)
         if match:
             indent, var_name = match.group(1), match.group(2)
-            # Find the dag_sink argument in this or subsequent lines
-            dag_sink_var = None
-            j = i
-            call_content = ""
-            while j < len(lines):
-                call_content += lines[j]
-                if ')' in lines[j]:
-                    break
-                j += 1
+            open_paren_col = match.end() - 1  # 0-based column of '('
+            j = _find_matching_closing_paren(lines, i, open_paren_col)
+            call_content = "\n".join(lines[i : j + 1])
 
             # Simple regex check for dag_sink=var
+            dag_sink_var = None
             sink_match = re.search(r"dag_sink\s*=\s*([a-zA-Z_][a-zA-Z0-9_]*)", call_content)
             if sink_match:
                 dag_sink_var = sink_match.group(1)
@@ -395,13 +431,17 @@ def _remove_optimise_colopro_calls(script: str) -> str:
     return '\n'.join(result_lines)
 
 
+# Markers that separate pipeline definition from runner (data load + run). Any of these trigger strip.
+_PIPELINE_RUNNER_MARKERS = ("# Load dataset", "# Get data")
+
+
 def _strip_pipeline_runner(script: str) -> str:
     """Strip the runner boilerplate from scripts following the sempipes_pipeline() pattern.
 
-    Scripts that wrap the pipeline in a function (like fraud.py, and the new simple/medium.py)
-    have a "# Load dataset" marker followed by runner code that should not be executed during
-    graph extraction. This function strips that runner and replaces it with a direct call to
-    the pipeline function so the DataOp is available in globals.
+    Scripts that wrap the pipeline in a function (like fraud.py, optimise_museums.py)
+    have a marker (e.g. "# Load dataset" or "# Get data") followed by runner code that
+    should not be executed during graph extraction. This function strips that runner and
+    replaces it with a direct call to the pipeline function so the DataOp is available.
 
     Example transformation:
         def sempipes_pipeline():
@@ -421,12 +461,21 @@ def _strip_pipeline_runner(script: str) -> str:
     """
     lines = script.splitlines(keepends=True)
     for i, line in enumerate(lines):
-        if line.strip() == "# Load dataset":
+        if line.strip() in _PIPELINE_RUNNER_MARKERS:
             body = "".join(lines[:i])
+            # Prefer no-arg pipeline: def sempipes_pipeline():
             fn_match = re.search(r"^def\s+(\w+)\s*\(\s*\)\s*:", body, re.MULTILINE)
             if fn_match:
                 fn_name = fn_match.group(1)
                 return body + f"\ngraph_result = {fn_name}()\n"
+            # Else pipeline takes args (e.g. def sempipes_pipeline(houses_columns):); call with dummy
+            fn_match_arg = re.search(r"^def\s+(\w+)\s*\(\s*([^)]+)\s*\)\s*:", body, re.MULTILINE)
+            if fn_match_arg:
+                fn_name, args = fn_match_arg.group(1), fn_match_arg.group(2)
+                # Single param typical for optimizer scripts (e.g. houses_columns)
+                param = args.split(",")[0].strip().split("=")[0].strip()
+                if param:
+                    return body + f"\n# Dummy for graph extraction only\n{param} = None\ngraph_result = {fn_name}({param})\n"
             return body
     return script
 

@@ -118,6 +118,24 @@ def test_remove_optimise_colopro_uses_actual_newlines():
     assert "result = outcomes" in result or "result =" in result
 
 
+def test_remove_optimise_colopro_nested_parens():
+    """Regression: closing paren inside nested call (e.g. EvolutionarySearch(...)) must not end the range.
+    So the whole optimise_colopro(...) call is removed, not just up to the first ')'."""
+    script = (
+        "outcomes = optimise_colopro(\n"
+        "    dag_sink=pipeline,\n"
+        "    search=EvolutionarySearch(population_size=6),\n"
+        "    run_name=\"optimise_museums\",\n"
+        ")\n"
+        "best_outcome = max(outcomes, key=lambda x: x.score)\n"
+    )
+    result = _remove_optimise_colopro_calls(script)
+    assert "optimise_colopro(" not in result
+    assert "outcomes = pipeline" in result
+    assert "EvolutionarySearch" not in result  # entire call body removed
+    assert "best_outcome = max(outcomes" in result
+
+
 # ---------------------------------------------------------------------------
 # rewrite_script_for_graph_extraction includes optimise_colopro stripping
 # ---------------------------------------------------------------------------
