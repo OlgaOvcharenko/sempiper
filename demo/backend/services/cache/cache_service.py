@@ -187,6 +187,12 @@ class CacheService:
         """Alias for delete() - removes specific cache entry."""
         self.delete(cache_key, operation, format)
 
+    def list_keys(self) -> list[str]:
+        """Return cache key names (subdirectory names) that exist under cache_dir."""
+        if not self.cache_dir.exists():
+            return []
+        return [item.name for item in self.cache_dir.iterdir() if item.is_dir()]
+
     def clear(self) -> None:
         """Clear all caches (memory and file)."""
         self.memory_cache.clear()
