@@ -14,7 +14,7 @@ def sempipes_pipeline():
     kept_products = kept_products.sem_gen_features(
         nl_prompt="Generate useful features for product analysis.",
         name="product_features",
-        how_many=3,
+        how_many=2,
     )
 
     augmented_baskets = basket_ids.sem_agg_features(
