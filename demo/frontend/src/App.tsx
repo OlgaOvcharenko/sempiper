@@ -80,13 +80,15 @@ export default function App() {
             <h1 className="text-2xl font-bold tracking-tight pointer-events-auto flex items-center gap-2" style={{ fontFamily: "'Outfit', sans-serif" }}>
               <img
                 key={isDark ? "dark" : "light"}
-                src={`${isDark ? "/favicon-dark.png" : "/favicon.png"}?v=${isDark ? "d" : "l"}`}
+                src={`${isDark ? "/logo-dark.png" : "/logo-light.png"}?v=${isDark ? "d" : "l"}`}
                 alt=""
-                className="h-8 w-auto object-contain"
+                className="h-10 w-10 shrink-0 object-contain"
                 aria-hidden
               />
-              <span className="text-rose-400">Sem</span>
-              <span className="text-slate-500 dark:text-slate-400">Pipes</span>
+              <span className="inline-flex items-baseline">
+                <span className="text-rose-400">Sem</span>
+                <span className="text-slate-500 dark:text-slate-400">Pipes</span>
+              </span>
             </h1>
           </div>
 
