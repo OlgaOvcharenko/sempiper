@@ -472,10 +472,11 @@ def _strip_pipeline_runner(script: str) -> str:
             fn_match_arg = re.search(r"^def\s+(\w+)\s*\(\s*([^)]+)\s*\)\s*:", body, re.MULTILINE)
             if fn_match_arg:
                 fn_name, args = fn_match_arg.group(1), fn_match_arg.group(2)
-                # Single param typical for optimizer scripts (e.g. houses_columns)
+                # Single param typical for optimizer scripts (e.g. houses_columns). Use [] not None
+                # so code like set(param) or list(set(param) - {...}) does not raise 'NoneType' is not iterable.
                 param = args.split(",")[0].strip().split("=")[0].strip()
                 if param:
-                    return body + f"\n# Dummy for graph extraction only\n{param} = None\ngraph_result = {fn_name}({param})\n"
+                    return body + f"\n# Dummy for graph extraction only\n{param} = []\ngraph_result = {fn_name}({param})\n"
             return body
     return script
 
