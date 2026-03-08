@@ -3,7 +3,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from services.cache.cache_service import CacheService
+from services.cache import cache_service, make_cache_key
+
+# Use main cache; tests can replace this with an isolated CacheService
+_cache = cache_service
 
 router = APIRouter(
     prefix="/api/optimizer",
@@ -12,20 +15,19 @@ router = APIRouter(
 
 # Repo root (this file: demo/backend/routers/optimizer.py → 4 parents up)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_OPTIMIZER_SCRIPTS_DIR = REPO_ROOT / "optimizer_scripts"
 
 # Legacy fallback directories: where real optimizer runs write their output and
 # where the bundled simulated trajectories live.  Read-only in production;
-# seeded into _trajectory_cache on first access.
+# seeded into the main cache on first access.
 SEARCH_PATHS = [
     REPO_ROOT / ".sempipes_trajectories",
     REPO_ROOT / "demo/backend/.sempipes_trajectories",
 ]
 
-# Primary store for optimizer trajectories.
-# Cache key = script_id (e.g. "optimise_fraud"), operation = "trajectory".
-# A dedicated CacheService avoids memory-cache key conflicts with the
-# main code-gen cache (services/cache/cache_service.py uses ".cache").
-_trajectory_cache = CacheService(".cache/optimizer")
+# Optimizer trajectories use the same cache as codegen: .cache/{cache_key}/trajectory.json
+# with cache_key = make_cache_key(script, temperature, llm_name). Metadata stores script_id
+# for by-script / by-label lookups.
 
 
 # ---------------------------------------------------------------------------
@@ -33,9 +35,26 @@ _trajectory_cache = CacheService(".cache/optimizer")
 # ---------------------------------------------------------------------------
 
 
-def _seed_from_legacy(script_id: str) -> dict | None:
-    """Load trajectory for script_id from SEARCH_PATHS and seed the cache.
+def _get_optimizer_script_content(script_id: str) -> str | None:
+    """Return optimizer script source for script_id, or None if not found."""
+    path = _OPTIMIZER_SCRIPTS_DIR / f"{script_id}.py"
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
+
+def _trajectory_path_for_key(cache_key: str) -> Path:
+    """Path to trajectory.json for a cache key under the main cache."""
+    return _cache.cache_dir / cache_key / "trajectory.json"
+
+
+def _seed_from_legacy(script_id: str) -> dict | None:
+    """Load trajectory for script_id from SEARCH_PATHS and seed the main cache.
+
+    Uses make_cache_key(script_content, None, None) so layout matches cache design.
     Returns the data dict (with run_id injected) on success, None if not found.
     """
     for directory in SEARCH_PATHS:
@@ -51,7 +70,14 @@ def _seed_from_legacy(script_id: str) -> dict | None:
                 with open(files[0], "r", encoding="utf-8") as f:
                     data = json.load(f)
                 data["run_id"] = files[0].name
-                _trajectory_cache.set(script_id, "trajectory", data)
+                script_content = _get_optimizer_script_content(script_id)
+                if script_content is None:
+                    return data  # return without caching if we can't compute key
+                key = make_cache_key(script_content, None, None)
+                _cache.set(
+                    key, "trajectory", data,
+                    metadata={"script_id": script_id},
+                )
                 return data
             except Exception:
                 pass
@@ -59,20 +85,47 @@ def _seed_from_legacy(script_id: str) -> dict | None:
 
 
 def _cached_trajectory_files() -> list[Path]:
-    """Return existing trajectory.json paths inside the cache dir, newest first."""
-    cache_dir = _trajectory_cache.cache_dir
-    if not cache_dir.exists():
-        return []
+    """Return existing trajectory.json paths in the main cache, newest first."""
     paths = [
-        d / "trajectory.json"
-        for d in cache_dir.iterdir()
-        if d.is_dir()
+        _trajectory_path_for_key(k)
+        for k in _cache.list_keys()
+        if _trajectory_path_for_key(k).exists()
     ]
-    return sorted(
-        (p for p in paths if p.exists()),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _find_trajectory_by_script_id(script_id: str) -> dict | None:
+    """Return newest trajectory from cache whose metadata.script_id equals script_id."""
+    candidates: list[tuple[float, dict]] = []
+    for cache_key in _cache.list_keys():
+        meta = _cache.get_metadata(cache_key, "trajectory")
+        if meta and meta.get("script_id") == script_id:
+            data = _cache.get(cache_key, "trajectory")
+            if data is not None:
+                path = _trajectory_path_for_key(cache_key)
+                mtime = path.stat().st_mtime if path.exists() else 0.0
+                candidates.append((mtime, data))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
+
+
+def _find_trajectory_by_label(label: str) -> dict | None:
+    """Return newest trajectory from cache whose metadata.script_id contains label."""
+    candidates: list[tuple[float, dict]] = []
+    for cache_key in _cache.list_keys():
+        meta = _cache.get_metadata(cache_key, "trajectory")
+        if meta and label.lower() in (meta.get("script_id") or "").lower():
+            data = _cache.get(cache_key, "trajectory")
+            if data is not None:
+                path = _trajectory_path_for_key(cache_key)
+                mtime = path.stat().st_mtime if path.exists() else 0.0
+                candidates.append((mtime, data))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +139,7 @@ def get_trajectory_by_script(script_id: str):
     if script_id.endswith(".py"):
         script_id = script_id[:-3]
 
-    data = _trajectory_cache.get(script_id, "trajectory")
+    data = _find_trajectory_by_script_id(script_id)
     if data is None:
         data = _seed_from_legacy(script_id)
     if data is None:
@@ -100,14 +153,9 @@ def get_trajectory_by_script(script_id: str):
 @router.get("/by-label")
 def get_trajectory_by_label(label: str):
     """Return the most recent trajectory whose script_id contains label."""
-    # Check cache: each subdirectory name IS the script_id
-    for traj_file in _cached_trajectory_files():
-        if label.lower() in traj_file.parent.name.lower():
-            try:
-                with open(traj_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
+    data = _find_trajectory_by_label(label)
+    if data is not None:
+        return data
 
     # Fall back to legacy directory and seed into cache
     for directory in SEARCH_PATHS:
@@ -123,9 +171,14 @@ def get_trajectory_by_label(label: str):
                 with open(files[0], "r", encoding="utf-8") as f:
                     data = json.load(f)
                 data["run_id"] = files[0].name
-                # Derive script_id by dropping the "_simulated" suffix if present
                 script_id = files[0].stem.split("_simulated")[0]
-                _trajectory_cache.set(script_id, "trajectory", data)
+                script_content = _get_optimizer_script_content(script_id)
+                if script_content is not None:
+                    key = make_cache_key(script_content, None, None)
+                    _cache.set(
+                        key, "trajectory", data,
+                        metadata={"script_id": script_id},
+                    )
                 return data
             except Exception:
                 pass
@@ -139,7 +192,6 @@ def get_trajectory_by_label(label: str):
 @router.get("/latest")
 def get_latest_trajectory():
     """Return the most recently modified trajectory."""
-    # Check cache first
     for traj_file in _cached_trajectory_files():
         try:
             with open(traj_file, "r", encoding="utf-8") as f:
