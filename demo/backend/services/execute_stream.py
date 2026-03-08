@@ -645,6 +645,12 @@ def stream_execute_events(
     total_cost_usd = 0.0
     duration_ms = 0.0
     exec_failed = False
+    prepare_ms = 0.0
+    subprocess_wall_ms = 0.0
+    emit_start_time: float | None = None  # set when subprocess stdout is fully read
+    runner_startup_ms: float | None = None
+    runner_post_exec_ms: float | None = None
+    t_stream_start = time.perf_counter()
     try:
         # Get compile graph nodes with correct IDs (from cache or dynamic compilation)
         # Don't use static parse here - it creates different IDs (e.g. "sem_fillna_20")
@@ -715,7 +721,10 @@ def stream_execute_events(
                     logger.warning(f"Could not get sempipes config for subprocess: {e}")
         
         if not e2e_mode:
+            t_before_popen = time.perf_counter()
+            prepare_ms = (t_before_popen - t_stream_start) * 1000
             try:
+                t_subprocess_start = time.perf_counter()
                 proc = subprocess.Popen(
                     [sys.executable, "-m", "services.skrub_graph_runner"],
                     stdin=subprocess.PIPE,
@@ -747,7 +756,7 @@ def stream_execute_events(
                         try:
                             while not wait_future.done():
                                 yield b""  # checkpoint: allows GeneratorExit to be thrown here
-                                time.sleep(0.1)
+                                time.sleep(0.05)
                         except GeneratorExit:
                             logger.info(f"Client disconnected, killing subprocess PID: {proc.pid}")
                             proc.kill()
@@ -758,6 +767,9 @@ def stream_execute_events(
                             raise  # close this generator
                 finally:
                     reader.join(timeout=1.0)
+                t_subprocess_end = time.perf_counter()
+                subprocess_wall_ms = (t_subprocess_end - t_subprocess_start) * 1000
+                emit_start_time = t_subprocess_end
                 decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
                 captured = _parse_captured_codes_from_stdout(decoded)
                 captured_codes = [x["code"] for x in captured]
@@ -768,7 +780,8 @@ def stream_execute_events(
                     logger.info(f"Stdout preview: {decoded[:200]}")
                 # Check for subprocess failure
                 exec_failed = (proc.returncode != 0)
-                # Extract skrub graph dict (##SKRUB_GRAPH##), native SVG (##SKRUB_GRAPH_SVG##), node previews (##NODE_PREVIEW##), execution stats (##EXECUTION_STATS##), and input summaries (##NODE_INPUT_SUMMARY##)
+                # Data statistics for node details come from the runner (single pipeline execution).
+                # Parse: ##SKRUB_GRAPH##, ##NODE_PREVIEW##, ##VAR_PREVIEW##, ##NODE_INPUT_SUMMARY##, ##EXECUTION_STATS##.
                 if decoded:
                     graph_from_run = _parse_skrub_graph_from_stdout(decoded)
                     svg_from_run = _parse_skrub_svg_from_stdout(decoded)
@@ -779,8 +792,13 @@ def stream_execute_events(
                     if exec_stats:
                         total_cost_usd = exec_stats.get("cost_usd", 0.0)
                         duration_ms = exec_stats.get("duration_ms", 0.0)
+                        runner_startup_ms = exec_stats.get("startup_ms")
+                        runner_post_exec_ms = exec_stats.get("post_exec_ms")
                         logger.info(f"Parsed execution stats: duration={duration_ms:.0f}ms, cost=${total_cost_usd:.6f}")
-                    logger.info(f"Parsed {len(node_previews)} node previews from subprocess")
+                    logger.info(
+                        f"Parsed from runner: {len(runner_input_summaries)} input summaries, "
+                        f"{len(node_previews)} node previews, {len(var_previews)} var previews"
+                    )
                     if not svg_from_run:
                         idx = decoded.find("<svg")
                         if idx >= 0:
@@ -814,8 +832,10 @@ def stream_execute_events(
         skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
         compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
 
+        if emit_start_time is None:
+            emit_start_time = time.perf_counter()
         yield f"data: {json.dumps({'type': 'terminal', 'line': 'Starting pipeline execution...'})}\n\n".encode()
-        time.sleep(0.3)
+        time.sleep(0.05)
 
         # Code assignment logic:
         # 1. Primary: Use skrub_node_id from runner (when available)
@@ -838,7 +858,7 @@ def stream_execute_events(
             # Use skrub ID when runtime graph is available, compile ID otherwise
             display_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
             yield f"data: {json.dumps({'type': 'terminal', 'line': f'Running {node.label} ({display_id})...'})}\n\n".encode()
-            time.sleep(0.4)
+            time.sleep(0.05)
 
             # Determine if this is a semantic (code-generating) operator
             is_semantic = node.type != "input" and _is_semantic_operator(node.label)
@@ -876,7 +896,7 @@ def stream_execute_events(
 
                 if summary is not None:
                     yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
-                    time.sleep(0.1)
+                    time.sleep(0.02)
             elif not is_semantic:
                 # Non-semantic operators (subsample, eval, etc.): no input_summary emitted.
                 # Their output data is captured as node_data via ##NODE_PREVIEW## blocks.
@@ -916,7 +936,7 @@ def stream_execute_events(
                 }
                 yield f"data: {json.dumps(payload)}\n\n".encode()
                 emitted_node_code_ids.add(emit_node_id)  # Track to prevent duplicate emissions
-                time.sleep(0.2)
+                time.sleep(0.05)
 
         # ═══════════════════════════════════════════════════════════════════════════════
         # ID Matching System — Why We Need to Map Node IDs
@@ -990,7 +1010,7 @@ def stream_execute_events(
                     }
                     yield f"data: {json.dumps(payload)}\n\n".encode()
                     emitted_node_code_ids.add(skid)  # Track to prevent duplicates
-                    time.sleep(0.1)
+                    time.sleep(0.02)
         else:
             # Fallback: match by label and occurrence (document vs topo order may differ).
             # Only count semantic operators since captured_codes only contains semantic operator code.
@@ -1033,7 +1053,7 @@ def stream_execute_events(
                         }
                         yield f"data: {json.dumps(payload)}\n\n".encode()
                         emitted_node_code_ids.add(skid)  # Track to prevent duplicates
-                        time.sleep(0.1)
+                        time.sleep(0.02)
 
         # Note: input_summary events for non-semantic nodes already emitted during main loop (lines 700-704)
         # Semantic nodes get node_code events above; non-semantic nodes only get input_summary (not node_code)
@@ -1106,5 +1126,21 @@ def stream_execute_events(
             yield f"data: {json.dumps({'type': 'terminal', 'line': 'Done.'})}\n\n".encode()
     except Exception as e:
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n".encode()
+    emit_ms = (time.perf_counter() - emit_start_time) * 1000 if emit_start_time else 0.0
+    profile: dict = {}
+    if prepare_ms > 0 or subprocess_wall_ms > 0 or emit_ms > 0:
+        profile["prepare_ms"] = round(prepare_ms, 1)
+        profile["subprocess_wall_ms"] = round(subprocess_wall_ms, 1)
+        profile["emit_ms"] = round(emit_ms, 1)
+    if runner_startup_ms is not None:
+        profile["runner_startup_ms"] = round(runner_startup_ms, 1)
+    if duration_ms is not None and duration_ms > 0:
+        profile["runner_exec_ms"] = round(duration_ms, 1)
+    if runner_post_exec_ms is not None:
+        profile["runner_post_exec_ms"] = round(runner_post_exec_ms, 1)
+    # Emit cost event so clients can show run cost before done (design: stream yields cost and done).
     yield f"data: {json.dumps({'type': 'cost', 'total_usd': total_cost_usd})}\n\n".encode()
-    yield f"data: {json.dumps({'type': 'done', 'total_cost_usd': total_cost_usd, 'duration_ms': duration_ms})}\n\n".encode()
+    done_payload: dict = {"type": "done", "total_cost_usd": total_cost_usd, "duration_ms": duration_ms}
+    if profile:
+        done_payload["profile"] = profile
+    yield f"data: {json.dumps(done_payload)}\n\n".encode()
