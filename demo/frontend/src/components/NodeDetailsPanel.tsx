@@ -188,9 +188,26 @@ export function NodeDetailsPanel({
     (compileId && costMap[`skrub_${compileId}`]) ?? undefined;
 
   const dataMap = nodeDataByNode ?? {};
-  const nodeData = dataMap[selectedNodeId] || dataMap[rawNodeId] ||
+  // Reverse lookup: data may be stored under skrub_X where mapping[X] === compileId (e.g. cache replay or event order)
+  const nodeDataFromReverse =
+    compileId && skrubToCompileId && Object.keys(skrubToCompileId).length > 0
+      ? (() => {
+          for (const key of Object.keys(dataMap)) {
+            if (key.startsWith("skrub_")) {
+              const skid = key.slice(6);
+              if (skrubToCompileId[skid] === compileId) return dataMap[key];
+            }
+          }
+          return undefined;
+        })()
+      : undefined;
+  const nodeData =
+    dataMap[selectedNodeId] ||
+    dataMap[rawNodeId] ||
     (compileId && dataMap[compileId]) ||
-    (compileId && dataMap[`skrub_${compileId}`]) || undefined;
+    (compileId && dataMap[`skrub_${compileId}`]) ||
+    nodeDataFromReverse ||
+    undefined;
 
   const summaryMap = inputSummaryByNode ?? {};
   const inputSummary = inputSummaryForSelectedNode ??
