@@ -15,6 +15,10 @@ if [ -f "$PIDS_FILE" ]; then
   exit 1
 fi
 
+# Ensure backend (Poetry) deps are installed so compile/execute have duckdb, tabpfn, etc.
+echo "Ensuring backend dependencies are installed..."
+poetry install --no-interaction
+
 # Ensure frontend deps are installed
 if [ ! -d "demo/frontend/node_modules" ]; then
   echo "Installing frontend dependencies..."
