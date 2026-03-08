@@ -1003,16 +1003,18 @@ class TestOptimizerScriptsDynamicCompile:
         assert len(result.edges) > 0, "Graph should have edges"
 
     @pytest.mark.skipif(
-        __import__("importlib").util.find_spec("duckdb") is None,
-        reason="optimise_house requires duckdb (and tabpfn); skip when not installed",
+        __import__("importlib").util.find_spec("duckdb") is None
+        or __import__("importlib").util.find_spec("tabpfn") is None,
+        reason="optimise_house requires duckdb and tabpfn; skip when not installed",
     )
     def test_optimise_house_produces_valid_graph_when_deps_available(self):
         """optimise_house.py: dynamic compile produces valid graph when duckdb/tabpfn are installed."""
         try:
             import skrub
             import duckdb
+            import tabpfn
         except ImportError:
-            pytest.skip("skrub or duckdb not available")
+            pytest.skip("skrub, duckdb or tabpfn not available")
 
         script = self._load_optimizer_script("optimise_house.py")
         result = compile_script_to_graph_dynamic(script)

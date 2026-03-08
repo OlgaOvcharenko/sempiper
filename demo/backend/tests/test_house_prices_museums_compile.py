@@ -580,3 +580,426 @@ def sempipes_pipeline():
         assert result.is_valid
         assert "sem_extract_features" in _labels(result.nodes)
         assert _connected_component_count(result.nodes, result.edges) == 1
+
+
+# ---------------------------------------------------------------------------
+# Helpers for precise edge and source-range tests
+# ---------------------------------------------------------------------------
+
+def _edges(nodes, edges):
+    """Return {(source_id, target_id)} set for quick membership checks."""
+    return {(e.source, e.target) for e in edges}
+
+
+def _node(nodes, label):
+    """Return first node with given label (raises if not found)."""
+    for n in nodes:
+        if n.label == label:
+            return n
+    raise AssertionError(f"No node with label {label!r}. Labels: {_labels(nodes)}")
+
+
+def _nodes_with_label(nodes, label):
+    return [n for n in nodes if n.label == label]
+
+
+def _highlight(body: str, node) -> str:
+    """Extract the source text that would be highlighted for this node."""
+    lines = body.split("\n")
+    line = lines[node.source_range.start_line - 1]
+    sc = node.source_range.start_column - 1   # 0-indexed start
+    ec = node.source_range.end_column - 1     # 0-indexed exclusive end
+    return line[sc:ec]
+
+
+# ---------------------------------------------------------------------------
+# Inline-drop edge correctness (regression tests for the three-bug fix)
+# ---------------------------------------------------------------------------
+
+class TestInlineDropEdges:
+    """
+    Regression tests for inline `df.drop(...)` inside as_X / as_y.
+
+    Three bugs were fixed:
+    1. Redundant direct edge: producer → as_X when producer → drop → as_X already exists.
+    2. Spurious drop → as_y edge triggered by a nearby as_X(df.drop(...)) in context.
+    3. Inline drop stealing `produces` from as_X when both are on the same line.
+    """
+
+    # --- single-line as_X(df.drop(...)) next to as_y ---
+
+    SINGLE_LINE_SNIPPET = '''
+def sempipes_pipeline():
+    facts = skrub.var("facts")
+    cities = skrub.var("cities")
+    m = facts.merge(cities, on="id")
+    y = sempipes.as_y(m["price"], "Target")
+    x = sempipes.as_X(m.drop(columns=["price"]), "Features")
+    return x
+'''
+
+    def test_single_line_no_redundant_merge_to_as_x(self):
+        """merge → as_X must NOT exist when as_X(df.drop(...)) is on one line."""
+        nodes, edges = extract_nodes_with_ranges(self.SINGLE_LINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        merge_id = _node(nodes, "merge").id
+        as_x_id = _node(nodes, "as_X").id
+        assert (merge_id, as_x_id) not in ep, "Redundant merge→as_X edge present"
+
+    def test_single_line_merge_to_drop_to_as_x_chain(self):
+        """Correct chain: merge → drop → as_X (both edges must exist)."""
+        nodes, edges = extract_nodes_with_ranges(self.SINGLE_LINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        merge_id = _node(nodes, "merge").id
+        drop_id = _node(nodes, "drop").id
+        as_x_id = _node(nodes, "as_X").id
+        assert (merge_id, drop_id) in ep, "merge→drop edge missing"
+        assert (drop_id, as_x_id) in ep, "drop→as_X edge missing"
+
+    def test_single_line_no_spurious_drop_to_as_y(self):
+        """drop must NOT get a spurious edge to as_y (as_y uses subscript, not drop)."""
+        nodes, edges = extract_nodes_with_ranges(self.SINGLE_LINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        drop_id = _node(nodes, "drop").id
+        as_y_id = _node(nodes, "as_y").id
+        assert (drop_id, as_y_id) not in ep, "Spurious drop→as_y edge present"
+
+    def test_single_line_merge_feeds_as_y_directly(self):
+        """as_y(m[...]) directly consumes merge output (subscript, not chained method)."""
+        nodes, edges = extract_nodes_with_ranges(self.SINGLE_LINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        merge_id = _node(nodes, "merge").id
+        as_y_id = _node(nodes, "as_y").id
+        assert (merge_id, as_y_id) in ep, "merge→as_y edge missing"
+
+    # --- multiline as_X with inline drop on next line ---
+
+    MULTILINE_SNIPPET = '''
+def sempipes_pipeline():
+    facts = skrub.var("facts")
+    cities = skrub.var("cities")
+    m = facts.merge(cities, on="id")
+    y = sempipes.as_y(m["price"], "Target")
+    x = sempipes.as_X(
+        m.drop(columns=["price"]),
+        "Features",
+    )
+    return x
+'''
+
+    def test_multiline_no_redundant_merge_to_as_x(self):
+        """Multi-line as_X(\\n    df.drop(...)): merge → as_X must NOT exist."""
+        nodes, edges = extract_nodes_with_ranges(self.MULTILINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        merge_id = _node(nodes, "merge").id
+        as_x_id = _node(nodes, "as_X").id
+        assert (merge_id, as_x_id) not in ep, "Redundant merge→as_X edge present"
+
+    def test_multiline_merge_to_drop_to_as_x_chain(self):
+        """Multi-line: correct merge → drop → as_X chain."""
+        nodes, edges = extract_nodes_with_ranges(self.MULTILINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        merge_id = _node(nodes, "merge").id
+        drop_id = _node(nodes, "drop").id
+        as_x_id = _node(nodes, "as_X").id
+        assert (merge_id, drop_id) in ep
+        assert (drop_id, as_x_id) in ep
+
+    def test_multiline_no_spurious_drop_to_as_y(self):
+        """Multi-line: as_y on a prior line must NOT get a drop→as_y edge."""
+        nodes, edges = extract_nodes_with_ranges(self.MULTILINE_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        drop_id = _node(nodes, "drop").id
+        as_y_id = _node(nodes, "as_y").id
+        assert (drop_id, as_y_id) not in ep, "Spurious drop→as_y edge present"
+
+    # --- as_X followed immediately by sem_clean ---
+
+    SEM_CHAIN_SNIPPET = '''
+def sempipes_pipeline():
+    df = skrub.var("data")
+    x = sempipes.as_X(df.drop(columns=["target"]), "X")
+    x = x.sem_clean(nl_prompt="Clean.", columns=["col"])
+    return x
+'''
+
+    def test_as_x_feeds_sem_clean_not_drop(self):
+        """as_X must feed sem_clean; drop must NOT bypass as_X to reach sem_clean."""
+        nodes, edges = extract_nodes_with_ranges(self.SEM_CHAIN_SNIPPET, prune=False)
+        ep = _edges(nodes, edges)
+        as_x_id = _node(nodes, "as_X").id
+        drop_id = _node(nodes, "drop").id
+        sem_clean_id = _node(nodes, "sem_clean").id
+        assert (as_x_id, sem_clean_id) in ep, "as_X→sem_clean edge missing"
+        assert (drop_id, sem_clean_id) not in ep, "Spurious drop→sem_clean edge present"
+
+
+# ---------------------------------------------------------------------------
+# House prices – exact edge graph
+# ---------------------------------------------------------------------------
+
+class TestHousePricesExactGraph:
+    """Precise edge-set and source-range checks for the house_prices pipeline."""
+
+    def test_exact_edges_pruned(self):
+        """Full HOUSE_PRICES_PIPELINE_BODY (prune=True): exact edge set."""
+        nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY)
+        ep = _edges(nodes, edges)
+        # Input nodes feed merge
+        assert ("var_facts_3", "merge_7") in ep
+        assert ("var_cities_4", "merge_7") in ep
+        assert ("var_images_5", "merge_7") in ep
+        # merge feeds as_y and drop (inline drop of as_X)
+        assert ("merge_7", "as_y_9") in ep
+        assert ("merge_7", "drop_15") in ep
+        # NO direct merge → as_X (drop is the intermediary)
+        assert ("merge_7", "as_X_14") not in ep, "Redundant merge→as_X present"
+        # Inline drop feeds as_X
+        assert ("drop_15", "as_X_14") in ep
+        # Semantic chain
+        assert ("as_X_14", "sem_clean_19") in ep
+        assert ("sem_clean_19", "sem_extract_features_28") in ep
+        assert ("sem_extract_features_28", "sem_gen_features_35") in ep
+        assert ("sem_gen_features_35", "skb_apply_42") in ep
+        # TableVectorizer apply
+        assert ("skb_apply_42", "skb_apply_48") in ep
+        # as_y feeds final apply (y=price)
+        assert ("as_y_9", "skb_apply_48") in ep
+        # Total: 12 edges (apply_func_52 is pruned as dead-end)
+        assert len(edges) == 12, f"Expected 12 edges, got {len(edges)}: {ep}"
+
+    def test_no_redundant_merge_to_as_x(self):
+        """Dedicated regression: merge must not bypass drop to reach as_X."""
+        nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        ep = _edges(nodes, edges)
+        assert ("merge_7", "as_X_14") not in ep
+
+    def test_drop_is_only_intermediary_to_as_x(self):
+        """drop_15 is the only parent of as_X_14."""
+        nodes, edges = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        parents_of_as_x = {e.source for e in edges if e.target == "as_X_14"}
+        assert parents_of_as_x == {"drop_15"}, f"Unexpected parents of as_X: {parents_of_as_x}"
+
+    def test_source_range_var_facts(self):
+        """<Var 'facts'> source range covers 'skrub.var' on line 3."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "<Var 'facts'>")
+        assert n.source_range.start_line == 3
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "skrub.var"
+
+    def test_source_range_merge(self):
+        """merge source range covers 'merge' on line 7 (first of chained pair)."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "merge")
+        assert n.source_range.start_line == 7
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "merge"
+
+    def test_source_range_as_y(self):
+        """as_y source range covers 'as_y' on line 9."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "as_y")
+        assert n.source_range.start_line == 9
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "as_y"
+
+    def test_source_range_as_x(self):
+        """as_X source range covers 'as_X' on line 14."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "as_X")
+        assert n.source_range.start_line == 14
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "as_X"
+
+    def test_source_range_inline_drop(self):
+        """Inline drop source range covers 'drop' on line 15 (inside as_X args)."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        drop_nodes = _nodes_with_label(nodes, "drop")
+        drop_15 = next((n for n in drop_nodes if n.source_range.start_line == 15), None)
+        assert drop_15 is not None, "drop node on line 15 not found"
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, drop_15) == "drop"
+
+    def test_source_range_sem_clean(self):
+        """sem_clean source range covers 'sem_clean' on line 19."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "sem_clean")
+        assert n.source_range.start_line == 19
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "sem_clean"
+
+    def test_source_range_sem_extract_features(self):
+        """sem_extract_features source range covers the operator name on line 28."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "sem_extract_features")
+        assert n.source_range.start_line == 28
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "sem_extract_features"
+
+    def test_source_range_sem_gen_features(self):
+        """sem_gen_features source range covers the operator name on line 35."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "sem_gen_features")
+        assert n.source_range.start_line == 35
+        assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "sem_gen_features"
+
+    def test_source_range_skb_apply_nodes(self):
+        """Two skb.apply nodes are on lines 42 and 48; both highlight 'skb.apply'."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        apply_nodes = _nodes_with_label(nodes, "skb.apply")
+        assert len(apply_nodes) >= 2
+        for n in apply_nodes:
+            assert _highlight(HOUSE_PRICES_PIPELINE_BODY, n) == "skb.apply"
+        lines = {n.source_range.start_line for n in apply_nodes}
+        assert 42 in lines and 48 in lines
+
+    def test_column_ranges_no_leading_dot(self):
+        """Method-style operators must not include a leading dot in their column range."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        for n in nodes:
+            highlighted = _highlight(HOUSE_PRICES_PIPELINE_BODY, n)
+            assert not highlighted.startswith("."), (
+                f"Node {n.id!r} highlight starts with dot: {highlighted!r}"
+            )
+
+    def test_column_ranges_no_trailing_paren(self):
+        """Operator column ranges must not include the trailing '('."""
+        nodes, _ = extract_nodes_with_ranges(HOUSE_PRICES_PIPELINE_BODY, prune=False)
+        for n in nodes:
+            highlighted = _highlight(HOUSE_PRICES_PIPELINE_BODY, n)
+            assert not highlighted.endswith("("), (
+                f"Node {n.id!r} highlight ends with '(': {highlighted!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Museums – exact edge graph
+# ---------------------------------------------------------------------------
+
+class TestMuseumsExactGraph:
+    """Precise edge-set and source-range checks for the museums pipeline."""
+
+    def test_exact_edges_pruned(self):
+        """Full MUSEUMS_PIPELINE_BODY (prune=True): exact edge set."""
+        nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY)
+        ep = _edges(nodes, edges)
+        # Input node feeds apply_func (spaCy)
+        assert ("var_artworks_3", "skb_apply_func_4") in ep
+        # apply_func feeds as_y and drop (inline drop of as_X)
+        assert ("skb_apply_func_4", "as_y_6") in ep
+        assert ("skb_apply_func_4", "drop_12") in ep
+        # NO direct apply_func → as_X (drop is the intermediary)
+        assert ("skb_apply_func_4", "as_X_11") not in ep, "Redundant apply_func→as_X present"
+        # Inline drop feeds as_X
+        assert ("drop_12", "as_X_11") in ep
+        # Semantic chain through artwork_data
+        assert ("as_X_11", "sem_extract_features_16") in ep
+        assert ("sem_extract_features_16", "sem_gen_features_24") in ep
+        assert ("sem_gen_features_24", "skb_apply_func_29") in ep
+        assert ("skb_apply_func_29", "sem_refine_31") in ep
+        assert ("sem_refine_31", "drop_37") in ep
+        assert ("drop_37", "skb_apply_39") in ep
+        assert ("skb_apply_39", "skb_apply_42") in ep
+        # as_y feeds final apply (y=culture_target)
+        assert ("as_y_6", "skb_apply_42") in ep
+        # Total: 12 edges
+        assert len(edges) == 12, f"Expected 12 edges, got {len(edges)}: {ep}"
+
+    def test_no_redundant_apply_func_to_as_x(self):
+        """Dedicated regression: skb.apply_func must not bypass drop to reach as_X."""
+        nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        ep = _edges(nodes, edges)
+        assert ("skb_apply_func_4", "as_X_11") not in ep
+
+    def test_drop_is_only_intermediary_to_as_x(self):
+        """drop_12 is the only parent of as_X_11."""
+        nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        parents_of_as_x = {e.source for e in edges if e.target == "as_X_11"}
+        assert parents_of_as_x == {"drop_12"}, f"Unexpected parents of as_X: {parents_of_as_x}"
+
+    def test_standalone_drop_not_confused_with_inline_drop(self):
+        """The standalone drop_37 (drop columns) must not connect to as_X."""
+        nodes, edges = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        ep = _edges(nodes, edges)
+        assert ("drop_37", "as_X_11") not in ep
+
+    def test_source_range_var_artworks(self):
+        """<Var 'artworks'> source range covers 'skrub.var' on line 3."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "<Var 'artworks'>")
+        assert n.source_range.start_line == 3
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "skrub.var"
+
+    def test_source_range_first_apply_func(self):
+        """First skb.apply_func (spaCy) is on line 4; highlighted text is 'skb.apply_func'."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        apply_funcs = _nodes_with_label(nodes, "skb.apply_func")
+        n4 = next((n for n in apply_funcs if n.source_range.start_line == 4), None)
+        assert n4 is not None
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n4) == "skb.apply_func"
+
+    def test_source_range_as_y(self):
+        """as_y source range covers 'as_y' on line 6."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "as_y")
+        assert n.source_range.start_line == 6
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "as_y"
+
+    def test_source_range_as_x(self):
+        """as_X source range covers 'as_X' on line 11."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "as_X")
+        assert n.source_range.start_line == 11
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "as_X"
+
+    def test_source_range_inline_drop(self):
+        """Inline drop (inside as_X args) source range covers 'drop' on line 12."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        drop_nodes = _nodes_with_label(nodes, "drop")
+        drop_12 = next((n for n in drop_nodes if n.source_range.start_line == 12), None)
+        assert drop_12 is not None, "drop node on line 12 not found"
+        assert _highlight(MUSEUMS_PIPELINE_BODY, drop_12) == "drop"
+
+    def test_source_range_sem_extract_features(self):
+        """sem_extract_features source range covers the operator name on line 16."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "sem_extract_features")
+        assert n.source_range.start_line == 16
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "sem_extract_features"
+
+    def test_source_range_sem_refine(self):
+        """sem_refine source range covers 'sem_refine' on line 31."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        n = _node(nodes, "sem_refine")
+        assert n.source_range.start_line == 31
+        assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "sem_refine"
+
+    def test_source_range_standalone_drop(self):
+        """Standalone drop_37 source range covers 'drop' on line 37."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        drop_nodes = _nodes_with_label(nodes, "drop")
+        drop_37 = next((n for n in drop_nodes if n.source_range.start_line == 37), None)
+        assert drop_37 is not None, "drop node on line 37 not found"
+        assert _highlight(MUSEUMS_PIPELINE_BODY, drop_37) == "drop"
+
+    def test_source_range_two_skb_apply_nodes(self):
+        """Both skb.apply nodes (lines 39, 42) highlight 'skb.apply'."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        apply_nodes = _nodes_with_label(nodes, "skb.apply")
+        assert len(apply_nodes) >= 2
+        for n in apply_nodes:
+            assert _highlight(MUSEUMS_PIPELINE_BODY, n) == "skb.apply"
+        lines_seen = {n.source_range.start_line for n in apply_nodes}
+        assert 39 in lines_seen and 42 in lines_seen
+
+    def test_column_ranges_no_leading_dot(self):
+        """No operator highlight in the museums pipeline starts with a dot."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        for n in nodes:
+            highlighted = _highlight(MUSEUMS_PIPELINE_BODY, n)
+            assert not highlighted.startswith("."), (
+                f"Node {n.id!r} highlight starts with dot: {highlighted!r}"
+            )
+
+    def test_column_ranges_no_trailing_paren(self):
+        """No operator highlight ends with '('."""
+        nodes, _ = extract_nodes_with_ranges(MUSEUMS_PIPELINE_BODY, prune=False)
+        for n in nodes:
+            highlighted = _highlight(MUSEUMS_PIPELINE_BODY, n)
+            assert not highlighted.endswith("("), (
+                f"Node {n.id!r} highlight ends with '(': {highlighted!r}"
+            )
