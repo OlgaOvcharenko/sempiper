@@ -31,13 +31,13 @@ def traj_dir(tmp_path):
 
 @pytest.fixture(autouse=True)
 def patch_optimizer_stores(traj_dir, tmp_path, monkeypatch):
-    """Redirect SEARCH_PATHS and _trajectory_cache to temp directories."""
+    """Redirect SEARCH_PATHS and _cache to a temp .cache (same layout as production)."""
     import routers.optimizer as opt_module
     from services.cache.cache_service import CacheService
 
     monkeypatch.setattr(opt_module, "SEARCH_PATHS", [traj_dir])
-    temp_cache = CacheService(tmp_path / ".cache/optimizer")
-    monkeypatch.setattr(opt_module, "_trajectory_cache", temp_cache)
+    temp_cache = CacheService(tmp_path / ".cache")
+    monkeypatch.setattr(opt_module, "_cache", temp_cache)
 
 
 SAMPLE_TRAJECTORY = {
@@ -71,9 +71,14 @@ def test_status_returns_true_when_cached(client, tmp_path, monkeypatch):
     import routers.optimizer as opt_module
     from services.cache.cache_service import CacheService
 
-    cache = CacheService(tmp_path / ".cache/optimizer_seed")
-    cache.set("optimise_house", "trajectory", {**SAMPLE_TRAJECTORY, "run_id": "seed.json"})
-    monkeypatch.setattr(opt_module, "_trajectory_cache", cache)
+    cache = CacheService(tmp_path / ".cache")
+    cache.set(
+        "abc123",
+        "trajectory",
+        {**SAMPLE_TRAJECTORY, "run_id": "seed.json"},
+        metadata={"script_id": "optimise_house"},
+    )
+    monkeypatch.setattr(opt_module, "_cache", cache)
 
     resp = client.get("/api/optimizer/status")
     assert resp.status_code == 200
