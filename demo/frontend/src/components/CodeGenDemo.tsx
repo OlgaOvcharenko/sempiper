@@ -562,7 +562,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
           )}
         </div>
 
-        {/* ── Middle: Computation graph ────────────────────────────────────── */}
+        {/* ── Middle: Computational graph ────────────────────────────────────── */}
         <div
           className="min-w-[280px] flex flex-col min-h-0 transition-all duration-300 gap-4"
           style={{ width: middleWidth }}

@@ -82,9 +82,9 @@ describe("CodeGenDemo", () => {
     expect(screen.getByRole("button", { name: /run/i })).toBeInTheDocument();
   });
 
-  it("renders middle panel as computation graph", () => {
+  it("renders middle panel as computational graph", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    expect(screen.getByText("Computation graph")).toBeInTheDocument();
+    expect(screen.getByText("Computational graph")).toBeInTheDocument();
   });
 
   it("renders node details placeholder when no node selected", () => {
@@ -257,7 +257,7 @@ describe("CodeGenDemo", () => {
     });
   });
 
-  it("shows computation graph from compile (graph from code, not from run)", async () => {
+  it("shows computational graph from compile (graph from code, not from run)", async () => {
     const compileResponse = {
       nodes: [
         {
@@ -291,7 +291,7 @@ describe("CodeGenDemo", () => {
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
     await waitFor(() => {
-      expect(screen.getByText(/Computation graph \(from code\)/)).toBeInTheDocument();
+      expect(screen.getByText(/Computational graph \(from code\)/)).toBeInTheDocument();
     }, { timeout: 2000 });
   });
 
@@ -331,7 +331,7 @@ describe("CodeGenDemo", () => {
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    await waitFor(() => expect(screen.getByText(/Computation graph \(from code\)/)).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText(/Computational graph \(from code\)/)).toBeInTheDocument(), { timeout: 3000 });
 
     const dropdown = screen.getByTitle("Select pipeline script");
     fireEvent.change(dropdown, { target: { value: "medium" } });
@@ -389,7 +389,7 @@ describe("CodeGenDemo", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+      expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
     }, { timeout: 2000 });
 
     const dropdown = screen.getByTitle("Select pipeline script");
@@ -503,13 +503,13 @@ describe("CodeGenDemo", () => {
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
     // Before Run: no graph, placeholder only
-    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument(), { timeout: 2000 });
 
     fireEvent.click(screen.getByRole("button", { name: /run/i }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
     // After Run: single interactive Skrub graph is shown; click semantic operator to see generated code.
-    await waitFor(() => expect(screen.getByText(/Computation graph \(from code\)/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/Computational graph \(from code\)/)).toBeInTheDocument(), { timeout: 2000 });
     await waitFor(() => expect(screen.getByRole("button", { name: /Graph node sem_fillna/ })).toBeInTheDocument(), { timeout: 2000 });
     fireEvent.click(screen.getByRole("button", { name: /Graph node sem_fillna/ }));
     await waitFor(() => {
@@ -604,7 +604,7 @@ describe("CodeGenDemo", () => {
     });
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
-    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument(), { timeout: 2000 });
     await waitFor(() => expect(screen.getByTitle("Select pipeline script")).toBeInTheDocument(), { timeout: 2000 });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 600));
@@ -613,7 +613,7 @@ describe("CodeGenDemo", () => {
     fireEvent.click(screen.getByRole("button", { name: /run/i }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled(), { timeout: 3000 });
-    await waitFor(() => expect(screen.getByText(/Computation graph \(from code\)/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/Computational graph \(from code\)/)).toBeInTheDocument(), { timeout: 2000 });
     await waitFor(() => expect(screen.getByTestId("graph-node-0")).toBeInTheDocument(), { timeout: 2000 });
 
     fireEvent.click(screen.getByTestId("graph-node-0"));
@@ -747,7 +747,7 @@ describe("CodeGenDemo", () => {
 
     render(<CodeGenDemo />, { wrapper: wrapper() });
     // Wait for the component to load; before Run we show placeholder (no graph)
-    await waitFor(() => expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument(), { timeout: 2000 });
 
     vi.mocked(fetch).mockResolvedValue({
       ok: true,

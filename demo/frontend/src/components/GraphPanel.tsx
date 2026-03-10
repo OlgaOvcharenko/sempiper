@@ -356,13 +356,13 @@ export function GraphPanel({
         <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex flex-col justify-center gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex-1">
-              <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Computation graph</h2>
+              <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Computational graph</h2>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                 {isLoading || (isExecuting && shouldShowSkrubDict)
                   ? "Running pipeline…"
                   : shouldShowSkrubDict
-                    ? "Computation graph (from code) · Click an operator to see generated code"
-                    : "Edit code to see computation graph"}
+                    ? "Computational graph (from code) · Click an operator to see generated code"
+                    : "Edit code to see computational graph"}
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -394,9 +394,9 @@ export function GraphPanel({
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center px-8 gap-3">
             <div className="text-6xl text-zinc-300 dark:text-zinc-600">📊</div>
-            <div className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No computation graph yet</div>
+            <div className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">No computational graph yet</div>
             <div className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
-              Edit pipeline code to see the computation graph.
+              Edit pipeline code to see the computational graph.
             </div>
           </div>
         )}

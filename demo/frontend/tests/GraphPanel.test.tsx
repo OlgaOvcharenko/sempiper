@@ -15,9 +15,9 @@ describe("GraphPanel", () => {
         edges={[{ source: "n1", target: "n2" }]}
       />
     );
-    expect(screen.getByText("Computation graph")).toBeInTheDocument();
-    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText("Computational graph")).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computational graph/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
   });
 
   it("when showGraph is true but no skrub graph, shows placeholder (no fake/compiled graph)", () => {
@@ -33,8 +33,8 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computational graph/)).toBeInTheDocument();
   });
 
   it("shows loading placeholder when isLoading and graph not shown", () => {
@@ -60,9 +60,9 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText("Computation graph")).toBeInTheDocument();
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.getByText("Computational graph")).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computational graph/)).toBeInTheDocument();
   });
 
   it("renders Cytoscape container when skrub graph is provided", () => {
@@ -101,7 +101,7 @@ describe("GraphPanel", () => {
         showGraph={false}
       />
     );
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
   });
 
   it("renders Cytoscape graph with medium-like graph data", () => {
@@ -189,7 +189,7 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/Computation graph \(from code\) · Click an operator to see generated code/)).toBeInTheDocument();
+    expect(screen.getByText(/Computational graph \(from code\) · Click an operator to see generated code/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Skrub" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Interactive" })).not.toBeInTheDocument();
   });
@@ -329,11 +329,11 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/Computation graph \(from code\) · Click an operator to see generated code/)).toBeInTheDocument();
+    expect(screen.getByText(/Computational graph \(from code\) · Click an operator to see generated code/)).toBeInTheDocument();
     expect(screen.getByTestId("cytoscape-graph")).toBeInTheDocument();
   });
 
-  it("shows 'No computation graph yet' when skrubGraph is null", () => {
+  it("shows 'No computational graph yet' when skrubGraph is null", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -344,12 +344,12 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computational graph/)).toBeInTheDocument();
     expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
   });
 
-  it("shows 'No computation graph yet' when skrubGraph has empty nodes array", () => {
+  it("shows 'No computational graph yet' when skrubGraph has empty nodes array", () => {
     const emptyGraph = {
       nodes: [],
       parents: {},
@@ -366,12 +366,12 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
-    expect(screen.getByText(/Edit pipeline code to see the computation graph/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Edit pipeline code to see the computational graph/)).toBeInTheDocument();
     expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
   });
 
-  it("shows 'No computation graph yet' when skrubGraph is undefined", () => {
+  it("shows 'No computational graph yet' when skrubGraph is undefined", () => {
     render(
       <GraphPanel
         selectedNodeId={null}
@@ -382,7 +382,7 @@ describe("GraphPanel", () => {
         showGraph={true}
       />
     );
-    expect(screen.getByText(/No computation graph yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No computational graph yet/)).toBeInTheDocument();
     expect(screen.queryByTestId("cytoscape-graph")).not.toBeInTheDocument();
   });
 });
