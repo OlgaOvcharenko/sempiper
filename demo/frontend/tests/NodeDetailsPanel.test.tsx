@@ -7,7 +7,7 @@ describe("NodeDetailsPanel", () => {
     render(
       <NodeDetailsPanel selectedNodeId={null} selectedNode={null} />
     );
-    expect(screen.getByText("Node details")).toBeInTheDocument();
+    expect(screen.getByText("Operator details")).toBeInTheDocument();
     expect(screen.getByText(/select a node in the graph/i)).toBeInTheDocument();
   });
 
@@ -18,7 +18,7 @@ describe("NodeDetailsPanel", () => {
         selectedNode={{ id: "as_X_1", type: "input", label: "as_X" }}
       />
     );
-    expect(screen.getByText("Node details")).toBeInTheDocument();
+    expect(screen.getByText("Operator details")).toBeInTheDocument();
     expect(screen.getByText("Data summary")).toBeInTheDocument();
     expect(screen.getByText(/run the pipeline to see schema/i)).toBeInTheDocument();
   });
