@@ -3,7 +3,7 @@ Pipeline execution: yield SSE events (terminal output, per-node generated code, 
 We run the user's pipeline in a subprocess (skrub_graph_runner). Operator-generated code
 comes from that run (runner captures sempipes.llm.generate_python_code_from_messages);
 we parse ##SEMPIPES_NODE_CODE## blocks from stdout. We do not call the LLM directly.
-If we get skrub's computation graph (DataOp.skb.draw_graph) we emit skrub_graph.
+If we get skrub's computational graph (DataOp.skb.draw_graph) we emit skrub_graph.
 Cost is tracked only when LLM is called in-process (subprocess LLM calls are not tracked).
 """
 import concurrent.futures

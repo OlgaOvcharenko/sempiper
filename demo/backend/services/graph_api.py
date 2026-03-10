@@ -46,7 +46,7 @@ class GraphResult:
 
 @dataclass
 class SkrubNode:
-    """A node in the skrub computation graph."""
+    """A node in the skrub computational graph."""
 
     id: str
     label: str
@@ -82,7 +82,7 @@ def _infer_node_type(label: str, is_sempipes_semantic: bool) -> str:
 
 @dataclass
 class SkrubGraphResult:
-    """Result of extracting the real skrub computation graph."""
+    """Result of extracting the real skrub computational graph."""
 
     nodes: list[SkrubNode]
     parents: dict[str, list[str]]  # node_id -> list of parent node_ids
@@ -142,7 +142,7 @@ class SkrubGraphResult:
     def to_graph_result(self) -> GraphResult:
         """Convert to frontend-compatible GraphResult."""
         if not self.is_valid:
-            # Return empty graph on error - frontend shows "No computation graph yet"
+            # Return empty graph on error - frontend shows "No computational graph yet"
             return GraphResult(
                 nodes=[],
                 edges=[],
@@ -234,7 +234,7 @@ def _rewrite_var_calls(script: str) -> str:
     To:
         products = skrub.var("products")
 
-    This allows the script to build the computation graph without
+    This allows the script to build the computational graph without
     requiring actual data or triggering eager execution.
     """
     # Pattern matches skrub.var("name", <anything>) or skrub.var('name', <anything>)
@@ -502,7 +502,7 @@ def rewrite_script_for_graph_extraction(script: str) -> str:
         script: Original pipeline script
 
     Returns:
-        Rewritten script that can be executed to build the computation graph.
+        Rewritten script that can be executed to build the computational graph.
     """
     script = _strip_pipeline_runner(script)
     script = _remove_skrub_datasets_fetches(script)
@@ -669,11 +669,11 @@ def _graph_to_result(raw: dict, rewritten_script: str) -> SkrubGraphResult:
 
 def extract_skrub_graph(script: str, timings_out: dict[str, float] | None = None) -> SkrubGraphResult:
     """
-    Extract the real skrub computation graph by executing a rewritten script.
+    Extract the real skrub computational graph by executing a rewritten script.
 
     This function:
     1. Rewrites the script to remove data arguments and eval calls
-    2. Executes the rewritten script to build the computation graph
+    2. Executes the rewritten script to build the computational graph
     3. Extracts the graph structure using skrub's internal graph() function
 
     Note: Execution runs the full script (e.g. fetch_credit_fraud(), subsample),
@@ -1286,7 +1286,7 @@ def compile_script_to_graph_dynamic(
     Compile a pipeline script using dynamic extraction (real skrub graph).
 
     This executes a rewritten version of the script (with data args removed
-    and eval calls replaced) to get the actual computation graph from skrub.
+    and eval calls replaced) to get the actual computational graph from skrub.
 
     If extraction fails, returns an empty graph (no fallback to static parsing).
 
@@ -1328,7 +1328,7 @@ def compile_script_to_graph_dynamic(
         # Using the static graph as a fallback silently shows the wrong graph to the user.
         #
         # If dynamic extraction fails, return an empty graph with the error.
-        # The frontend already handles this case (shows "No computation graph yet").
+        # The frontend already handles this case (shows "No computational graph yet").
         # Fix the underlying extraction failure instead of hiding it with a static fallback.
         #
         # FOR LLMs: do not reintroduce compile_script_to_graph() here as a fallback.

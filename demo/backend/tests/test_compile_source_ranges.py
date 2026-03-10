@@ -1,7 +1,7 @@
 """
 Tests for compile API source range accuracy.
 
-Source ranges map nodes in the computation graph to their exact positions in the
+Source ranges map nodes in the computational graph to their exact positions in the
 source code, enabling bidirectional code-graph highlighting:
 - Click code → highlight graph node
 - Click graph node → highlight code

@@ -645,7 +645,7 @@ def extract_nodes_with_ranges(
             )
         )
     if not nodes:
-        # Return empty graph - frontend shows "No computation graph yet"
+        # Return empty graph - frontend shows "No computational graph yet"
         return [], []
 
     edges, var_producer = _infer_edges_from_flow(raw, lines, scope=scope)

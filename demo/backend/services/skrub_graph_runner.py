@@ -1,5 +1,5 @@
 """
-Run user pipeline code in an isolated namespace and output skrub's computation graph.
+Run user pipeline code in an isolated namespace and output skrub's computational graph.
 
 We extract the DAG as a dictionary using skrub's internal _Graph (not SVG):
   from skrub._data_ops._evaluation import _Graph

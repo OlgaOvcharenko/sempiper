@@ -4,7 +4,7 @@
 
 Repository for the sempipes demo (VLDB-style web demo: declarative Python pipelines → compiled graph → generated code and insights). Dependencies are managed with **Poetry**; there is no `requirements.txt` — use **`pyproject.toml`** only. Sempipes is loaded as a local path dependency.
 
-**Inspiration:** The web demo is inspired by the **sempipes notebook demos** (e.g. `sempipes/demo.ipynb`, `demo__sem_fillna.ipynb`), which run real pipelines with `as_X`/`as_y`, `sem_fillna`, `sem_gen_features`, `apply_with_sem_choose`, `sem_choose`, and show a computation graph and result on a subsample. The web UI mirrors that flow: pipeline code → compiled graph → node details.
+**Inspiration:** The web demo is inspired by the **sempipes notebook demos** (e.g. `sempipes/demo.ipynb`, `demo__sem_fillna.ipynb`), which run real pipelines with `as_X`/`as_y`, `sem_fillna`, `sem_gen_features`, `apply_with_sem_choose`, `sem_choose`, and show a computational graph and result on a subsample. The web UI mirrors that flow: pipeline code → compiled graph → node details.
 
 ## Demo design (high level)
 

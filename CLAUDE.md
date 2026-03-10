@@ -90,7 +90,7 @@ The **sempipes** repository contains **notebook demos** (e.g. `sempipes/demo.ipy
 - **Do not edit** anything under `sempipes/`
 - Use notebooks as **inspiration** for the web demo in `demo/`:
   - **Pipeline vocabulary**: prefer notebook-style APIs (e.g. `as_X`, `as_y`, `sem_fillna`, `sem_gen_features`, `skb.apply`, `apply_with_sem_choose`, `sem_choose`)
-  - **Graph semantics**: middle panel's compiled graph should reflect the same steps as notebook computation graphs
+  - **Graph semantics**: middle panel's compiled graph should reflect the same steps as notebook computational graphs
   - **Right panel**: node details mirror what notebooks show per step (data summary, generated code, LLM/prompt stats)
 
 ### 7. Demo: Three-Panel Design

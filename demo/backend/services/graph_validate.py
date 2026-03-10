@@ -79,7 +79,7 @@ def validate_graph_json(nodes: list[dict], edges: list[dict]) -> tuple[bool, lis
     if errors:
         return False, errors
 
-    # Empty graph is valid (frontend shows "No computation graph yet")
+    # Empty graph is valid (frontend shows "No computational graph yet")
     if not node_ids:
         return True, []
 
