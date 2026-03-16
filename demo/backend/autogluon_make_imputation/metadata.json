@@ -120,7 +120,6 @@
     "pytorch-lightning": "2.6.1",
     "httpcore": "1.0.9",
     "autogluon.tabular": "1.5.0",
-    "tensorflow": "2.20.0",
     "srsly": "2.5.2",
     "confection": "0.1.5",
     "optree": "0.18.0",

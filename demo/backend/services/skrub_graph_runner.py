@@ -44,10 +44,9 @@ def _create_stub_module(name):
     })
     return module
 
-# Stub imports that are either missing, conflicting, or too slow (tensorflow)
+# Stub imports that are either missing or conflicting (not in safe_exec anyway)
 _STUB_IMPORTS = [
-    "tensorflow",      # Too slow to import (hangs for 30+ seconds)
-    "open_clip",       # Conflicts with autogluon timm requirement (not in safe_exec anyway)
+    "open_clip",       # Conflicts with autogluon timm requirement
 ]
 
 for module_name in _STUB_IMPORTS:

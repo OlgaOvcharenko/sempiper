@@ -18,7 +18,6 @@ sempipes = { path = "sempipes", develop = true }
 autogluon = "^1.5.0"
 soundfile = "^0.13.1"
 torchaudio = ">=2.9,<2.10"
-tensorflow = "^2.20.0"
 unidecode = "^1.4.0"
 duckdb = ">=0.10.0"
 tabpfn = ">=0.1.0"
