@@ -64,6 +64,10 @@ _per_operator_costs: list[float] = []
 # Per-operator LLM attempt count (number of completion calls per operator).
 _per_operator_attempts: list[int] = []
 
+# Node preview capture: populated by _setup_preview_capture_patch during exec.
+# Maps id(data_op) -> {schema, sample, row_count} captured during evaluate callback.
+_captured_previews: dict = {}
+
 
 def _capturing_generate_code_from_messages(messages):
     """Wrapper that captures generated code and delegates to original function. Also attributes LLM cost and attempt count to this operator."""
@@ -100,6 +104,41 @@ def _setup_capture_patch():
         return True
     except ImportError:
         return False
+
+
+def _setup_preview_capture_patch():
+    """Patch skrub's evaluate() to capture node previews during the first pipeline run.
+
+    When learner.fit(env) runs inside exec(), it calls evaluate(mode='fit_transform',
+    clear=True). The clear=True path invokes callbacks after each node; we inject one
+    that converts the result to a summary dict before it is pruned from memory.
+
+    After exec(), _captured_previews maps id(data_op) -> {schema, sample, row_count}
+    for every evaluated node, so _get_skrub_dag_dict can skip the second evaluate pass.
+    """
+    try:
+        import skrub._data_ops._evaluation as _eval_mod
+    except ImportError:
+        return
+
+    original_evaluate = _eval_mod.evaluate
+
+    def _capturing_evaluate(data_op, mode="preview", environment=None, clear=False, callbacks=()):
+        if clear and mode == "fit_transform":
+            def _capture(da, result):
+                try:
+                    df = _to_dataframe(result)
+                    if df is not None:
+                        d = _dataframe_to_preview_dict(df, "")
+                        if d:
+                            _captured_previews[id(da)] = {k: v for k, v in d.items() if k != "node_id"}
+                except Exception:
+                    pass
+            callbacks = (*callbacks, _capture)
+        return original_evaluate(data_op, mode=mode, environment=environment,
+                                 clear=clear, callbacks=callbacks)
+
+    _eval_mod.evaluate = _capturing_evaluate
 
 
 def _prepare_globals():
@@ -586,6 +625,41 @@ def _extract_preview_from_dataop(node_obj, node_id):
         return None
 
 
+def _extract_previews_from_capture(raw_graph):
+    """Build node preview list from _captured_previews (populated during exec).
+
+    Matches raw_graph node objects by Python id() to summaries captured during the
+    evaluate() callback. Returns same format as _extract_all_previews.
+    No additional pipeline evaluation is needed.
+    """
+    if not raw_graph or not isinstance(raw_graph, dict):
+        return []
+
+    nodes_raw = raw_graph.get("nodes") or []
+    node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+
+    previews = []
+    missing = []
+    for i, node_obj in enumerate(node_list):
+        node_id = str(i)
+        summary = _captured_previews.get(id(node_obj))
+        if summary:
+            previews.append({"node_id": node_id, **summary})
+        else:
+            missing.append(node_id)
+
+    total = len(node_list)
+    got = len(previews)
+    if missing:
+        print(
+            f"Capture-based preview: {got}/{total} nodes; missing: {missing}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Capture-based preview: {got}/{total} nodes (all covered)", file=sys.stderr)
+    return previews
+
+
 def _extract_all_previews(raw_graph):
     """
     Extract preview data for all nodes in the graph.
@@ -654,13 +728,21 @@ def _get_skrub_dag_dict(code, globals_dict):
             graph_dict = _graph_to_serializable(raw_graph)
         except Exception:
             pass
-        # Single-pass evaluate: populate all node caches so _extract_all_previews
-        # reads results in O(1) per node instead of re-executing the pipeline.
-        _evaluate_and_cache_all_nodes(result, env)
-        try:
-            previews = _extract_all_previews(raw_graph)
-        except Exception:
-            pass
+        if _captured_previews:
+            # Fast path: previews were captured during exec's evaluate() callback.
+            # No second pipeline evaluation needed.
+            try:
+                previews = _extract_previews_from_capture(raw_graph)
+            except Exception:
+                previews = []
+        else:
+            # Fallback: exec didn't trigger a fit_transform evaluate (e.g. fitted=False).
+            # Run a single evaluate pass to populate caches, then read previews.
+            _evaluate_and_cache_all_nodes(result, env)
+            try:
+                previews = _extract_all_previews(raw_graph)
+            except Exception:
+                pass
 
     # Always try draw_graph() for native skrub SVG (for saving to disk)
     try:
@@ -806,15 +888,13 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
                 seen.add(var_name)
 
     # Priority 2: g["env"] (pipeline data environment)
-    # Use effective df (filtered by subsampled tables when applicable) so row_count matches script intent.
     env = g.get("env")
     if isinstance(env, dict):
         for var_name, val in env.items():
             if var_name in seen or not isinstance(var_name, str) or var_name.startswith("_"):
                 continue
             if isinstance(val, pd.DataFrame):
-                effective = _effective_env_df(env, var_name, val)
-                s = _df_to_summary(effective, var_name)
+                s = _df_to_summary(val, var_name)
                 if s:
                     summaries.append(s)
                     seen.add(var_name)
@@ -874,6 +954,11 @@ def main():
     # Clear per-operator costs and attempts from any previous run (e.g. if module is reused)
     _per_operator_costs.clear()
     _per_operator_attempts.clear()
+    _captured_previews.clear()
+
+    # Patch evaluate() to capture node previews during exec's pipeline evaluation.
+    # This avoids a second evaluate() pass in post-exec for preview extraction.
+    _setup_preview_capture_patch()
 
     # Track execution time and LLM costs
     exec_start = time.perf_counter()
