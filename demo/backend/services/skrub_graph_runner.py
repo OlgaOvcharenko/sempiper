@@ -67,6 +67,7 @@ _per_operator_attempts: list[int] = []
 # Node preview capture: populated by _setup_preview_capture_patch during exec.
 # Maps id(data_op) -> {schema, sample, row_count} captured during evaluate callback.
 _captured_previews: dict = {}
+_preview_capture_installed: bool = False  # Guard against double-patching.
 
 
 def _capturing_generate_code_from_messages(messages):
@@ -116,6 +117,9 @@ def _setup_preview_capture_patch():
     After exec(), _captured_previews maps id(data_op) -> {schema, sample, row_count}
     for every evaluated node, so _get_skrub_dag_dict can skip the second evaluate pass.
     """
+    global _preview_capture_installed
+    if _preview_capture_installed:
+        return
     try:
         import skrub._data_ops._evaluation as _eval_mod
     except ImportError:
@@ -131,7 +135,8 @@ def _setup_preview_capture_patch():
                     if df is not None:
                         d = _dataframe_to_preview_dict(df, "")
                         if d:
-                            _captured_previews[id(da)] = {k: v for k, v in d.items() if k != "node_id"}
+                            d.pop("node_id", None)
+                            _captured_previews[id(da)] = d
                 except Exception:
                     pass
             callbacks = (*callbacks, _capture)
@@ -139,6 +144,15 @@ def _setup_preview_capture_patch():
                                  clear=clear, callbacks=callbacks)
 
     _eval_mod.evaluate = _capturing_evaluate
+    # Also patch the local binding in _skrub_namespace, which is imported at module
+    # level via `from ._evaluation import evaluate`. Patching _eval_mod alone won't
+    # reach that local reference — learner.fit() calls it directly.
+    try:
+        import skrub._data_ops._skrub_namespace as _ns_mod
+        _ns_mod.evaluate = _capturing_evaluate
+    except Exception:
+        pass
+    _preview_capture_installed = True
 
 
 def _prepare_globals():
@@ -648,15 +662,10 @@ def _extract_previews_from_capture(raw_graph):
         else:
             missing.append(node_id)
 
-    total = len(node_list)
-    got = len(previews)
-    if missing:
-        print(
-            f"Capture-based preview: {got}/{total} nodes; missing: {missing}",
-            file=sys.stderr,
-        )
-    else:
-        print(f"Capture-based preview: {got}/{total} nodes (all covered)", file=sys.stderr)
+    print(
+        f"Capture-based preview: {len(previews)}/{len(node_list)} nodes",
+        file=sys.stderr,
+    )
     return previews
 
 
@@ -774,53 +783,6 @@ def _df_to_summary(df, var_name: str) -> dict | None:
     except Exception as e:
         print(f"Warning: Could not summarise {var_name}: {e}", file=sys.stderr)
         return None
-
-
-def _effective_env_df(env: dict, var_name: str, df: "pd.DataFrame") -> "pd.DataFrame":
-    """
-    Return the DataFrame that should be used for this var's input summary when env
-    contains multiple tables. When the script subsamples one input (e.g. baskets to 50)
-    and uses it to filter another (e.g. products by basket_ID), we report the filtered
-    size so summaries adhere to the script (e.g. products row_count = rows in those 50
-    baskets, not the full table).
-    """
-    try:
-        import pandas as pd
-    except ImportError:
-        return df
-    if not isinstance(env, dict) or not isinstance(df, pd.DataFrame):
-        return df
-    for other_name, other_val in env.items():
-        if other_name == var_name or not isinstance(other_val, pd.DataFrame):
-            continue
-        if len(other_val) >= len(df):
-            continue
-        # Other table is smaller (e.g. subsampled baskets). Check if we have a FK to it.
-        pk_col = None
-        if "ID" in other_val.columns:
-            pk_col = "ID"
-        else:
-            pk_col = other_val.columns[0] if len(other_val.columns) else None
-        if not pk_col:
-            continue
-        # Common pattern: products.basket_ID -> baskets.ID
-        fk_col = None
-        stem = other_name.rstrip("s")
-        candidate = f"{stem}_ID" if stem else None
-        if candidate and candidate in df.columns:
-            fk_col = candidate
-        elif "basket_ID" in df.columns and "basket" in other_name.lower() and "ID" in other_val.columns:
-            fk_col = "basket_ID"
-            pk_col = "ID"
-        if fk_col is None:
-            continue
-        try:
-            filtered = df[df[fk_col].isin(other_val[pk_col])]
-            if len(filtered) < len(df):
-                return filtered
-        except Exception:
-            continue
-    return df
 
 
 def _try_dataop_to_dataframe(val):
@@ -958,6 +920,8 @@ def main():
 
     # Patch evaluate() to capture node previews during exec's pipeline evaluation.
     # This avoids a second evaluate() pass in post-exec for preview extraction.
+    global _preview_capture_installed
+    _preview_capture_installed = False
     _setup_preview_capture_patch()
 
     # Track execution time and LLM costs
