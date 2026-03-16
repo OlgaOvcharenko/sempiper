@@ -171,11 +171,11 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const handleClearCache = useCallback(async () => {
     if (isExecuting) return;
     try {
-      await clearCache();
+      await clearCache({ script: pipelineCode, temperature, llmName });
     } catch {
       // Best-effort
     }
-  }, [isExecuting]);
+  }, [isExecuting, pipelineCode, temperature, llmName]);
 
   // ── Optimizer status polling ──────────────────────────────────────────────
   useEffect(() => {

@@ -88,6 +88,7 @@ export function useExecution(opts: {
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
 
   const executeAbortRef = useRef<AbortController | null>(null);
+  const isExecutingRef = useRef(false);
   const skrubToCompileIdRef = useRef<Record<string, string>>({});
 
   // Keep callback refs so handlePlay doesn't need to be recreated when callbacks change.
@@ -111,7 +112,9 @@ export function useExecution(opts: {
 
   const handlePlay = useCallback(async () => {
     // If already executing, abort and return (Stop button uses the same handler).
-    if (isExecuting && executeAbortRef.current) {
+    // Use a ref (not state) for the guard so rapid double-clicks can't bypass it
+    // before React re-renders with the updated isExecuting state.
+    if (isExecutingRef.current && executeAbortRef.current) {
       executeAbortRef.current.abort();
       return;
     }
@@ -140,6 +143,7 @@ export function useExecution(opts: {
     // Extension point: caller can intercept before SSE starts (e.g. simulation replay).
     if (onBeforeExecuteRef.current?.()) return;
 
+    isExecutingRef.current = true;
     setIsExecuting(true);
 
     // Push LLM config to backend before execution.
@@ -150,6 +154,7 @@ export function useExecution(opts: {
       }
     } catch (e) {
       setLastRunError(`Config update failed: ${e instanceof Error ? e.message : String(e)}`);
+      isExecutingRef.current = false;
       setIsExecuting(false);
       return;
     }
@@ -267,6 +272,7 @@ export function useExecution(opts: {
             if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
             if (event.duration_ms != null) setLastRunDurationMs(event.duration_ms);
             if (event.profile) setLastRunProfile(event.profile);
+            isExecutingRef.current = false;
             setIsExecuting(false);
             executeAbortRef.current = null;
             // Rekey again so node_data that arrived after skrub_graph get copied to compile IDs (e.g. cache replay)
@@ -278,6 +284,7 @@ export function useExecution(opts: {
           }
         } catch (e) {
           setLastRunError(e instanceof Error ? e.message : String(e));
+          isExecutingRef.current = false;
           setIsExecuting(false);
           executeAbortRef.current = null;
         }
@@ -291,7 +298,7 @@ export function useExecution(opts: {
     );
 
     executeAbortRef.current = controller;
-  }, [pipelineCode, isExecuting, llmName, temperature, loadedScriptId, validateTemperature, newPipelineId, useCache]);
+  }, [pipelineCode, llmName, temperature, loadedScriptId, validateTemperature, newPipelineId, useCache]);
 
   return {
     isExecuting,

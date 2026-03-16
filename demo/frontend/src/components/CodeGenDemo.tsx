@@ -121,11 +121,11 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
   const handleClearCache = useCallback(async () => {
     if (isExecuting) return;
     try {
-      await clearCache();
+      await clearCache({ script: pipelineCode, temperature, llmName });
     } catch {
       // Silently ignore — cache clear is best-effort
     }
-  }, [isExecuting]);
+  }, [isExecuting, pipelineCode, temperature, llmName]);
 
   // ── Derived graph display values ──────────────────────────────────────────
   // Compile graph is always canonical — never replaced by the runtime skrub graph.

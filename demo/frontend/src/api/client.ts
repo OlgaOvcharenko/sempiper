@@ -483,12 +483,24 @@ export function executePipelineStream(
   return controller;
 }
 
+interface ClearCacheParams {
+  script: string;
+  temperature: string;
+  llmName: string;
+}
+
 /**
- * Clear all cached data (compile, execute, svg).
+ * Clear cached data for the given script/temperature/model combination.
  */
-export async function clearCache(): Promise<void> {
+export async function clearCache(params: ClearCacheParams): Promise<void> {
   const resp = await fetch("/api/cache", {
     method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      script: params.script,
+      temperature: parseFloat(params.temperature),
+      llm_name: params.llmName,
+    }),
   });
   if (!resp.ok) {
     throw new Error(`Failed to clear cache: ${resp.statusText}`);
