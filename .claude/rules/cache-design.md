@@ -14,9 +14,12 @@ Two-tier caching system for pipeline compilation and execution results.
 │  │  (single-key)     │    │    (persistent, unbounded)    │ │
 │  │                   │    │                               │ │
 │  │  Only stores      │    │  .cache/                      │ │
-│  │  entries for the  │    │  ├── compile/{key}.json       │ │
-│  │  CURRENT hash     │    │  ├── execute/{key}.json       │ │
-│  │                   │    │  └── svg/{key}.svg            │ │
+│  │  entries for the  │    │  └── {key}/                   │ │
+│  │  CURRENT hash     │    │      ├── compile.json         │ │
+│  │                   │    │      ├── execute.json         │ │
+│  │                   │    │      ├── metadata.json        │ │
+│  │                   │    │      ├── svg.svg              │ │
+│  │                   │    │      └── archive/vN/…         │ │
 │  └───────────────────┘    └───────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -59,9 +62,13 @@ Same inputs always produce the same 16-char hex key.
 2. Store in memory
 3. Write to file
 
+**On `clear_key(cache_key)`:**
+1. If cache_key is current memory key → clear memory
+2. Move non-`archive` files from `.cache/{cache_key}/` into `.cache/{cache_key}/archive/vN/`
+
 **On `clear()`:**
 1. Clear all memory entries and reset current_key
-2. Delete all files in `.cache/` subdirectories
+2. Call `clear_key` logic for every key dir in `.cache/`
 
 ## Files
 
@@ -77,7 +84,31 @@ Same inputs always produce the same 16-char hex key.
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/cache/svg` | POST | Retrieve cached SVG |
-| `/api/cache` | DELETE | Clear all cache (memory + files) |
+| `/api/cache` | DELETE | Archive cache for a specific key (requires body: script, temperature, llm_name) |
+
+## Archive
+
+`clear()` and `clear_key()` **never delete files**; they move operation files into a per-key archive subfolder:
+
+```
+.cache/
+└── {cache_key}/
+    ├── archive/
+    │   ├── v1/          ← first clear of this key
+    │   │   ├── compile.json
+    │   │   ├── execute.json
+    │   │   └── metadata.json
+    │   ├── v2/          ← second clear of this key
+    │   │   └── compile.json
+    │   └── …
+    ├── compile.json     ← current (live) files
+    └── execute.json
+```
+
+- Version numbers increment **per cache key** (each key has its own v1, v2, v3, …).
+- Clearing an empty key (or an empty cache) creates no archive folder.
+- The `archive/` subfolder is skipped when archiving — files inside it are never moved again.
+- Archived files are plain JSON/SVG on disk and can be inspected for debugging.
 
 ## Important Notes
 
@@ -86,3 +117,4 @@ Same inputs always produce the same 16-char hex key.
 3. **Single-key constraint** — memory only holds one pipeline's data at a time
 4. **Thread-safe** — memory cache uses locks for concurrent access
 5. **Format matters** — same key+operation can have different formats (e.g., JSON vs SVG)
+6. **Archive on clear** — cleared files are moved to `.cache/{key}/archive/vN/`, never deleted
