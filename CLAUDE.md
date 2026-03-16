@@ -186,7 +186,7 @@ Two-tier caching system (memory + file) for pipeline results.
 **Single-key memory constraint:**
 - Memory only holds entries for ONE cache key (hash) at a time
 - Switching to a different key clears all memory entries
-- Files remain on disk until explicitly cleared
+- Files persist on disk; clearing archives them to `.cache/{key}/archive/vN/` (never deleted)
 
 **Cache key**: `SHA256(script + "|" + temperature + "|" + llm_name)[:16]`
 
@@ -196,7 +196,7 @@ Two-tier caching system (memory + file) for pipeline results.
 - `svg` → native skrub graph SVG
 
 **Endpoints:**
-- `DELETE /api/cache` → clears both memory and files
+- `DELETE /api/cache` → archives cache for a specific key (requires body: `script`, `temperature`, `llm_name`)
 
 ---
 

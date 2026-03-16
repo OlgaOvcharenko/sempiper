@@ -8,7 +8,8 @@
       "Read(//Users/olgaovcharenko/Library/Caches/pypoetry/virtualenvs/sempipes-demo-xOt111jH-py3.12/lib/python3.12/site-packages/skrub/**)",
       "Bash(poetry run python3 -c \":*)",
       "Bash(git stash)",
-      "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/_data_ops/**)"
+      "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/_data_ops/**)",
+      "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/**)"
     ]
   }
 }

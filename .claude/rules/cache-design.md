@@ -53,7 +53,7 @@ Same inputs always produce the same 16-char hex key.
 ## Data Flow
 
 **On `get(cache_key, operation)`:**
-1. Check memory → if current_key matches AND operation exists, return it
+1. Check memory → if current_key matches AND operation exists AND backing file still exists, return it (if file was archived/deleted, evict from memory and fall through)
 2. Check file → if exists, load it, populate memory (may clear if different key), return it
 3. Return `None`
 
