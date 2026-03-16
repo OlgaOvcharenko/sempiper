@@ -381,6 +381,51 @@ class TestCacheServiceCore:
         # Should not raise
         test_cache.clear()
 
+    def test_clear_key_removes_specific_key(self, test_cache):
+        """clear_key archives entries for the given key but leaves others intact."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.set("key1", "execute", {"data": 2})
+        # Switch memory key to key2 first, then add it
+        test_cache.set("key2", "compile", {"data": 3})
+
+        test_cache.clear_key("key1")
+
+        assert test_cache.get("key1", "compile") is None
+        assert test_cache.get("key1", "execute") is None
+        # key2 must survive
+        assert test_cache.get("key2", "compile") == {"data": 3}
+
+    def test_clear_key_evicts_memory_when_active(self, test_cache):
+        """clear_key evicts memory when the cleared key is the current memory key."""
+        test_cache.set("key1", "compile", {"data": 1})
+        assert test_cache.memory_cache.current_key == "key1"
+
+        test_cache.clear_key("key1")
+
+        assert test_cache.memory_cache.current_key is None
+        assert test_cache.get("key1", "compile") is None
+
+    def test_clear_key_does_not_touch_memory_for_different_key(self, test_cache):
+        """clear_key doesn't evict memory when a different key is active in memory."""
+        test_cache.set("key2", "compile", {"data": 2})
+        # Write key1 to disk only (memory now tracks key2)
+        test_cache.memory_cache.clear()
+        test_cache.set("key1", "compile", {"data": 1})
+        # Set memory back to key2
+        test_cache.memory_cache.clear()
+        test_cache.set("key2", "compile", {"data": 2})
+
+        test_cache.clear_key("key1")
+
+        # key2 still in memory
+        assert test_cache.memory_cache.current_key == "key2"
+        assert test_cache.get("key2", "compile") == {"data": 2}
+        assert test_cache.get("key1", "compile") is None
+
+    def test_clear_key_nonexistent_no_error(self, test_cache):
+        """clear_key on a key that doesn't exist doesn't raise."""
+        test_cache.clear_key("nonexistent")
+
     def test_get_returns_none_when_file_manually_deleted(self, test_cache):
         """Manually deleting a cache file also invalidates the memory entry."""
         test_cache.set("key1", "compile", {"data": 1})
@@ -527,3 +572,87 @@ class TestCacheErrorHandling:
             result = test_cache.get(f"key_{i}", "compile")
             assert result is not None
             assert result["thread"] == i
+
+
+# ============================================================================
+# Cache Archive Tests
+# ============================================================================
+
+
+class TestCacheArchive:
+    """Tests for archive-on-clear behavior."""
+
+    def test_clear_moves_to_per_key_archive_v1(self, test_cache):
+        """First clear creates {key}/archive/v1 with operation files inside."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.set("key2", "execute", {"data": 2})
+
+        test_cache.clear()
+
+        assert (test_cache.cache_dir / "key1" / "archive" / "v1" / "compile.json").is_file()
+        assert (test_cache.cache_dir / "key2" / "archive" / "v1" / "execute.json").is_file()
+
+    def test_clear_increments_archive_version_per_key(self, test_cache):
+        """Each clear of the same key uses the next version folder."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.clear()
+
+        test_cache.set("key1", "compile", {"data": 2})
+        test_cache.clear()
+
+        assert (test_cache.cache_dir / "key1" / "archive" / "v1" / "compile.json").is_file()
+        assert (test_cache.cache_dir / "key1" / "archive" / "v2" / "compile.json").is_file()
+
+    def test_clear_data_not_accessible_after_clear(self, test_cache):
+        """Data cannot be retrieved after clear (moved away)."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.clear()
+
+        assert test_cache.get("key1", "compile") is None
+
+    def test_clear_empty_cache_no_archive_created(self, test_cache):
+        """Clearing an empty cache does not create any archive folder."""
+        test_cache.clear()
+
+        # No key dirs exist, so no archive dirs created
+        assert list(test_cache.cache_dir.iterdir()) == []
+
+    def test_clear_key_moves_to_per_key_archive(self, test_cache):
+        """clear_key archives the key's operation files inside its own archive subfolder."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.set("key2", "compile", {"data": 2})
+
+        test_cache.clear_key("key1")
+
+        # key1 operations archived inside key1/archive/v1/
+        assert (test_cache.cache_dir / "key1" / "archive" / "v1" / "compile.json").is_file()
+        # key2 untouched
+        assert (test_cache.cache_dir / "key2").is_dir()
+        assert test_cache.get("key1", "compile") is None
+        assert test_cache.get("key2", "compile") == {"data": 2}
+
+    def test_clear_does_not_recurse_into_archive(self, test_cache):
+        """Repeated clear() does not move the archive subfolder into itself."""
+        test_cache.set("key1", "compile", {"data": 1})
+        test_cache.clear()  # key1/archive/v1/compile.json
+
+        test_cache.set("key1", "compile", {"data": 2})
+        test_cache.clear()  # key1/archive/v2/compile.json
+
+        assert (test_cache.cache_dir / "key1" / "archive" / "v1" / "compile.json").is_file()
+        assert (test_cache.cache_dir / "key1" / "archive" / "v2" / "compile.json").is_file()
+        # archive folder itself must not be nested
+        assert not (test_cache.cache_dir / "key1" / "archive" / "v2" / "archive").exists()
+
+    def test_archive_files_are_readable(self, test_cache):
+        """Archived files can still be read directly from disk."""
+        import json
+
+        data = {"nodes": [1, 2], "edges": []}
+        test_cache.set("key1", "compile", data)
+        test_cache.clear()
+
+        archived_file = test_cache.cache_dir / "key1" / "archive" / "v1" / "compile.json"
+        assert archived_file.is_file()
+        with open(archived_file) as f:
+            assert json.load(f) == data

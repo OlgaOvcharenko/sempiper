@@ -350,3 +350,69 @@ class TestExecuteCacheIntegration:
         # Should NOT be the cached events (different config)
         terminal_events = [e for e in events if e.get("type") == "terminal"]
         assert not any(e.get("line") == "Cached" for e in terminal_events)
+
+
+# ============================================================================
+# DELETE /api/cache Endpoint Tests
+# ============================================================================
+
+
+class TestClearCacheEndpoint:
+    """Tests for DELETE /api/cache endpoint."""
+
+    def test_clear_without_body_returns_422(self, client_with_cache):
+        """DELETE /api/cache with no body returns 422 (body is required)."""
+        client, cache = client_with_cache
+
+        response = client.delete("/api/cache")
+
+        assert response.status_code == 422
+
+    def test_clear_specific_key_with_body(self, client_with_cache):
+        """DELETE /api/cache with script/temperature/llm_name clears only that key."""
+        client, cache = client_with_cache
+        cache_key1 = make_cache_key(SIMPLE_SCRIPT, 0.5, "gpt-4")
+        cache_key2 = make_cache_key(SIMPLE_SCRIPT_2, 0.5, "gpt-4")
+        cache.set(cache_key1, "compile", {"nodes": [1]})
+        cache.set(cache_key2, "compile", {"nodes": [2]})
+
+        response = client.request(
+            "DELETE",
+            "/api/cache",
+            json={"script": SIMPLE_SCRIPT, "temperature": 0.5, "llm_name": "gpt-4"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "cleared"
+        assert response.json()["cache_key"] == cache_key1
+        # Targeted key is gone
+        assert cache.get(cache_key1, "compile") is None
+        # Other key is preserved
+        assert cache.get(cache_key2, "compile") == {"nodes": [2]}
+
+    def test_clear_specific_key_response_contains_cache_key(self, client_with_cache):
+        """Response includes the computed cache_key when clearing a specific entry."""
+        client, cache = client_with_cache
+        expected_key = make_cache_key(SIMPLE_SCRIPT, 0.0, "gpt-4")
+
+        response = client.request(
+            "DELETE",
+            "/api/cache",
+            json={"script": SIMPLE_SCRIPT, "temperature": 0.0, "llm_name": "gpt-4"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["cache_key"] == expected_key
+
+    def test_clear_specific_key_empty_cache_no_error(self, client_with_cache):
+        """Clearing a key that doesn't exist returns 200 without raising."""
+        client, cache = client_with_cache
+
+        response = client.request(
+            "DELETE",
+            "/api/cache",
+            json={"script": "nonexistent script", "temperature": 0.5, "llm_name": "gpt-4"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "cleared"
