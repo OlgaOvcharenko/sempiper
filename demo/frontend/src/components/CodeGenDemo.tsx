@@ -115,6 +115,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     compileError,
     compileValidationErrors,
     compileTimingsMs,
+    refreshCompileGraph,
   } = compile;
 
   // ── Cache clear ───────────────────────────────────────────────────────────
@@ -125,7 +126,8 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     } catch {
       // Silently ignore — cache clear is best-effort
     }
-  }, [isExecuting, pipelineCode, temperature, llmName]);
+    await refreshCompileGraph();
+  }, [isExecuting, pipelineCode, temperature, llmName, refreshCompileGraph]);
 
   // ── Derived graph display values ──────────────────────────────────────────
   // Compile graph is always canonical — never replaced by the runtime skrub graph.

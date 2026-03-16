@@ -156,6 +156,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     compileEdges,
     compileValidationErrors,
     compileTimingsMs,
+    refreshCompileGraph,
   } = compile;
 
   // ── Wrap handleLoadScript to clear optimizer trial on script change ────────
@@ -175,7 +176,8 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     } catch {
       // Best-effort
     }
-  }, [isExecuting, pipelineCode, temperature, llmName]);
+    await refreshCompileGraph();
+  }, [isExecuting, pipelineCode, temperature, llmName, refreshCompileGraph]);
 
   // ── Optimizer status polling ──────────────────────────────────────────────
   useEffect(() => {
