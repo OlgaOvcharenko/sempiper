@@ -211,8 +211,8 @@ def test_chained_methods_map_to_groupby():
     assert result["3"] == "groupby_2"  # reset_index maps to groupby
 
 
-def test_isin_maps_to_context():
-    """The .isin() method maps to the context it appears in."""
+def test_isin_maps_to_compile_counterpart():
+    """When a <CallMethod 'isin'> compile node exists, the skrub isin node maps to it."""
     graph = {
         "nodes": [
             {"id": "0", "label": "<Var 'df'>"},
@@ -230,10 +230,43 @@ def test_isin_maps_to_context():
             label="<Var 'df'>",
             source_range=SourceRange(start_line=1, start_column=1, end_line=1, end_column=10),
         ),
+        CompileNode(
+            id="isin_2",
+            type="operator",
+            label="<CallMethod 'isin'>",
+            source_range=SourceRange(start_line=2, start_column=1, end_line=2, end_column=10),
+        ),
     ]
 
     result = _build_skrub_to_compile_id(graph, runnable)
 
-    # GetItem doesn't map (no as_X/as_y), but isin should map to var_df
     assert result["0"] == "var_df_1"
-    assert result["2"] == "var_df_1"  # isin maps to last mapped node (var_df)
+    assert result["2"] == "isin_2"  # isin maps to its own compile counterpart
+
+
+def test_isin_without_compile_counterpart_unmapped():
+    """When no <CallMethod 'isin'> compile node exists, the skrub isin node is not mapped
+    via the special last_mapped_id path (it stays unmapped or gets ancestor mapping)."""
+    graph = {
+        "nodes": [
+            {"id": "0", "label": "<Var 'df'>"},
+            {"id": "2", "label": "<CallMethod 'isin'>"},
+        ],
+        "parents": {},
+        "children": {},
+    }
+
+    runnable = [
+        CompileNode(
+            id="var_df_1",
+            type="input",
+            label="<Var 'df'>",
+            source_range=SourceRange(start_line=1, start_column=1, end_line=1, end_column=10),
+        ),
+    ]
+
+    result = _build_skrub_to_compile_id(graph, runnable)
+
+    assert result["0"] == "var_df_1"
+    # Without a matching compile node and no parent edges, isin is not force-mapped
+    assert "2" not in result

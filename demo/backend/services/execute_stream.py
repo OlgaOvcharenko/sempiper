@@ -21,6 +21,13 @@ from services.data_summary_extractor import get_data_summary
 
 logger = logging.getLogger(__name__)
 
+
+def _sse(data: dict) -> bytes:
+    """Serialize an SSE event dict, injecting a wall-clock timestamp (Unix ms)."""
+    data["ts_ms"] = int(time.time() * 1000)
+    return f"data: {json.dumps(data)}\n\n".encode()
+
+
 # Backend root (demo/backend) so -m services.skrub_graph_runner resolves when cwd is set.
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Directory for saved skrub native SVG graphs (demo/graph_svgs/), keyed by script id.
@@ -471,14 +478,6 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
                 result[skid] = last_mapped_id
                 continue
 
-        # Special case: Map .isin() method calls to nearby operations
-        # .isin() is often used in filtering: df[df['col'].isin(values)]
-        if label == "<callmethod 'isin'>":
-            # Map to the last mapped node if available (likely a GetItem or variable)
-            if last_mapped_id:
-                result[skid] = last_mapped_id
-                continue
-
         occurrence = label_usage.get(label, 0)
         compile_ids = label_to_compile_ids.get(label, [])
 
@@ -834,7 +833,7 @@ def stream_execute_events(
 
         if emit_start_time is None:
             emit_start_time = time.perf_counter()
-        yield f"data: {json.dumps({'type': 'terminal', 'line': 'Starting pipeline execution...'})}\n\n".encode()
+        yield _sse({'type': 'terminal', 'line': 'Starting pipeline execution...'})
         time.sleep(0.05)
 
         # Code assignment logic:
@@ -857,7 +856,7 @@ def stream_execute_events(
         for node in runnable:
             # Use skrub ID when runtime graph is available, compile ID otherwise
             display_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
-            yield f"data: {json.dumps({'type': 'terminal', 'line': f'Running {node.label} ({display_id})...'})}\n\n".encode()
+            yield _sse({'type': 'terminal', 'line': f'Running {node.label} ({display_id})...'})
             time.sleep(0.05)
 
             # Determine if this is a semantic (code-generating) operator
@@ -895,7 +894,7 @@ def stream_execute_events(
                         logger.warning(f"Failed to get real data summary for {var_name}: {e}")
 
                 if summary is not None:
-                    yield f"data: {json.dumps({'type': 'input_summary', **summary})}\n\n".encode()
+                    yield _sse({'type': 'input_summary', **summary})
                     time.sleep(0.02)
             elif not is_semantic:
                 # Non-semantic operators (subsample, eval, etc.): no input_summary emitted.
@@ -934,7 +933,7 @@ def stream_execute_events(
                     "cost_usd": node_cost,
                     "is_fallback": is_fallback,
                 }
-                yield f"data: {json.dumps(payload)}\n\n".encode()
+                yield _sse(payload)
                 emitted_node_code_ids.add(emit_node_id)  # Track to prevent duplicate emissions
                 time.sleep(0.05)
 
@@ -1008,7 +1007,7 @@ def stream_execute_events(
                         "cost_usd": info["cost_usd"],
                         "is_fallback": False,
                     }
-                    yield f"data: {json.dumps(payload)}\n\n".encode()
+                    yield _sse(payload)
                     emitted_node_code_ids.add(skid)  # Track to prevent duplicates
                     time.sleep(0.02)
         else:
@@ -1051,7 +1050,7 @@ def stream_execute_events(
                             "cost_usd": cost_usd,
                             "is_fallback": False,
                         }
-                        yield f"data: {json.dumps(payload)}\n\n".encode()
+                        yield _sse(payload)
                         emitted_node_code_ids.add(skid)  # Track to prevent duplicates
                         time.sleep(0.02)
 
@@ -1061,7 +1060,7 @@ def stream_execute_events(
         # Emit graph when we have nodes (from runner ##SKRUB_GRAPH## or fallback from compile)
         if graph_from_run and len(runner_nodes) > 0:
             # skrub_to_compile already built earlier for node_code events
-            yield f"data: {json.dumps({'type': 'skrub_graph', 'graph': graph_from_run, 'skrubToCompileId': skrub_to_compile})}\n\n".encode()
+            yield _sse({'type': 'skrub_graph', 'graph': graph_from_run, 'skrubToCompileId': skrub_to_compile})
             # Note: input_summary events already emitted during node processing loop (lines 700-704)
             # No need to emit them again here
 
@@ -1077,7 +1076,7 @@ def stream_execute_events(
                 "sample": preview.get("sample", []),
                 "row_count": preview.get("row_count", 0),
             }
-            yield f"data: {json.dumps(payload)}\n\n".encode()
+            yield _sse(payload)
             # Also emit for the compile node id if we have a mapping
             if graph_from_run:
                 skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
@@ -1091,7 +1090,7 @@ def stream_execute_events(
                         "sample": preview.get("sample", []),
                         "row_count": preview.get("row_count", 0),
                     }
-                    yield f"data: {json.dumps(payload_compile)}\n\n".encode()
+                    yield _sse(payload_compile)
 
         # Emit node_data for VAR_PREVIEW (per-variable) for compile nodes not already covered
         if var_previews and runnable:
@@ -1116,16 +1115,16 @@ def stream_execute_events(
                         "sample": vp.get("sample", []),
                         "row_count": vp.get("row_count", 0),
                     }
-                    yield f"data: {json.dumps(payload)}\n\n".encode()
+                    yield _sse(payload)
 
         # Emit error if subprocess failed
         if exec_failed:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Pipeline execution failed. Check terminal for details.'})}\n\n".encode()
-            yield f"data: {json.dumps({'type': 'terminal', 'line': 'Pipeline execution failed.'})}\n\n".encode()
+            yield _sse({'type': 'error', 'message': 'Pipeline execution failed. Check terminal for details.'})
+            yield _sse({'type': 'terminal', 'line': 'Pipeline execution failed.'})
         else:
-            yield f"data: {json.dumps({'type': 'terminal', 'line': 'Done.'})}\n\n".encode()
+            yield _sse({'type': 'terminal', 'line': 'Done.'})
     except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n".encode()
+        yield _sse({'type': 'error', 'message': str(e)})
     emit_ms = (time.perf_counter() - emit_start_time) * 1000 if emit_start_time else 0.0
     profile: dict = {}
     if prepare_ms > 0 or subprocess_wall_ms > 0 or emit_ms > 0:
@@ -1139,8 +1138,8 @@ def stream_execute_events(
     if runner_post_exec_ms is not None:
         profile["runner_post_exec_ms"] = round(runner_post_exec_ms, 1)
     # Emit cost event so clients can show run cost before done (design: stream yields cost and done).
-    yield f"data: {json.dumps({'type': 'cost', 'total_usd': total_cost_usd})}\n\n".encode()
+    yield _sse({'type': 'cost', 'total_usd': total_cost_usd})
     done_payload: dict = {"type": "done", "total_cost_usd": total_cost_usd, "duration_ms": duration_ms}
     if profile:
         done_payload["profile"] = profile
-    yield f"data: {json.dumps(done_payload)}\n\n".encode()
+    yield _sse(done_payload)
