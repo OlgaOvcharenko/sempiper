@@ -684,6 +684,7 @@ def stream_execute_events(
 
         # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##), or SVG.
         # When DEMO_E2E=1, skip real subprocess (no sempipes/LLM) for full-stack E2E tests.
+        captured: list[dict] = []
         captured_codes: list[str] = []
         captured_costs: list[float] = []
         captured_attempts: list[int] = []
@@ -937,54 +938,10 @@ def stream_execute_events(
                 emitted_node_code_ids.add(emit_node_id)  # Track to prevent duplicate emissions
                 time.sleep(0.05)
 
-        # ═══════════════════════════════════════════════════════════════════════════════
-        # ID Matching System — Why We Need to Map Node IDs
-        # ═══════════════════════════════════════════════════════════════════════════════
-        #
-        # PROBLEM: Three ID systems that need to work together
-        # ────────────────────────────────────────────────────────────────────────────────
-        # 1. Static compile IDs (from parsing source code):
-        #    - Semantic names like "var_products_4", "subsample_5", "sem_gen_features_6"
-        #    - Fast to generate (no pipeline execution)
-        #    - Assigned by document order (line numbers)
-        #    - Used by 'runnable' nodes below
-        #
-        # 2. Dynamic compile IDs (from running pipeline to get skrub graph):
-        #    - Numeric IDs like "0", "1", "2" (assigned by skrub at runtime)
-        #    - Accurate graph structure (captures all operations: groupby -> agg -> reset_index)
-        #    - Frontend receives these in compile response (always dynamic)
-        #
-        # 3. Runtime execution IDs (from this execute stream):
-        #    - Numeric IDs like "0", "1", "2", "3" (assigned by skrub during execution)
-        #    - MAY DIFFER from dynamic compile IDs because pipeline runs twice!
-        #    - This is the source of truth for matching node_code events to graph nodes
-        #
-        # WHY THE PROBLEM EXISTS:
-        # ────────────────────────────────────────────────────────────────────────────────
-        # - Compile and execute both run the pipeline separately (dynamic extraction only)
-        # - Skrub assigns numeric node IDs during each run
-        # - Skrub assigns numeric node IDs during each run
-        # - Different runs can produce different IDs (e.g., compile: {0,1,7}, execute: {0,1,2,3})
-        # - Frontend displays compile graph but receives node_code events from execute
-        # - IDs must match or frontend can't show code when user clicks a node!
-        #
-        # OUR SOLUTION:
-        # ────────────────────────────────────────────────────────────────────────────────
-        # 1. Execute emits skrub_graph event with the ACTUAL runtime graph used
-        # 2. Frontend uses this runtime graph (not compile preview) for node ID lookups
-        # 3. Build skrub_to_compile mapping for backward compatibility / debugging
-        # 4. Emit node_code events with runtime skrub IDs (numeric)
-        # 5. Frontend matches events to runtime graph nodes by ID
-        #
-        # KEY INSIGHT:
-        # ────────────────────────────────────────────────────────────────────────────────
-        # The runtime graph from execute is the single source of truth for node IDs.
-        # Compile preview graph is for initial visualization only.
-        # Once execution starts, frontend switches to using runtime graph for all ID matching.
-        #
-        # ═══════════════════════════════════════════════════════════════════════════════
-
-        # Build skrub to compile mapping (used for skrubToCompileId in skrub_graph event)
+        # Build skrub_to_compile mapping for the skrub_graph SSE event (skrubToCompileId).
+        # The compile graph (from /api/compile) is ALWAYS the display graph — it never changes
+        # during execution. The skrub_graph SSE event only carries this mapping so the frontend
+        # can resolve which compile node to show details for when a graph node is clicked.
         skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
         compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
 
@@ -1079,7 +1036,6 @@ def stream_execute_events(
             yield _sse(payload)
             # Also emit for the compile node id if we have a mapping
             if graph_from_run:
-                skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable)
                 compile_id = skrub_to_compile.get(skid)
                 if compile_id:
                     compile_ids_with_node_data.add(compile_id)
