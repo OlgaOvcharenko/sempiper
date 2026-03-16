@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,6 +22,9 @@ from services.execute_stream import stream_execute_events
 
 router = APIRouter(prefix="/api", tags=["codegen"])
 generator = CodeGenerator()
+
+# Only one live pipeline execution at a time (demo constraint).
+_execute_lock = threading.Lock()
 
 # Pipeline scripts live in pipeline_scripts/ at repository root (parent of demo/).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -175,6 +179,13 @@ def compile_pipeline(req: CompileRequest, request: Request) -> CompileResponse:
         cache_key = make_cache_key(req.input_code, req.temperature, req.llm_name)
         cached = cache_service.get(cache_key, "compile")
         if cached:
+            cache_service.ensure_metadata(cache_key, "compile", {
+                "script": _normalize_script(req.input_code),
+                "llm_name": req.llm_name,
+                "temperature": req.temperature,
+                "script_id": req.script_id,
+                "use_dynamic": True,
+            })
             return CompileResponse(**cached)
 
     timings: dict[str, float] | None = (
@@ -223,38 +234,45 @@ def _stream_and_cache_events(
     temperature: float | None,
 ):
     """Stream execute events while collecting them for caching."""
+    if not _execute_lock.acquire(blocking=False):
+        yield b'data: {"type":"error","message":"Another execution is already in progress. Please wait for it to finish."}\n\n'
+        yield b'data: {"type":"done"}\n\n'
+        return
+
     collected_events: list[dict] = []
+    try:
+        for event_bytes in stream_execute_events(
+            input_code,
+            script_id=script_id,
+            llm_name=llm_name,
+            temperature=temperature,
+            cache_key=cache_key,
+        ):
+            # Parse event to collect for caching
+            # stream_execute_events yields bytes
+            event_str = event_bytes.decode("utf-8") if isinstance(event_bytes, bytes) else event_bytes
+            if event_str.startswith("data: "):
+                try:
+                    # Remove "data: " prefix and trailing newlines
+                    json_str = event_str[6:].rstrip("\n")
+                    event_data = json.loads(json_str)
+                    collected_events.append(event_data)
+                except json.JSONDecodeError:
+                    pass
 
-    for event_bytes in stream_execute_events(
-        input_code,
-        script_id=script_id,
-        llm_name=llm_name,
-        temperature=temperature,
-        cache_key=cache_key,
-    ):
-        # Parse event to collect for caching
-        # stream_execute_events yields bytes
-        event_str = event_bytes.decode("utf-8") if isinstance(event_bytes, bytes) else event_bytes
-        if event_str.startswith("data: "):
-            try:
-                # Remove "data: " prefix and trailing newlines
-                json_str = event_str[6:].rstrip("\n")
-                event_data = json.loads(json_str)
-                collected_events.append(event_data)
-            except json.JSONDecodeError:
-                pass
+            yield event_bytes
 
-        yield event_bytes
-
-    # Store in cache after streaming completes with metadata (normalized script)
-    if cache_key and collected_events:
-        metadata = {
-            "script": _normalize_script(input_code),  # Store normalized version
-            "llm_name": llm_name,
-            "temperature": temperature,
-            "script_id": script_id,
-        }
-        cache_service.set(cache_key, "execute", {"events": collected_events}, metadata=metadata)
+        # Store in cache after streaming completes with metadata (normalized script)
+        if cache_key and collected_events:
+            metadata = {
+                "script": _normalize_script(input_code),  # Store normalized version
+                "llm_name": llm_name,
+                "temperature": temperature,
+                "script_id": script_id,
+            }
+            cache_service.set(cache_key, "execute", {"events": collected_events}, metadata=metadata)
+    finally:
+        _execute_lock.release()
 
 
 @router.post("/execute")
@@ -270,6 +288,12 @@ def execute_pipeline(req: ExecuteRequest):
         cache_key = make_cache_key(req.input_code, req.temperature, req.llm_name)
         cached = cache_service.get(cache_key, "execute")
         if cached and "events" in cached:
+            cache_service.ensure_metadata(cache_key, "execute", {
+                "script": _normalize_script(req.input_code),
+                "llm_name": req.llm_name,
+                "temperature": req.temperature,
+                "script_id": req.script_id,
+            })
             return StreamingResponse(
                 _replay_cached_events(cached["events"]),
                 media_type="text/event-stream",
@@ -329,8 +353,15 @@ def get_cached_svg(req: CacheSvgRequest):
     raise HTTPException(status_code=404, detail="SVG not found in cache")
 
 
+class ClearCacheRequest(BaseModel):
+    script: str
+    temperature: float
+    llm_name: str
+
+
 @router.delete("/cache")
-def clear_cache():
-    """Clear all cached data (compile, execute, svg)."""
-    cache_service.clear()
-    return {"status": "cleared"}
+def clear_cache(req: ClearCacheRequest):
+    """Clear cached data for the specific script/temperature/model combination."""
+    cache_key = make_cache_key(req.script, req.temperature, req.llm_name)
+    cache_service.clear_key(cache_key)
+    return {"status": "cleared", "cache_key": cache_key}
