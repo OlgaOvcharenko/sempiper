@@ -846,7 +846,8 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
     Priority order:
     1. Top-level DataOps (e.g. products = ... .skb.subsample(n=50)) — materialize with
        .skb.eval() so row_count reflects the actual subsampled size.
-    2. g["env"] — set by pipeline.skb.get_data(); use when script explicitly sets env.
+    2. Pipeline data environment dict — checked under common names: env, env_train, env_test,
+       environment, train_env, data_env (first match wins per key, deduped by var_name).
     3. Top-level DataFrame variables in g (plain pandas DataFrames).
     """
     try:
