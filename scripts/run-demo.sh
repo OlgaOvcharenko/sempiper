@@ -15,6 +15,14 @@ if [ -f "$PIDS_FILE" ]; then
   exit 1
 fi
 
+# Set up per-run log files (timestamped so each `make run` gets its own files)
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOGS_DIR="$REPO_ROOT/logs"
+mkdir -p "$LOGS_DIR"
+BACKEND_LOG="$LOGS_DIR/backend-$TIMESTAMP.log"
+FRONTEND_LOG="$LOGS_DIR/frontend-$TIMESTAMP.log"
+echo "Logging to $LOGS_DIR/backend-$TIMESTAMP.log and frontend-$TIMESTAMP.log"
+
 # Ensure backend (Poetry) deps are installed so compile/execute have duckdb, tabpfn, etc.
 echo "Ensuring backend dependencies are installed..."
 poetry install --no-interaction
@@ -26,11 +34,11 @@ if [ ! -d "demo/frontend/node_modules" ]; then
 fi
 
 echo "Starting backend (http://localhost:8000)..."
-poetry run uvicorn main:app --reload --app-dir demo/backend &
+poetry run uvicorn main:app --reload --app-dir demo/backend 2>&1 | tee "$BACKEND_LOG" &
 BACKEND_PID=$!
 
 echo "Starting frontend (http://localhost:5173)..."
-(cd demo/frontend && npm run dev) &
+(cd demo/frontend && npm run dev) 2>&1 | tee "$FRONTEND_LOG" &
 FRONTEND_PID=$!
 
 echo "$BACKEND_PID" >> "$PIDS_FILE"
