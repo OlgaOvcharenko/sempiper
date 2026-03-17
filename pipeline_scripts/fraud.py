@@ -1,13 +1,6 @@
-import time
 import sempipes
-
-import warnings
-warnings.filterwarnings("ignore")
-
 import skrub
 from catboost import CatBoostClassifier
-
-# 3rd party libraries for diverse processing
 import nltk
 from nltk.tokenize import word_tokenize
 import numpy as np
@@ -15,10 +8,14 @@ import pandas as pd
 from scipy import stats
 from unidecode import unidecode
 
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 import skrub.selectors as s
+from nltk.corpus import stopwords as _nltk_stopwords
 from scipy.stats import shapiro
+
+import warnings
+warnings.filterwarnings("ignore")
 
 # Download NLTK data if needed
 for resource, path in [('punkt_tab', 'tokenizers/punkt_tab'), ('stopwords', 'corpora/stopwords')]:
@@ -26,15 +23,7 @@ for resource, path in [('punkt_tab', 'tokenizers/punkt_tab'), ('stopwords', 'cor
         nltk.data.find(path)
     except LookupError:
         nltk.download(resource, quiet=True)
-
-# Materialize as a plain frozenset — NLTK's LazyCorpusLoader is not picklable,
-# which causes a RecursionError when skrub/cloudpickle serializes the learner.
-from nltk.corpus import stopwords as _nltk_stopwords
 ENGLISH_STOP_WORDS = frozenset(_nltk_stopwords.words('english'))
-
-sempipes.update_config(
-    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0})
-)
 
 def shapiro_test(df):
     for col in df.columns[:-1]:
@@ -105,18 +94,15 @@ def sempipes_pipeline():
 
     products.skb.apply_func(shapiro_test)
 
-    vectorizer = skrub.TableVectorizer()
-    vectorized_products = kept_products.skb.apply(
-        vectorizer,
-        exclude_cols=["basket_ID"],
-    )
-
+    # Aggregate product features per basket BEFORE vectorizing
     augmented_baskets = basket_ids.sem_agg_features(
-        vectorized_products,
+        kept_products,
         left_on="ID",
         right_on="basket_ID",
         nl_prompt="""
-        Aggregate the product features by basket ID.
+        Aggregate the product features by basket ID. For numeric columns use mean,
+        sum, and count. For categorical columns use mode. Use simple pandas groupby
+        with a dict of aggregation functions — do not use tuple-kwargs syntax.
         """,
         name="basket_features",
         how_many=1,
@@ -124,9 +110,11 @@ def sempipes_pipeline():
 
     augmented_baskets = augmented_baskets.skb.drop(cols=["ID"])
 
+    vectorizer = skrub.TableVectorizer()
+    vectorized_baskets = augmented_baskets.skb.apply(vectorizer)
 
     catboost_classifier = CatBoostClassifier(verbose=0, iterations=100)
-    fraud_detector = augmented_baskets.skb.apply(
+    fraud_detector = vectorized_baskets.skb.apply(
         catboost_classifier,
         y=fraud_flags
     )
@@ -136,7 +124,7 @@ def sempipes_pipeline():
 
 # Load dataset
 dataset = skrub.datasets.fetch_credit_fraud()
-baskets_df = dataset.baskets.sample(n=50, random_state=42)
+baskets_df = dataset.baskets
 train_baskets, test_baskets = train_test_split(baskets_df, test_size=0.25, random_state=42)
 
 # Run pipeline
@@ -154,5 +142,6 @@ env_test["baskets"] = test_baskets
 learner.fit(env_train)
 y_pred = learner.predict(env_test)
 
-accuracy = accuracy_score(test_baskets["fraud_flag"], y_pred)
-print(f"Accuracy: {accuracy:.2%}")
+f1 = f1_score(test_baskets["fraud_flag"], y_pred, average="macro")
+print(f"F1 Score: {f1:.2%}")
+_pipeline_metric = {"name": "F1 (macro)", "value": float(f1)}
