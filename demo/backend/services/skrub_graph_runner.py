@@ -152,7 +152,6 @@ def _setup_preview_capture_patch():
         "skrub._data_ops._estimator",
     ):
         try:
-            import importlib
             _mod = importlib.import_module(_mod_name)
             _mod.evaluate = _capturing_evaluate
         except Exception:
@@ -437,6 +436,23 @@ def _topological_order(node_ids, parents_map):
     return result
 
 
+def _nodes_to_list(nodes_raw) -> list:
+    """Normalize raw_graph["nodes"] to a list (handles both dict and list formats)."""
+    return list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+
+
+_ENV_KEYS = ("env", "env_train", "env_test", "environment", "train_env", "data_env")
+
+
+def _find_env_dict(g: dict) -> dict | None:
+    """Return the first dict value in g matching a standard environment key name."""
+    for key in _ENV_KEYS:
+        cand = g.get(key)
+        if isinstance(cand, dict):
+            return cand
+    return None
+
+
 def _graph_to_serializable(raw):
     """
     Convert _Graph().run(dag) output to JSON-serializable dict.
@@ -449,7 +465,7 @@ def _graph_to_serializable(raw):
     parents_raw = raw.get("parents") or {}
     children_raw = raw.get("children") or {}
 
-    node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+    node_list = _nodes_to_list(nodes_raw)
     obj_to_idx = {}
     for i, n in enumerate(node_list):
         try:
@@ -654,18 +670,14 @@ def _extract_previews_from_capture(raw_graph):
     if not raw_graph or not isinstance(raw_graph, dict):
         return []
 
-    nodes_raw = raw_graph.get("nodes") or []
-    node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+    node_list = _nodes_to_list(raw_graph.get("nodes") or [])
 
     previews = []
-    missing = []
     for i, node_obj in enumerate(node_list):
         node_id = str(i)
         summary = _captured_previews.get(id(node_obj))
         if summary:
             previews.append({"node_id": node_id, **summary})
-        else:
-            missing.append(node_id)
 
     print(
         f"Capture-based preview: {len(previews)}/{len(node_list)} nodes",
@@ -686,8 +698,7 @@ def _extract_all_previews(raw_graph):
     if not raw_graph or not isinstance(raw_graph, dict):
         return []
 
-    nodes_raw = raw_graph.get("nodes") or []
-    node_list = list(nodes_raw) if not isinstance(nodes_raw, dict) else list(nodes_raw.values())
+    node_list = _nodes_to_list(raw_graph.get("nodes") or [])
 
     previews = []
     missing_ids = []
@@ -736,13 +747,7 @@ def _get_skrub_dag_dict(code, globals_dict):
     except Exception:
         raw_graph = None
 
-    # Find data environment: "env" first, then common alternatives (env_train, env_test, etc.)
-    env = None
-    for _env_key in ("env", "env_train", "env_test", "environment", "train_env", "data_env"):
-        _cand = globals_dict.get(_env_key)
-        if isinstance(_cand, dict):
-            env = _cand
-            break
+    env = _find_env_dict(globals_dict)
     if raw_graph and isinstance(raw_graph, dict) and "nodes" in raw_graph:
         try:
             graph_dict = _graph_to_serializable(raw_graph)
@@ -755,17 +760,9 @@ def _get_skrub_dag_dict(code, globals_dict):
                 previews = _extract_previews_from_capture(raw_graph)
             except Exception:
                 previews = []
-            if not previews:
-                # Fast path got nothing (e.g. node ID mismatch after sem_choose resolution).
-                # Fall back to a single evaluate pass with the known environment.
-                _evaluate_and_cache_all_nodes(result, env)
-                try:
-                    previews = _extract_all_previews(raw_graph)
-                except Exception:
-                    pass
-        else:
-            # Fallback: exec didn't trigger a fit_transform evaluate (e.g. fitted=False).
-            # Run a single evaluate pass to populate caches, then read previews.
+        if not previews:
+            # Fallback: either exec didn't trigger a fit_transform evaluate (e.g. fitted=False),
+            # or capture returned nothing (e.g. node ID mismatch after sem_choose resolution).
             _evaluate_and_cache_all_nodes(result, env)
             try:
                 previews = _extract_all_previews(raw_graph)
@@ -869,11 +866,9 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
                 summaries.append(s)
                 seen.add(var_name)
 
-    # Priority 2: pipeline data environment (env, env_train, env_test, or any env_* dict)
-    for _env_key in ("env", "env_train", "env_test", "environment", "train_env", "data_env"):
-        _env_candidate = g.get(_env_key)
-        if not isinstance(_env_candidate, dict):
-            continue
+    # Priority 2: pipeline data environment
+    _env_candidate = _find_env_dict(g)
+    if _env_candidate is not None:
         for var_name, val in _env_candidate.items():
             if var_name in seen or not isinstance(var_name, str) or var_name.startswith("_"):
                 continue
@@ -942,8 +937,7 @@ def main():
 
     # Patch evaluate() to capture node previews during exec's pipeline evaluation.
     # This avoids a second evaluate() pass in post-exec for preview extraction.
-    global _preview_capture_installed
-    _preview_capture_installed = False
+    # Install once per process; _captured_previews.clear() above handles per-run reset.
     _setup_preview_capture_patch()
 
     # Track execution time and LLM costs
