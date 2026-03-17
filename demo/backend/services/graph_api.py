@@ -872,8 +872,10 @@ def _extract_key_from_skrub_label(label: str) -> str:
         estimator = apply_match.group(1).lower()
         if estimator in ("learnedimputer", "llmimputer", "imputedlearner", "semfillnawithllm", "semfillnalllmplusmodel"):
             return "sem_fillna"
-        if estimator in ("llmfeaturegenerator", "codebasedfeatureextractor", "caafe", "semgenfeaturescaafe"):
+        if estimator in ("llmfeaturegenerator", "caafe", "semgenfeaturescaafe"):
             return "sem_gen_features"
+        if estimator in ("codebasedfeatureextractor",):
+            return "sem_extract_features"
         if estimator in ("codedataaugmentor", "directdataaugmentor", "codeaugmentor", "semaugmentdata"):
             return "sem_augment"
         if estimator in ("selectcols", "semselectllm", "filter"):
@@ -1157,7 +1159,10 @@ def _merge_source_ranges(
         if not key.endswith("_matched"):
             effective_label = node.label
         if key == "sem_gen_features":
-            if "sem_extract_features" in label_to_ranges:
+            # Only fall back to sem_extract_features when static code has sem_extract_features
+            # but NOT sem_gen_features (i.e., the node is a sem_extract_features in disguise).
+            # When both are present, each gets its own direct match below.
+            if "sem_extract_features" in label_to_ranges and "sem_gen_features" not in label_to_ranges:
                 occurrence = label_usage.get("sem_extract_features", 0)
                 ranges = label_to_ranges["sem_extract_features"]
                 if occurrence < len(ranges):

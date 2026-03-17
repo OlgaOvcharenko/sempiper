@@ -145,7 +145,6 @@ _OPERATOR_MAPPINGS = {
 
     # sem_gen_features
     "llmfeaturegenerator": "sem_gen_features",
-    "codebasedfeatureextractor": "sem_gen_features",
     "caafe": "sem_gen_features",
     "semgenfeaturescaafe": "sem_gen_features",
 
@@ -177,7 +176,8 @@ _OPERATOR_MAPPINGS = {
     "codedatadistiller": "sem_distill",
     "semdistilldata": "sem_distill",
 
-    # sem_extract_features
+    # sem_extract_features (CodeBasedFeatureExtractor is used by sem_extract_features with generate_via_code=True)
+    "codebasedfeatureextractor": "sem_extract_features",
     "llmfeatureextractor": "sem_extract_features",
     "semextractfeaturesllm": "sem_extract_features",
 
