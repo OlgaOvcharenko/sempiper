@@ -229,3 +229,83 @@ def test_extract_preview_returns_none_when_no_skb():
     """Node without .skb attribute yields None."""
     node_obj = SimpleNamespace()
     assert _extract_preview_from_dataop(node_obj, "0") is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for preview capture patch and _extract_previews_from_capture
+# ---------------------------------------------------------------------------
+
+import services.skrub_graph_runner as _runner
+from services.skrub_graph_runner import (
+    _extract_previews_from_capture,
+    _setup_preview_capture_patch,
+)
+
+
+def test_extract_previews_from_capture_matches_by_object_identity():
+    """_extract_previews_from_capture maps node objects to summaries by id()."""
+    node_a = SimpleNamespace()
+    node_b = SimpleNamespace()
+    summary_a = {"schema": [{"name": "x", "dtype": "int64"}], "sample": [{"x": 1}], "row_count": 1}
+    summary_b = {"schema": [{"name": "y", "dtype": "float64"}], "sample": [{"y": 2.0}], "row_count": 2}
+
+    _runner._captured_previews.clear()
+    _runner._captured_previews[id(node_a)] = summary_a
+    _runner._captured_previews[id(node_b)] = summary_b
+
+    raw_graph = {"nodes": {0: node_a, 1: node_b}}
+    previews = _extract_previews_from_capture(raw_graph)
+
+    assert len(previews) == 2
+    by_id = {p["node_id"]: p for p in previews}
+    assert by_id["0"]["row_count"] == 1
+    assert by_id["1"]["row_count"] == 2
+
+    _runner._captured_previews.clear()
+
+
+def test_extract_previews_from_capture_partial_match():
+    """Nodes with no captured summary are skipped (not emitted as empty rows)."""
+    node_a = SimpleNamespace()
+    node_b = SimpleNamespace()  # no capture for this one
+    summary_a = {"schema": [{"name": "a", "dtype": "int64"}], "sample": [], "row_count": 0}
+
+    _runner._captured_previews.clear()
+    _runner._captured_previews[id(node_a)] = summary_a
+
+    raw_graph = {"nodes": {0: node_a, 1: node_b}}
+    previews = _extract_previews_from_capture(raw_graph)
+
+    assert len(previews) == 1
+    assert previews[0]["node_id"] == "0"
+
+    _runner._captured_previews.clear()
+
+
+def test_extract_previews_from_capture_empty_graph():
+    """Empty or None raw_graph returns empty list."""
+    _runner._captured_previews.clear()
+    assert _extract_previews_from_capture({}) == []
+    assert _extract_previews_from_capture(None) == []
+    assert _extract_previews_from_capture({"nodes": {}}) == []
+
+
+def test_setup_preview_capture_patch_installs_on_all_modules():
+    """_setup_preview_capture_patch replaces evaluate in all three skrub modules."""
+    pytest.importorskip("skrub._data_ops._evaluation")
+
+    _runner._preview_capture_installed = False
+    _setup_preview_capture_patch()
+
+    import skrub._data_ops._evaluation as _eval_mod
+    import skrub._data_ops._skrub_namespace as _ns_mod
+    import skrub._data_ops._estimator as _est_mod
+
+    # All three should now point to the same wrapper function.
+    assert _eval_mod.evaluate is _ns_mod.evaluate
+    assert _eval_mod.evaluate is _est_mod.evaluate
+
+    # The wrapper should be idempotent (re-calling doesn't double-wrap).
+    first = _eval_mod.evaluate
+    _setup_preview_capture_patch()
+    assert _eval_mod.evaluate is first
