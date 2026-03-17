@@ -425,15 +425,6 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
               </div>
             </div>
 
-            {/* Error messages */}
-            {lastRunError != null && (
-              <p
-                className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1"
-                role="alert"
-              >
-                {lastRunError}
-              </p>
-            )}
             {compileError != null && (
               <p
                 className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1"
@@ -489,6 +480,14 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
           {/* Stats footer — shown after a completed run */}
           {!isExecuting && lastRunDurationMs != null && (
             <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 flex flex-col gap-2">
+              {lastRunError && (
+                <p
+                  className="text-xs font-bold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1"
+                  role="alert"
+                >
+                  {lastRunError}
+                </p>
+              )}
               <div className="flex items-center gap-3 text-xs">
                 {lastRunError ? (
                   <span className="text-red-600 flex items-center gap-1">

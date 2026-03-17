@@ -189,6 +189,12 @@ export function PipelineEditorPanel({
                     )}
                 </div>
 
+                {lastRunError && (
+                    <p className="text-xs font-bold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1" role="alert">
+                        {lastRunError}
+                    </p>
+                )}
+
                 {/* Secondary row: Settings */}
                 <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 overflow-x-auto no-scrollbar">
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -271,12 +277,6 @@ export function PipelineEditorPanel({
                     </div>
                 )}
             </div>
-
-            {lastRunError && (
-                <div className="shrink-0 px-3 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-[10px] border-b border-red-100 dark:border-red-900/30">
-                    {lastRunError}
-                </div>
-            )}
 
             <div className="flex-1 min-h-0">
                 <InputEditor
