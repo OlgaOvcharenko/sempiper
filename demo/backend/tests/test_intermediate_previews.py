@@ -238,6 +238,7 @@ def test_extract_preview_returns_none_when_no_skb():
 import services.skrub_graph_runner as _runner
 from services.skrub_graph_runner import (
     _extract_previews_from_capture,
+    _find_learner_dataop,
     _setup_preview_capture_patch,
 )
 
@@ -288,6 +289,52 @@ def test_extract_previews_from_capture_empty_graph():
     assert _extract_previews_from_capture({}) == []
     assert _extract_previews_from_capture(None) == []
     assert _extract_previews_from_capture({"nodes": {}}) == []
+
+
+def test_extract_previews_from_capture_clone_mismatch():
+    """Capture IDs from cloned nodes don't match original nodes — simulates make_learner clone bug."""
+    original_node = SimpleNamespace()
+    clone_node = SimpleNamespace()  # different Python object — different id()
+    assert id(original_node) != id(clone_node)
+
+    summary = {"schema": [{"name": "x", "dtype": "int64"}], "sample": [{"x": 1}], "row_count": 1}
+
+    _runner._captured_previews.clear()
+    _runner._captured_previews[id(clone_node)] = summary  # captured from clone
+
+    # Using original nodes (as _Graph().run(pipeline) would): no match
+    original_graph = {"nodes": {0: original_node}}
+    assert _extract_previews_from_capture(original_graph) == []
+
+    # Using clone nodes (as _Graph().run(learner.data_op) gives): match found
+    clone_graph = {"nodes": {0: clone_node}}
+    previews = _extract_previews_from_capture(clone_graph)
+    assert len(previews) == 1
+    assert previews[0]["row_count"] == 1
+
+    _runner._captured_previews.clear()
+
+
+def test_find_learner_dataop_returns_fitted_learner_data_op():
+    """_find_learner_dataop finds a fitted SkrubLearner's data_op in globals."""
+    skrub_est = pytest.importorskip("skrub._data_ops._estimator")
+    SkrubLearner = skrub_est.SkrubLearner
+
+    fake_dataop = SimpleNamespace()
+    learner = SkrubLearner.__new__(SkrubLearner)
+    learner.data_op = fake_dataop
+    learner._is_fitted = True
+
+    # Found when present and fitted
+    result = _find_learner_dataop({"learner": learner, "x": 42})
+    assert result is fake_dataop
+
+    # Not found when learner is unfitted
+    learner._is_fitted = False
+    assert _find_learner_dataop({"learner": learner}) is None
+
+    # Not found when no SkrubLearner present
+    assert _find_learner_dataop({"x": 42, "y": "hello"}) is None
 
 
 def test_setup_preview_capture_patch_installs_on_all_modules():

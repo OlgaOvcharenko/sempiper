@@ -112,7 +112,6 @@ class TestSemGenFeaturesMapping:
 
     @pytest.mark.parametrize("class_name,expected", [
         ("<Apply LLMFeatureGenerator>", "sem_gen_features"),
-        ("<Apply CodeBasedFeatureExtractor>", "sem_gen_features"),
         ("<Apply CAAFE>", "sem_gen_features"),
         ("<Apply SemGenFeaturesCaafe>", "sem_gen_features"),
     ])
@@ -202,6 +201,7 @@ class TestSemExtractFeaturesMapping:
     @pytest.mark.parametrize("class_name,expected", [
         ("<Apply LLMFeatureExtractor>", "sem_extract_features"),
         ("<Apply SemExtractFeaturesLLM>", "sem_extract_features"),
+        ("<Apply CodeBasedFeatureExtractor>", "sem_extract_features"),
     ])
     def test_extract_features_class_mappings(self, class_name, expected):
         """All sem_extract_features implementation classes should map correctly."""

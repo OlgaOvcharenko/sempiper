@@ -99,12 +99,12 @@ def test_update_config_sets_sempipes_llm_and_temperature():
     with patch("sempipes.update_config") as mock_update:
         resp = client.post(
             "/api/update-config",
-            json={"llm_name": "gemini/gemini-3-flash", "temperature": 0.7},
+            json={"llm_name": "gemini/gemini-3-flash-preview", "temperature": 0.7},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["llm_name"] == "gemini/gemini-3-flash"
+        assert data["llm_name"] == "gemini/gemini-3-flash-preview"
         assert data["temperature"] == 0.7
 
         # Verify sempipes.update_config was called once with correct LLM object
@@ -112,7 +112,7 @@ def test_update_config_sets_sempipes_llm_and_temperature():
         call_kwargs = mock_update.call_args.kwargs
         assert "llm_for_code_generation" in call_kwargs
         llm = call_kwargs["llm_for_code_generation"]
-        assert llm.name == "gemini/gemini-3-flash"
+        assert llm.name == "gemini/gemini-3-flash-preview"
         assert llm.parameters == {"temperature": 0.7}
 
 

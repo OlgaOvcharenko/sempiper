@@ -365,11 +365,13 @@ class TestMergeSourceRanges:
         assert result[0].source_range == sr
 
     def test_merge_both_in_static_two_skrub_nodes(self):
-        """Static has sem_extract_features then sem_gen_features; two skrub nodes (both fused as sem_gen_features) get correct label and range each."""
+        """Static has sem_extract_features then sem_gen_features; after fix each fused node has its own label and gets its own source_range."""
         sr1 = SourceRange(start_line=3, start_column=1, end_line=3, end_column=50)
         sr2 = SourceRange(start_line=4, start_column=1, end_line=4, end_column=45)
+        # After the fix: CodeBasedFeatureExtractor -> sem_extract_features, LLMFeatureGenerator -> sem_gen_features.
+        # Two distinct labels, each matching its static counterpart directly.
         skrub_nodes = [
-            CompileNode(id="op1", type="operator", label="sem_gen_features", source_range=None),
+            CompileNode(id="op1", type="operator", label="sem_extract_features", source_range=None),
             CompileNode(id="op2", type="operator", label="sem_gen_features", source_range=None),
         ]
         static_nodes = [

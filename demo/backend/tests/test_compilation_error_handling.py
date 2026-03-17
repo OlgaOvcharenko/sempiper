@@ -356,24 +356,20 @@ products = skrub.var("products", None)
 
 
 def test_house_prices_missing_deps():
-    """house_prices.py fails gracefully when kagglehub is missing."""
+    """Script fails gracefully when importing a non-existent package."""
     script = """
 import os
 import sempipes
 import skrub
 import pandas as pd
-import kagglehub
-from tabpfn import TabPFNRegressor
-from tabpfn.constants import ModelVersion
+import _this_package_does_not_exist_xyz_sempipes_test
 
-path = kagglehub.dataset_download("ted8080/house-prices-and-images-socal")
-houses_df = pd.read_csv(os.path.join(path, "socal2.csv"))
-houses = skrub.var("houses", houses_df)
+houses = skrub.var("houses", None)
 price = sempipes.as_y(houses["price"], "Price")
 """
     result = compile_script_to_graph_dynamic(script)
 
-    # Should fail with import error for kagglehub (may still return static nodes via fallback)
+    # Should fail with import error for the missing package
     assert len(result.validation_errors) > 0
     combined_errors = " ".join(result.validation_errors).lower()
-    assert "kagglehub" in combined_errors
+    assert "_this_package_does_not_exist_xyz_sempipes_test" in combined_errors
