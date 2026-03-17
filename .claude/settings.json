@@ -10,6 +10,9 @@
       "Bash(git stash)",
       "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/_data_ops/**)",
       "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/**)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
