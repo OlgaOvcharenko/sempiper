@@ -47,9 +47,9 @@ const AVAILABLE_LLMS = [
     "gemini/gemini-2.5-flash",
     "gemini/gemini-2.5-flash-lite",
     "gemini/gemini-2.5-pro",
-    "gemini/gemini-3-flash",
-    "gemini/gemini-3-flash-lite",
-    "gemini/gemini-3-pro",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-3-flash-lite-preview",
+    "gemini/gemini-3-pro-preview",
 ];
 
 export function PipelineEditorPanel({

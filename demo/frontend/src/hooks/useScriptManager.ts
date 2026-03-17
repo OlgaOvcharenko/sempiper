@@ -9,6 +9,7 @@ export interface UseScriptManagerReturn {
   pipelineScripts: PipelineScriptEntry[];
   pipelineCode: string;
   loadedScriptId: string | null;
+  loadError: string | null;
   setPipelineCode: (code: string) => void;
   handleLoadScript: (id: string) => Promise<void>;
   handleFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -38,6 +39,7 @@ export function useScriptManager(opts: {
   const [loadedScriptId, setLoadedScriptId] = useState<string | null>(
     opts.defaultScriptId ?? null
   );
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Capture initialization opts in a ref so the mount effect closes over stable values.
   const initRef = useRef(opts);
@@ -85,12 +87,13 @@ export function useScriptManager(opts: {
                   if (scriptLoadInProgressRef) scriptLoadInProgressRef.current = true;
                   if (typeof performance !== "undefined" && performance.mark)
                     performance.mark("pipeline-script-load-code-set");
+                  setLoadError(null);
                   setPipelineCode(content);
                 }
               })
               .catch(() => {
                 if (!cancelled)
-                  setPipelineCode(`# Failed to load script: ${effectiveDefaultId}\n`);
+                  setLoadError(`Failed to load script: ${effectiveDefaultId}`);
               });
           }
         }
@@ -103,9 +106,7 @@ export function useScriptManager(opts: {
           setLoadedScriptId(prependEntries[0].id);
           setPipelineCode(initialCode);
         } else {
-          setPipelineCode(
-            `# Failed to load scripts. Is the backend running?\n${err}`
-          );
+          setLoadError(`Failed to load scripts. Is the backend running? ${err}`);
         }
       });
 
@@ -130,12 +131,13 @@ export function useScriptManager(opts: {
       if (scriptLoadRef) scriptLoadRef.current = true;
       if (typeof performance !== "undefined" && performance.mark)
         performance.mark("pipeline-script-load-code-set");
+      setLoadError(null);
       setPipelineCode(content);
     } catch {
       if (scriptLoadRef) scriptLoadRef.current = true;
       if (typeof performance !== "undefined" && performance.mark)
         performance.mark("pipeline-script-load-code-set");
-      setPipelineCode(`# Failed to load script: ${id}\n`);
+      setLoadError(`Failed to load script: ${id}`);
     }
   }, [scriptLoadRef]);
 
@@ -162,6 +164,7 @@ export function useScriptManager(opts: {
     pipelineScripts,
     pipelineCode,
     loadedScriptId,
+    loadError,
     setPipelineCode,
     handleLoadScript,
     handleFileUpload,

@@ -18,6 +18,7 @@ export interface UseExecutionReturn {
   lastRunDurationMs: number | null;
   lastRunError: string | null;
   lastRunProfile: ExecuteProfile | null;
+  lastRunMetric: { name: string; value: number } | null;
   skrubToCompileId: Record<string, string>;
   /**
    * Starts execution, or aborts it if already running.
@@ -85,6 +86,7 @@ export function useExecution(opts: {
   const [lastRunDurationMs, setLastRunDurationMs] = useState<number | null>(null);
   const [lastRunError, setLastRunError] = useState<string | null>(null);
   const [lastRunProfile, setLastRunProfile] = useState<ExecuteProfile | null>(null);
+  const [lastRunMetric, setLastRunMetric] = useState<{ name: string; value: number } | null>(null);
   const [skrubToCompileId, setSkrubToCompileId] = useState<Record<string, string>>({});
 
   const executeAbortRef = useRef<AbortController | null>(null);
@@ -106,6 +108,7 @@ export function useExecution(opts: {
     setLastRunCostUsd(null);
     setLastRunDurationMs(null);
     setLastRunProfile(null);
+    setLastRunMetric(null);
     setSkrubToCompileId({});
     skrubToCompileIdRef.current = {};
   }, []);
@@ -138,6 +141,7 @@ export function useExecution(opts: {
     skrubToCompileIdRef.current = {};
     setLastRunDurationMs(null);
     setLastRunProfile(null);
+    setLastRunMetric(null);
     setLastRunError(null);
 
     // Extension point: caller can intercept before SSE starts (e.g. simulation replay).
@@ -272,6 +276,7 @@ export function useExecution(opts: {
             if (event.total_cost_usd != null) setLastRunCostUsd(event.total_cost_usd);
             if (event.duration_ms != null) setLastRunDurationMs(event.duration_ms);
             if (event.profile) setLastRunProfile(event.profile);
+            if (event.metric != null) setLastRunMetric(event.metric);
             isExecutingRef.current = false;
             setIsExecuting(false);
             executeAbortRef.current = null;
@@ -310,6 +315,7 @@ export function useExecution(opts: {
     nodeDataByNode,
     lastRunCostUsd,
     lastRunDurationMs,
+    lastRunMetric,
     lastRunError,
     lastRunProfile,
     skrubToCompileId,
