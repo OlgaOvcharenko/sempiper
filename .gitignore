@@ -58,3 +58,5 @@ AutogluonModels**
 demo/backend/catboost_info
 
 .cache/
+
+.sempipes_trajectories/
