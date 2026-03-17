@@ -39,9 +39,9 @@ const AVAILABLE_LLMS = [
   "gemini/gemini-2.5-flash",
   "gemini/gemini-2.5-flash-lite",
   "gemini/gemini-2.5-pro",
-  "gemini/gemini-3-flash",
-  "gemini/gemini-3-flash-lite",
-  "gemini/gemini-3-pro",
+  "gemini/gemini-3-flash-preview",
+  "gemini/gemini-3-flash-lite-preview",
+  "gemini/gemini-3-pro-preview",
 ];
 
 const formatDuration = (ms: number): string => {
@@ -54,9 +54,10 @@ const formatDuration = (ms: number): string => {
 
 interface CodeGenDemoProps {
   isDark?: boolean;
+  isDebug?: boolean;
 }
 
-export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
+export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProps) {
   // ── UI-only state ─────────────────────────────────────────────────────────
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
@@ -71,7 +72,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
     defaultScriptId: "simple",
     scriptLoadInProgressRef,
   });
-  const { pipelineCode, loadedScriptId, pipelineScripts } = scripts;
+  const { pipelineCode, loadedScriptId, pipelineScripts, loadError } = scripts;
 
   const llm = useLlmConfig({ initialTemperature: "0.0" });
   const { llmName, temperature, temperatureError, temperatureShake } = llm;
@@ -477,6 +478,18 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
             />
           </div>
 
+          {/* Load error footer */}
+          {loadError != null && (
+            <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800">
+              <p
+                className="text-xs font-bold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1"
+                role="alert"
+              >
+                {loadError}
+              </p>
+            </div>
+          )}
+
           {/* Stats footer — shown after a completed run */}
           {!isExecuting && lastRunDurationMs != null && (
             <div className="shrink-0 px-3 py-2 border-t border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-800 flex flex-col gap-2">
@@ -511,7 +524,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
                   </>
                 )}
               </div>
-              {lastRunProfile && Object.keys(lastRunProfile).length > 0 && (
+              {isDebug && lastRunProfile && Object.keys(lastRunProfile).length > 0 && (
                 <table className="text-[10px] text-zinc-600 dark:text-zinc-400 w-full border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-zinc-600">
@@ -661,6 +674,7 @@ export function CodeGenDemo({ isDark = false }: CodeGenDemoProps) {
             downstreamNodeLabels={downstreamNodeLabels}
             compileValidationErrors={compileValidationErrors}
             compileTimingsMs={compileTimingsMs}
+            isDebug={isDebug}
             isExpanded={expandedPanel === "right"}
             expandButton={
               <button

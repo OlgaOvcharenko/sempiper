@@ -98,6 +98,8 @@ interface NodeDetailsPanelProps {
   skrubToCompileId?: Record<string, string>;
   /** Dark mode flag */
   isDark?: boolean;
+  /** Debug mode: show extra developer info (From compile section, timing breakdowns). */
+  isDebug?: boolean;
   /** Compile node for the selected graph node (id, type, label, source_range). */
   compileNode?: CompileNode | null;
   /** Labels of nodes that feed into this one (upstream / depends on). */
@@ -131,6 +133,7 @@ export function NodeDetailsPanel({
   downstreamNodeLabels = [],
   compileValidationErrors = [],
   compileTimingsMs = null,
+  isDebug = false,
 }: NodeDetailsPanelProps) {
   if (!selectedNodeId || !selectedNode) {
     return (
@@ -312,7 +315,7 @@ export function NodeDetailsPanel({
                       )}
                     </div>
                   )}
-                  {nodeFallback !== true && (
+                  {nodeFallback !== true && !isExecuting && nodeRetries == null && (nodeCostUsd == null || nodeCostUsd <= 0) && !hasCodeToShow && (
                     <p className="text-sm text-zinc-600 dark:text-zinc-300">
                       Prompt statistics and node-specific metadata will appear here when available.
                     </p>
@@ -343,7 +346,7 @@ export function NodeDetailsPanel({
             </section>
           </>
         )}
-        {hasCompileDetails && (
+        {isDebug && hasCompileDetails && (
           <section>
             <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">From compile</h3>
             <div className="space-y-3 text-sm">
