@@ -453,6 +453,24 @@ def _find_env_dict(g: dict) -> dict | None:
     return None
 
 
+def _find_learner_dataop(globals_dict: dict):
+    """Return the fitted SkrubLearner's internal DataOp from globals, or None.
+
+    make_learner() clones the pipeline DataOp before fitting, so the captured
+    node IDs in _captured_previews come from clone nodes, not the original.
+    Using the learner's data_op as the source for _Graph().run() gives us a
+    raw_graph whose node objects match the captured IDs.
+    """
+    try:
+        from skrub._data_ops._estimator import SkrubLearner
+    except ImportError:
+        return None
+    for val in globals_dict.values():
+        if isinstance(val, SkrubLearner) and getattr(val, "_is_fitted", False):
+            return val.data_op
+    return None
+
+
 def _graph_to_serializable(raw):
     """
     Convert _Graph().run(dag) output to JSON-serializable dict.
@@ -755,9 +773,18 @@ def _get_skrub_dag_dict(code, globals_dict):
             pass
         if _captured_previews:
             # Fast path: previews were captured during exec's evaluate() callback.
-            # No second pipeline evaluation needed.
+            # make_learner() clones the DataOp before fitting, so captured node IDs
+            # belong to the clone, not the original result. Build a graph from the
+            # learner's cloned DataOp so node ids match.
+            learner_dataop = _find_learner_dataop(globals_dict)
+            capture_graph = raw_graph
+            if learner_dataop is not None:
+                try:
+                    capture_graph = _Graph().run(learner_dataop)
+                except Exception:
+                    capture_graph = raw_graph
             try:
-                previews = _extract_previews_from_capture(raw_graph)
+                previews = _extract_previews_from_capture(capture_graph)
             except Exception:
                 previews = []
         if not previews:
@@ -1005,13 +1032,21 @@ def main():
 
     post_exec_ms = (time.perf_counter() - t_post_start) * 1000
     # Emit execution stats (duration and cost) plus profiling breakdown
-    print(_EXECUTION_STATS_MARKER)
-    print(json.dumps({
+    stats_payload = {
         "duration_ms": exec_duration_ms,
         "cost_usd": total_cost_usd,
         "startup_ms": startup_ms,
         "post_exec_ms": post_exec_ms,
-    }))
+    }
+    # Include pipeline metric if set by the script (e.g. _pipeline_metric = {"name": "F1", "value": 0.82})
+    metric = g.get("_pipeline_metric")
+    if isinstance(metric, dict) and "name" in metric and "value" in metric:
+        try:
+            stats_payload["metric"] = {"name": str(metric["name"]), "value": float(metric["value"])}
+        except (TypeError, ValueError):
+            pass
+    print(_EXECUTION_STATS_MARKER)
+    print(json.dumps(stats_payload))
     print(_SKRUB_GRAPH_END)
 
     if exec_failed:

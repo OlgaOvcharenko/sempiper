@@ -32,6 +32,8 @@ def _sse(data: dict) -> bytes:
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Directory for saved skrub native SVG graphs (demo/graph_svgs/), keyed by script id.
 _GRAPH_SVGS_DIR = os.path.join(os.path.dirname(_BACKEND_ROOT), "graph_svgs")
+# Directory for per-run subprocess logs (repo_root/logs/runners/).
+_RUNNERS_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(_BACKEND_ROOT)), "logs", "runners")
 
 # Marker and format emitted by skrub_graph_runner for each operator-generated code block.
 _SEMPIPES_NODE_CODE_MARKER = "##SEMPIPES_NODE_CODE##"
@@ -442,12 +444,26 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
     # Track the last mapped node for chained operations
     last_mapped_id: str | None = None
 
+    # Lazy import for normalizing <Apply X> labels to sempipes operator names.
+    # Runtime graph uses skrub's __skrub_short_repr__ (e.g. "<Apply ImputedLearner>") while
+    # compile nodes use sempipes names (e.g. "sem_fillna"). Normalize Apply labels so they match.
+    try:
+        from services.graph_api import _extract_key_from_skrub_label as _normalize_apply
+    except ImportError:
+        _normalize_apply = None
+
     # Match by label, handling duplicates by tracking occurrences
     for sn in nodes:
         skid = sn.get("id")
         if not skid:
             continue
-        label = (sn.get("label", "") or "").lower()
+        raw_label = (sn.get("label", "") or "")
+        low = raw_label.strip().lower()
+        # Normalize <Apply X> / Apply X labels so runtime labels match fused compile labels
+        if ("apply" in low) and _normalize_apply is not None:
+            label = _normalize_apply(raw_label)
+        else:
+            label = low
 
         # Special case: Map GetItem nodes to as_X/as_y nodes
         # GetItem nodes are created by skrub for df[cols] operations inside as_X/as_y
@@ -649,6 +665,7 @@ def stream_execute_events(
     emit_start_time: float | None = None  # set when subprocess stdout is fully read
     runner_startup_ms: float | None = None
     runner_post_exec_ms: float | None = None
+    pipeline_metric: dict | None = None
     t_stream_start = time.perf_counter()
     try:
         # Get compile graph nodes with correct IDs (from cache or dynamic compilation)
@@ -734,16 +751,20 @@ def stream_execute_events(
                     env=subprocess_env,  # Pass environment with sempipes config
                     text=False,
                 )
-                logger.info(f"Subprocess started, PID: {proc.pid}")
+                os.makedirs(_RUNNERS_LOG_DIR, exist_ok=True)
+                runner_log_path = os.path.join(
+                    _RUNNERS_LOG_DIR,
+                    f"runner-{time.strftime('%Y%m%d_%H%M%S')}-{proc.pid}.log",
+                )
+                logger.info(f"Subprocess started, PID: {proc.pid}, log: {runner_log_path}")
                 stdout_chunks: list[bytes] = []
 
                 def read_stdout():
-                    for chunk in iter(proc.stdout.readline, b""):
-                        stdout_chunks.append(chunk)
-                        try:
-                            print(chunk.decode("utf-8", errors="replace"), end="", file=sys.stdout, flush=True)
-                        except Exception:
-                            pass
+                    with open(runner_log_path, "wb") as log_fh:
+                        for chunk in iter(proc.stdout.readline, b""):
+                            stdout_chunks.append(chunk)
+                            log_fh.write(chunk)
+                            log_fh.flush()
 
                 reader = threading.Thread(target=read_stdout, daemon=True)
                 reader.start()
@@ -775,9 +796,12 @@ def stream_execute_events(
                 captured_codes = [x["code"] for x in captured]
                 captured_costs = [x["cost_usd"] for x in captured]
                 captured_attempts = [x["attempts"] for x in captured]
-                logger.info(f"Subprocess returncode: {proc.returncode}, stdout: {len(decoded)} chars, captured: {len(captured_codes)} blocks")
-                if len(decoded) > 0:
-                    logger.info(f"Stdout preview: {decoded[:200]}")
+                status = "OK" if proc.returncode == 0 else f"FAILED (rc={proc.returncode})"
+                logger.info(
+                    f"Subprocess PID {proc.pid} {status} — "
+                    f"{len(captured_codes)} code blocks captured, "
+                    f"{len(decoded)} chars — log: {runner_log_path}"
+                )
                 # Check for subprocess failure
                 exec_failed = (proc.returncode != 0)
                 # Data statistics for node details come from the runner (single pipeline execution).
@@ -794,6 +818,9 @@ def stream_execute_events(
                         duration_ms = exec_stats.get("duration_ms", 0.0)
                         runner_startup_ms = exec_stats.get("startup_ms")
                         runner_post_exec_ms = exec_stats.get("post_exec_ms")
+                        metric = exec_stats.get("metric")
+                        if isinstance(metric, dict) and "name" in metric and "value" in metric:
+                            pipeline_metric = metric
                         logger.info(f"Parsed execution stats: duration={duration_ms:.0f}ms, cost=${total_cost_usd:.6f}")
                     logger.info(
                         f"Parsed from runner: {len(runner_input_summaries)} input summaries, "
@@ -1098,4 +1125,6 @@ def stream_execute_events(
     done_payload: dict = {"type": "done", "total_cost_usd": total_cost_usd, "duration_ms": duration_ms}
     if profile:
         done_payload["profile"] = profile
+    if pipeline_metric is not None:
+        done_payload["metric"] = pipeline_metric
     yield _sse(done_payload)
