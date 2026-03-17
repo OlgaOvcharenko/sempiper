@@ -783,9 +783,9 @@ describe("CodeGenDemo", () => {
       expect(options).toContain("gemini/gemini-2.5-flash");
       expect(options).toContain("gemini/gemini-2.5-flash-lite");
       expect(options).toContain("gemini/gemini-2.5-pro");
-      expect(options).toContain("gemini/gemini-3-flash");
-      expect(options).toContain("gemini/gemini-3-flash-lite");
-      expect(options).toContain("gemini/gemini-3-pro");
+      expect(options).toContain("gemini/gemini-3-flash-preview");
+      expect(options).toContain("gemini/gemini-3-flash-lite-preview");
+      expect(options).toContain("gemini/gemini-3-pro-preview");
     });
   });
 
@@ -842,7 +842,7 @@ describe("CodeGenDemo", () => {
       if (u.includes("/api/update-config")) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-3-flash", temperature: 0.7 }),
+          json: () => Promise.resolve({ status: "ok", llm_name: "gemini/gemini-3-flash-preview", temperature: 0.7 }),
         } as Response);
       }
       if (u.includes("/api/execute")) {
@@ -869,9 +869,9 @@ describe("CodeGenDemo", () => {
     render(<CodeGenDemo />, { wrapper: wrapper() });
     await waitFor(() => expect(screen.getByRole("button", { name: /run/i })).not.toBeDisabled());
 
-    // Change LLM to gemini/gemini-3-flash
+    // Change LLM to gemini/gemini-3-flash-preview
     const dropdown = screen.getByTitle("Select LLM model") as HTMLSelectElement;
-    fireEvent.change(dropdown, { target: { value: "gemini/gemini-3-flash" } });
+    fireEvent.change(dropdown, { target: { value: "gemini/gemini-3-flash-preview" } });
 
     // Change temperature to 0.7
     const tempInput = screen.getByTitle("LLM temperature (0-2)") as HTMLInputElement;
@@ -885,7 +885,7 @@ describe("CodeGenDemo", () => {
       );
       expect(updateConfigCalls.length).toBeGreaterThanOrEqual(1);
       const body = JSON.parse((updateConfigCalls[0][1] as RequestInit)?.body as string);
-      expect(body.llm_name).toBe("gemini/gemini-3-flash");
+      expect(body.llm_name).toBe("gemini/gemini-3-flash-preview");
       expect(body.temperature).toBe(0.7);
     });
   });
