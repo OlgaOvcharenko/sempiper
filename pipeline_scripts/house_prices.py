@@ -14,13 +14,6 @@ from tabpfn import TabPFNRegressor
 from tabpfn.constants import ModelVersion
 from sklearn.model_selection import train_test_split
 
-
-sempipes.update_config(
-    llm_for_code_generation=sempipes.LLM("gemini/gemini-2.5-flash", {"temperature": 0.0}),
-    llm_for_batch_processing=sempipes.LLM("gemini/gemini-2.5-flash-lite", {"temperature": 0.0})
-)
-
-
 def sempipes_pipeline():
     houses_facts = skrub.var("facts")
     houses_cities = skrub.var("cities")
@@ -38,7 +31,7 @@ def sempipes_pipeline():
         "Data describing house and its location."
     )
 
-    # Data cleaning
+    # Data cleaning 
     house_data = house_data.sem_clean(
         nl_prompt="""Clean the numeric housing data. Handle outliers in sqft (square footage) using IQR capping. Remove clearly erroneous values.""",
         columns=["sqft"]
@@ -50,8 +43,9 @@ def sempipes_pipeline():
         sqft_per_bed=house_data.sqft / house_data.bed,
     )
 
-
-    # Feature extraction from images
+    house_data = house_data.skb.apply_func(lambda df: df.reset_index(drop=True))
+    
+    # Feature extraction from images 
     house_data = house_data.sem_extract_features(
         nl_prompt="""Use your intrinsic knowledge about houses and their location in California to extract features that are useful for house price prediction.""",
         name="extract_visuals",
@@ -72,10 +66,6 @@ def sempipes_pipeline():
         vectorizer,
         exclude_cols=["image_id", "image_path"]
     )
-
-    # # Drop near-constant columns before TabPFN
-    # selector = VarianceThreshold(threshold=0.01)
-    # vectorized_houses = vectorized_houses.skb.drop(cols=["image_id", "image_path"]).skb.apply(selector)
 
     # Train and evaluate with TabPFN
     tabpfn = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
@@ -124,7 +114,7 @@ def sempipes_pipeline():
         return
 
     predictions.skb.apply_func(analyze_house_prices, houses=houses)
-
+    
     return predictions
 
 # Load dataset
@@ -133,10 +123,7 @@ fact_houses = pd.read_csv(os.path.join(data_dir, "fact_houses.csv"))
 dim_cities = pd.read_csv(os.path.join(data_dir, "dim_cities.csv"))
 dim_images = pd.read_csv(os.path.join(data_dir, "dim_images.csv"))
 
-print(fact_houses)
-
 # Run pipeline
-fact_houses = fact_houses.sample(50, random_state=42)
 pipeline = sempipes_pipeline()
 
 train_houses, test_houses = train_test_split(fact_houses, test_size=0.25, random_state=42)
@@ -148,15 +135,14 @@ env_train["facts"] = train_houses
 env_train["cities"] = dim_cities
 env_train["images"] = dim_images
 
-print(train_houses)
-
 env_test = pipeline.skb.get_data()
 env_test["facts"] = test_houses
 env_test["cities"] = dim_cities
 env_test["images"] = dim_images
 
 learner.fit(env_train)
-y_pred = learner.predict(env_test)
+y_pred = learner.predict(env_test) 
 
 mse = mean_squared_error(test_houses["price"], y_pred)
 print(f"MSE: {mse}")
+_pipeline_metric = {"name": "MSE", "value": float(mse)}
