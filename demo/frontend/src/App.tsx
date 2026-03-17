@@ -10,6 +10,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'codegen' | 'optimizer'>('codegen');
   const [layoutMode, setLayoutMode] = useState<'toggled' | 'left-split'>('toggled');
   const { isDark, toggle: toggleTheme } = useTheme();
+  const [isDebug, setIsDebug] = useState(false);
 
   // Sync tab favicon with app theme so the tab icon matches light/dark
   useEffect(() => {
@@ -74,6 +75,27 @@ export default function App() {
                 </svg>
               )}
             </button>
+            <button
+              onClick={() => setIsDebug((v) => !v)}
+              className={`p-1.5 rounded-lg border transition-colors shadow-sm ${
+                isDebug
+                  ? "border-amber-400 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50"
+                  : "border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-slate-50 dark:hover:bg-zinc-800"
+              }`}
+              title={isDebug ? "Disable debug mode" : "Enable debug mode"}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={isDebug ? "text-amber-600 dark:text-amber-400" : "text-slate-400 dark:text-zinc-500"}>
+                <path d="M12 20H9a7 7 0 0 1-7-7v-1a4 4 0 0 1 4-4h1" />
+                <path d="M12 20h3a7 7 0 0 0 7-7v-1a4 4 0 0 0-4-4h-1" />
+                <path d="M10 8V6a2 2 0 1 1 4 0v2" />
+                <line x1="12" y1="13" x2="12" y2="17" />
+                <line x1="10" y1="15" x2="14" y2="15" />
+                <path d="M2 9h3" />
+                <path d="M19 9h3" />
+                <path d="M3 19l2-2" />
+                <path d="M19 19l2 2" />
+              </svg>
+            </button>
           </div>
 
           <div className="absolute inset-x-0 inset-y-0 flex items-center justify-center pointer-events-none">
@@ -82,7 +104,7 @@ export default function App() {
                 key={isDark ? "dark" : "light"}
                 src={`${isDark ? "/logo-dark.png" : "/logo-light.png"}?v=${isDark ? "d" : "l"}`}
                 alt=""
-                className="h-10 w-10 shrink-0 object-contain"
+                className="h-14 w-14 shrink-0 object-contain"
                 aria-hidden
               />
               <span className="inline-flex items-baseline">
@@ -119,7 +141,7 @@ export default function App() {
 
         <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {activeTab === 'codegen' ? (
-            <CodeGenDemo isDark={isDark} />
+            <CodeGenDemo isDark={isDark} isDebug={isDebug} />
           ) : (
             <OptimizerDemo
               layoutMode={layoutMode}

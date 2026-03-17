@@ -203,6 +203,8 @@ export type ExecuteEvent =
       duration_ms?: number;
       /** Timing breakdown (backend + runner phases). */
       profile?: ExecuteProfile;
+      /** Pipeline evaluation metric (e.g. F1, MSE) emitted by the script via _pipeline_metric. */
+      metric?: { name: string; value: number };
     }
   | { type: "skrub_graph"; graph?: SkrubGraphDict; svg?: string; skrubToCompileId?: Record<string, string> };
 
