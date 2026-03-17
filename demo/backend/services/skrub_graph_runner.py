@@ -144,14 +144,19 @@ def _setup_preview_capture_patch():
                                  clear=clear, callbacks=callbacks)
 
     _eval_mod.evaluate = _capturing_evaluate
-    # Also patch the local binding in _skrub_namespace, which is imported at module
-    # level via `from ._evaluation import evaluate`. Patching _eval_mod alone won't
-    # reach that local reference — learner.fit() calls it directly.
-    try:
-        import skrub._data_ops._skrub_namespace as _ns_mod
-        _ns_mod.evaluate = _capturing_evaluate
-    except Exception:
-        pass
+    # Also patch local bindings in modules that imported evaluate via
+    # `from ._evaluation import evaluate` — patching _eval_mod alone won't
+    # reach those local references.
+    for _mod_name in (
+        "skrub._data_ops._skrub_namespace",
+        "skrub._data_ops._estimator",
+    ):
+        try:
+            import importlib
+            _mod = importlib.import_module(_mod_name)
+            _mod.evaluate = _capturing_evaluate
+        except Exception:
+            pass
     _preview_capture_installed = True
 
 
@@ -731,7 +736,13 @@ def _get_skrub_dag_dict(code, globals_dict):
     except Exception:
         raw_graph = None
 
-    env = globals_dict.get("env") if isinstance(globals_dict.get("env"), dict) else None
+    # Find data environment: "env" first, then common alternatives (env_train, env_test, etc.)
+    env = None
+    for _env_key in ("env", "env_train", "env_test", "environment", "train_env", "data_env"):
+        _cand = globals_dict.get(_env_key)
+        if isinstance(_cand, dict):
+            env = _cand
+            break
     if raw_graph and isinstance(raw_graph, dict) and "nodes" in raw_graph:
         try:
             graph_dict = _graph_to_serializable(raw_graph)
@@ -744,6 +755,14 @@ def _get_skrub_dag_dict(code, globals_dict):
                 previews = _extract_previews_from_capture(raw_graph)
             except Exception:
                 previews = []
+            if not previews:
+                # Fast path got nothing (e.g. node ID mismatch after sem_choose resolution).
+                # Fall back to a single evaluate pass with the known environment.
+                _evaluate_and_cache_all_nodes(result, env)
+                try:
+                    previews = _extract_all_previews(raw_graph)
+                except Exception:
+                    pass
         else:
             # Fallback: exec didn't trigger a fit_transform evaluate (e.g. fitted=False).
             # Run a single evaluate pass to populate caches, then read previews.
@@ -849,10 +868,12 @@ def _extract_var_input_summaries(g: dict) -> list[dict]:
                 summaries.append(s)
                 seen.add(var_name)
 
-    # Priority 2: g["env"] (pipeline data environment)
-    env = g.get("env")
-    if isinstance(env, dict):
-        for var_name, val in env.items():
+    # Priority 2: pipeline data environment (env, env_train, env_test, or any env_* dict)
+    for _env_key in ("env", "env_train", "env_test", "environment", "train_env", "data_env"):
+        _env_candidate = g.get(_env_key)
+        if not isinstance(_env_candidate, dict):
+            continue
+        for var_name, val in _env_candidate.items():
             if var_name in seen or not isinstance(var_name, str) or var_name.startswith("_"):
                 continue
             if isinstance(val, pd.DataFrame):
