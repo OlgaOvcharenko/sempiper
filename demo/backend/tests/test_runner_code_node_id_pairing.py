@@ -315,3 +315,27 @@ def test_code_blocks_emitted_with_correct_skrub_node_id(monkeypatch, capsys):
     assert len(emitted_ids) == len(set(emitted_ids)), (
         f"Duplicate skrub_node_ids in emitted blocks: {emitted_ids}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Test 4: _Evaluator._eval_data_op is patched after _setup_preview_capture_patch
+# --------------------------------------------------------------------------- #
+def test_eval_data_op_patch_installed_after_setup():
+    """After _setup_preview_capture_patch, _Evaluator._eval_data_op is our tracking wrapper."""
+    pytest.importorskip("skrub._data_ops._evaluation")
+    runner = _import_runner()
+    from skrub._data_ops._evaluation import _Evaluator
+
+    if not runner._preview_capture_installed:
+        runner._setup_preview_capture_patch()
+
+    patched = _Evaluator._eval_data_op
+    original = runner._orig_evaluator_eval_data_op
+
+    assert original is not None, "_orig_evaluator_eval_data_op should be saved after setup"
+    assert patched is not original, (
+        "_Evaluator._eval_data_op should be replaced by the tracking wrapper after setup"
+    )
+    assert patched.__name__ == "_tracking_eval_data_op", (
+        f"Expected '_tracking_eval_data_op', got '{patched.__name__}'"
+    )

@@ -79,6 +79,7 @@ _current_node_object_ref = None
 # Maps id(data_op) -> {schema, sample, row_count} captured during evaluate callback.
 _captured_previews: dict = {}
 _preview_capture_installed: bool = False  # Guard against double-patching.
+_orig_evaluator_eval_data_op = None  # Saved on first patch; guards against double-wrapping.
 
 # Sentinel for grouping logic in _map_captures_to_skrub_semantic_nodes.
 _CAPTURE_GROUP_SENTINEL = object()
@@ -185,6 +186,36 @@ def _setup_preview_capture_patch():
             _mod.evaluate = _capturing_evaluate
         except Exception:
             pass
+
+    # Patch _Evaluator._eval_data_op for per-node ref tracking.
+    # evaluate() is called only once at the top level; _eval_data_op is called
+    # once per graph node, so wrapping it correctly tracks which operator is running
+    # when LLM code generation calls are made inside impl.eval().
+    global _orig_evaluator_eval_data_op
+    try:
+        from skrub._data_ops._evaluation import _Evaluator
+        if _orig_evaluator_eval_data_op is None:
+            _orig_evaluator_eval_data_op = _Evaluator._eval_data_op
+
+        _orig_for_closure = _orig_evaluator_eval_data_op
+
+        def _tracking_eval_data_op(self, data_op):
+            global _current_node_object_id, _current_node_object_ref
+            prev_id  = _current_node_object_id
+            prev_ref = _current_node_object_ref
+            _current_node_object_id  = id(data_op)
+            _current_node_object_ref = data_op
+            try:
+                result = yield from _orig_for_closure(self, data_op)
+                return result
+            finally:
+                _current_node_object_id  = prev_id
+                _current_node_object_ref = prev_ref
+
+        _Evaluator._eval_data_op = _tracking_eval_data_op
+    except Exception:
+        pass
+
     _preview_capture_installed = True
 
 
