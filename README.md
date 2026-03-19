@@ -94,6 +94,24 @@ make stop
   `npm run format`  
   `npm run format:check`
 
+**Logging**
+
+Each `make run` produces timestamped log files in `logs/`:
+
+| File | Contents |
+|------|----------|
+| `logs/backend-YYYYMMDD_HHMMSS.log` | Uvicorn / FastAPI process log (HTTP requests, compile/execute lifecycle, errors) |
+| `logs/frontend-YYYYMMDD_HHMMSS.log` | Vite / Node dev-server log |
+| `logs/runners/runner-YYYYMMDD_HHMMSS-<PID>.log` | Full stdout+stderr of each pipeline subprocess (LiteLLM verbose output, generated code, `##SEMPIPES_NODE_CODE##` blocks, `##NODE_PREVIEW##` JSON, pandas warnings) |
+
+The **main backend log** stays concise: it records the subprocess PID, a success/failure status, and the path to the runner log, e.g.:
+```
+INFO - Subprocess started, PID: 12345, log: logs/runners/runner-20260318_120000-12345.log
+INFO - Subprocess PID 12345 OK — 3 code blocks captured, 8432 chars — log: logs/runners/runner-...log
+```
+
+To **debug a failed or unexpected run**, open the corresponding `logs/runners/runner-*.log` file — it contains the complete subprocess output including LiteLLM calls, generated Python, and any Python tracebacks.
+
 **Docker (optional)**
 
 From the **repository root**:

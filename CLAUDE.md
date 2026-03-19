@@ -61,10 +61,10 @@ After editing any demo code (backend, frontend, or shared behavior), **run the r
 - **Both or API contract**: Run both suites (in parallel when possible)
 
 **Very fast tests only** (ideally under 10 seconds total):
-- **Backend**: From `demo/backend`, run `poetry run pytest tests/ -v`
+- **Backend**: From `demo/backend`, run `poetry run pytest tests/ -v` (slow tests are skipped by default via `addopts = -m "not slow"` in pytest.ini; run `pytest tests/ -v -m slow` to run them)
 - **Frontend**: From `demo/frontend`, run `npm test`
 
-Keep tests fast; if a test is slow, fix or skip it for the default run.
+Keep tests fast; if a test is slow, mark it with `pytestmark = pytest.mark.slow` at the top of the test file.
 
 ### 5. Demo Tests: No Real LLM Calls
 
@@ -197,6 +197,37 @@ Two-tier caching system (memory + file) for pipeline results.
 
 **Endpoints:**
 - `DELETE /api/cache` → archives cache for a specific key (requires body: `script`, `temperature`, `llm_name`)
+
+### 12. Logging Strategy
+
+See: `.claude/rules/logging-strategy.md`
+
+**Two-tier logging** keeps the main backend log concise while preserving full subprocess output for debugging.
+
+- **`logs/backend-*.log`** — main process: HTTP, lifecycle events, per-subprocess one-line summary
+- **`logs/runners/runner-<PID>.log`** — full subprocess output per `/api/execute` call (LiteLLM, generated code, protocol blocks, warnings/tracebacks)
+
+**Rules:**
+- **Do not** echo subprocess stdout to the backend log (no `print(chunk, file=sys.stdout)`)
+- **Do not** add `Stdout preview:` log lines — the runner log is the right artifact
+- After subprocess exits, log one summary line: `Subprocess PID {pid} OK/FAILED — N code blocks, M chars — log: {path}`
+- To debug a failed run: open the referenced `logs/runners/runner-*.log`
+
+### 13. Run Executes Once
+
+See: `.claude/rules/run-executes-once.md`
+
+`/api/execute` must execute the pipeline **exactly once**. Do not re-run to fill missing node previews/details; fail and report an error instead.
+
+### 14. No Silent Fallbacks
+
+See: `.claude/rules/no-silent-fallbacks.md`
+
+When a backend operation cannot produce a correct result, fail explicitly — do not silently substitute a wrong or placeholder result.
+
+- Index-based ordering as a fallback for node assignment is **forbidden** — it masks broken attribution and silently shows wrong code.
+- `is_fallback: true` in SSE events is the correct signal for "no result available". The UI renders an amber warning box for this state.
+- Runner: skip emitting a code block when the node cannot be attributed. `execute_stream.py`: emit `is_fallback=True` + log a warning.
 
 ---
 

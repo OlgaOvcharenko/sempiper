@@ -34,7 +34,7 @@ if [ ! -d "demo/frontend/node_modules" ]; then
 fi
 
 echo "Starting backend (http://localhost:8000)..."
-poetry run uvicorn main:app --reload --app-dir demo/backend 2>&1 | tee "$BACKEND_LOG" &
+poetry run uvicorn main:app --reload --reload-exclude "tests/*" --app-dir demo/backend 2>&1 | tee "$BACKEND_LOG" &
 BACKEND_PID=$!
 
 echo "Starting frontend (http://localhost:5173)..."

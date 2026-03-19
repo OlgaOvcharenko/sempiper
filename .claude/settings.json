@@ -3,16 +3,18 @@
     "allow": [
       "Read(//tmp/**)",
       "Read(//private/tmp/**)",
-      "Bash(python -c \":*)",
-      "Bash(poetry run python3 -c \"import skrub; import inspect; print\\(inspect.getfile\\(skrub\\)\\)\")",
-      "Read(//Users/olgaovcharenko/Library/Caches/pypoetry/virtualenvs/sempipes-demo-xOt111jH-py3.12/lib/python3.12/site-packages/skrub/**)",
-      "Bash(poetry run python3 -c \":*)",
-      "Bash(git stash)",
-      "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/_data_ops/**)",
-      "Read(//Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/skrub/**)"
+      "Bash(python -c:*)",
+      "Bash(python3 -c:*)",
+      "Bash(poetry run python3 -c:*)",
+      "Read(//Users/olgaovcharenko/Library/Caches/pypoetry/**)",
+      "Read(//Library/Frameworks/Python.framework/**)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(git stash)"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/Users/olgaovcharenko/Documents/TUB/WS25/sempipes_demo/logs/runners"
     ]
   }
 }
