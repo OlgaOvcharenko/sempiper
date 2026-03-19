@@ -64,6 +64,15 @@ function mockFetchWithOptimizer(opts: { optimizerActive?: boolean } = {}) {
         json: () => Promise.resolve({ active: optimizerActive }),
       } as Response);
     }
+    if (u.includes("/api/optimizer/options")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      } as Response);
+    }
+    if (u.includes("/api/optimizer/final-code")) {
+      return Promise.resolve({ ok: false, status: 404, statusText: "Not Found" } as Response);
+    }
     if (u.includes("/api/optimizer/by-script") || u.includes("/api/optimizer/latest")) {
       if (optimizerActive) {
         return Promise.resolve({

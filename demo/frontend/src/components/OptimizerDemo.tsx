@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { clearCache, compileToSkrubGraph, type CompileNode } from "../api/client";
+import { clearCache, compileToSkrubGraph, type CompileNode, fetchOptimizerOptions, fetchOptimizerFinalCode, type OptimizerLlmOption, type OptimizerTrajectory } from "../api/client";
 import { graphNodeToCompileIds, skrubIdToRaw } from "../utils/graphCodeSync";
 import { fetchOptimizerStatus } from "../api/client";
 import { useLlmConfig } from "../hooks/useLlmConfig";
@@ -90,6 +90,12 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const [expandedPanel, setExpandedPanel] = useState<"left" | "middle" | "right" | null>(null);
   const [isOptimizerAvailable, setIsOptimizerAvailable] = useState(false);
   const [replayTrigger, setReplayTrigger] = useState(0);
+  const [hasRun, setHasRun] = useState(false);
+  const [llmOptions, setLlmOptions] = useState<OptimizerLlmOption[]>([]);
+  const [selectedLlmName, setSelectedLlmName] = useState<string>("");
+  const [selectedTemp, setSelectedTemp] = useState<number | null>(null);
+  const [finalCode, setFinalCode] = useState<Record<string, string> | null>(null);
+  const [loadedTrajectory, setLoadedTrajectory] = useState<OptimizerTrajectory | null>(null);
 
   // ── Domain hooks ──────────────────────────────────────────────────────────
   const scriptLoadInProgressRef = useRef(false);
@@ -106,10 +112,30 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const llm = useLlmConfig({ initialTemperature: "0.1" });
   const { llmName, temperature, temperatureError, temperatureShake } = llm;
 
+  // When LLM options are available (pre-recorded scripts), use the selected option;
+  // otherwise fall back to the free-form useLlmConfig values.
+  const uniqueLlmNames = useMemo(() => [...new Set(llmOptions.map((o) => o.llm_name))], [llmOptions]);
+  const availableTemps = useMemo(
+    () => llmOptions.filter((o) => o.llm_name === selectedLlmName).map((o) => o.temperature),
+    [llmOptions, selectedLlmName]
+  );
+  const selectedLlmOption = llmOptions.find(
+    (o) => o.llm_name === selectedLlmName && o.temperature === selectedTemp
+  ) ?? null;
+  const activeLlmName = selectedLlmOption?.llm_name ?? llmName;
+  const activeTemperatureNum = selectedLlmOption != null ? selectedLlmOption.temperature : parseFloat(temperature) || 0;
+
+  const optimizerSummary = loadedTrajectory && loadedTrajectory.outcomes.length > 0 && hasRun ? {
+    scoring: loadedTrajectory.optimizer_args?.scoring,
+    operator: loadedTrajectory.optimizer_args?.operator_name,
+    bestScore: Math.max(...loadedTrajectory.outcomes.map((o) => o.score ?? -Infinity)),
+    trials: loadedTrajectory.outcomes.length,
+  } : null;
+
   const execution = useExecution({
     pipelineCode,
-    llmName,
-    temperature,
+    llmName: activeLlmName,
+    temperature: String(activeTemperatureNum),
     loadedScriptId,
     validateTemperature: llm.validateTemperature,
     onTemperatureInvalid: llm.markTemperatureInvalid,
@@ -117,8 +143,9 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     newPipelineId: NEW_PIPELINE_ID,
     // Simulated scripts replay stored trajectories — skip the real SSE stream.
     onBeforeExecute: () => {
+      setHasRun(true);
+      setViewMode("optimizer");
       if (isSimulatedScript(loadedScriptId)) {
-        setViewMode("optimizer");
         setSelectedOptimizerTrial(null);
         setReplayTrigger((prev) => prev + 1);
         return true; // handled — no SSE
@@ -145,8 +172,8 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
 
   const compile = useCompile({
     pipelineCode,
-    llmName,
-    temperature,
+    llmName: activeLlmName,
+    temperature: String(activeTemperatureNum),
     loadedScriptId,
     onCodeChange: resetLiveState,
     scriptLoadInProgressRef,
@@ -172,7 +199,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
   const handleClearCache = useCallback(async () => {
     if (isExecuting) return;
     try {
-      await clearCache({ script: pipelineCode, temperature, llmName });
+      await clearCache({ script: pipelineCode, temperature: String(activeTemperatureNum), llmName: activeLlmName });
     } catch {
       // Best-effort
     }
@@ -191,13 +218,28 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     return () => clearInterval(intervalId);
   }, []);
 
-  // ── Auto-trigger animation for simulated scripts ──────────────────────────
+  // ── Fetch LLM options and final code when script changes ──────────────────
   useEffect(() => {
-    if (!isSimulatedScript(loadedScriptId)) return;
-    setViewMode("optimizer");
+    setHasRun(false);
     setSelectedOptimizerTrial(null);
-    const t = setTimeout(() => setReplayTrigger((prev) => prev + 1), 500);
-    return () => clearTimeout(t);
+    if (!loadedScriptId || loadedScriptId === NEW_PIPELINE_ID) {
+      setLlmOptions([]);
+      setSelectedLlmName("");
+      setSelectedTemp(null);
+      setFinalCode(null);
+      return;
+    }
+    fetchOptimizerOptions(loadedScriptId).then((opts) => {
+      setLlmOptions(opts);
+      if (opts.length > 0) {
+        setSelectedLlmName(opts[0].llm_name);
+        setSelectedTemp(opts[0].temperature);
+      } else {
+        setSelectedLlmName("");
+        setSelectedTemp(null);
+      }
+    });
+    fetchOptimizerFinalCode(loadedScriptId).then(setFinalCode);
   }, [loadedScriptId]);
 
   // ── Derived graph display values ──────────────────────────────────────────
@@ -289,6 +331,43 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     [displayGraph?.nodes, compileNodes, runnableNodeIds]
   );
 
+  // Two separate dropdowns for Model and Temperature when options are known
+  const llmSelectorContent = llmOptions.length > 0 ? (
+    <>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Model:</span>
+        <select
+          value={selectedLlmName}
+          onChange={(e) => {
+            const newLlm = e.target.value;
+            setSelectedLlmName(newLlm);
+            const temps = llmOptions.filter((o) => o.llm_name === newLlm).map((o) => o.temperature);
+            setSelectedTemp(temps[0] ?? null);
+          }}
+          disabled={isExecuting}
+          className="text-xs px-1.5 py-0.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+        >
+          {uniqueLlmNames.map((n) => (
+            <option key={n} value={n}>{n.split("/").pop()}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Temperature:</span>
+        <select
+          value={selectedTemp ?? ""}
+          onChange={(e) => setSelectedTemp(Number(e.target.value))}
+          disabled={isExecuting}
+          className="text-xs px-1.5 py-0.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+        >
+          {availableTemps.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+      </div>
+    </>
+  ) : undefined;
+
   // ── Panel widths ──────────────────────────────────────────────────────────
   const w1 = expandedPanel === "left" ? "80%" : expandedPanel === null ? "33.33%" : "10%";
   const w2 = expandedPanel === "middle" ? "80%" : expandedPanel === null ? "33.34%" : "10%";
@@ -366,6 +445,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
             onTemperatureChange={llm.handleTemperatureChange}
             temperatureError={temperatureError}
             temperatureShake={temperatureShake}
+            llmSelectorContent={llmSelectorContent}
             pipelineCode={pipelineCode}
             compileNodes={compileNodes}
             highlightedNodeIds={highlightedNodeIds}
@@ -393,6 +473,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
             lastRunDurationMs={lastRunDurationMs}
             lastRunCostUsd={lastRunCostUsd}
             lastRunProfile={lastRunProfile}
+            optimizerSummary={optimizerSummary}
             isReadOnly={loadedScriptId !== NEW_PIPELINE_ID}
             className={`${
               layoutMode === "left-split" && isGraphExpanded
@@ -417,7 +498,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                 }`}
               >
                 <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
-                  Computational Graph
+                  Computational graph
                 </span>
                 <span className="text-zinc-400">{isGraphExpanded ? "▲" : "▼"}</span>
               </div>
@@ -476,6 +557,8 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                     ? loadedScriptId
                     : null
                 }
+                llmName={selectedLlmOption?.llm_name}
+                temperature={selectedLlmOption?.temperature}
                 onTrialSelect={(trial) => {
                   setSelectedOptimizerTrial(trial);
                   setActiveOperatorName(undefined);
@@ -489,6 +572,8 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                 onMetaUpdate={(meta) => {
                   if (meta.operatorName) setOptimizerOperatorName(meta.operatorName);
                 }}
+                onTrajectoryLoaded={setLoadedTrajectory}
+                showTree={hasRun}
                 viewToggle={layoutMode === "toggled" ? graphToggleButtons : null}
               />
             )}
@@ -508,6 +593,16 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                   operatorName={optimizerOperatorName}
                   activeOperatorName={activeOperatorName}
                   isDark={isDark}
+                  finalCode={finalCode}
+                  optimizedOperatorName={optimizerOperatorName}
+                  hasRun={hasRun}
+                  isBestTrial={
+                    selectedOptimizerTrial != null &&
+                    loadedTrajectory != null &&
+                    loadedTrajectory.outcomes.length > 0 &&
+                    selectedOptimizerTrial.score != null &&
+                    selectedOptimizerTrial.score === Math.max(...loadedTrajectory.outcomes.map((o) => o.score ?? -Infinity))
+                  }
                   onOperatorClick={(name) => {
                     setActiveOperatorName(name);
                     const match = compileNodes.find(

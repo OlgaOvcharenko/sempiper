@@ -37,6 +37,10 @@ interface PipelineEditorPanelProps {
     lastRunProfile?: ExecuteProfile | null;
     showNewOption?: boolean;
     className?: string;
+    /** When provided, replaces the Model + Temperature inputs with custom content. */
+    llmSelectorContent?: React.ReactNode;
+    /** When provided (only after Run in optimizer mode), shows a summary below the code editor. */
+    optimizerSummary?: { scoring?: string; bestScore?: number; trials: number; operator?: string } | null;
 }
 
 const AVAILABLE_LLMS = [
@@ -83,6 +87,8 @@ export function PipelineEditorPanel({
     lastRunCostUsd,
     lastRunProfile,
     className = "",
+    llmSelectorContent,
+    optimizerSummary,
 }: PipelineEditorPanelProps) {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -188,27 +194,31 @@ export function PipelineEditorPanel({
 
                 {/* Secondary row: Settings */}
                 <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 overflow-x-auto no-scrollbar">
-                    <div className="flex items-center gap-1.5 shrink-0">
-                        <span>Model:</span>
-                        <select
-                            value={llmName}
-                            onChange={(e) => onLlmNameChange(e.target.value)}
-                            disabled={isExecuting}
-                            className="text-xs px-1.5 py-0.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-                        >
-                            {AVAILABLE_LLMS.map((n) => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                        <span>Temperature:</span>
-                        <input
-                            type="text"
-                            value={temperature}
-                            onChange={(e) => onTemperatureChange(e.target.value)}
-                            disabled={isExecuting}
-                            className={`text-xs px-1.5 py-0.5 rounded border w-12 transition-all ${temperatureError ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600" : "border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"} ${temperatureShake ? "animate-shake" : ""}`}
-                        />
-                    </div>
+                    {llmSelectorContent ?? (
+                        <>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <span>Model:</span>
+                                <select
+                                    value={llmName}
+                                    onChange={(e) => onLlmNameChange(e.target.value)}
+                                    disabled={isExecuting}
+                                    className="text-xs px-1.5 py-0.5 rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+                                >
+                                    {AVAILABLE_LLMS.map((n) => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <span>Temperature:</span>
+                                <input
+                                    type="text"
+                                    value={temperature}
+                                    onChange={(e) => onTemperatureChange(e.target.value)}
+                                    disabled={isExecuting}
+                                    className={`text-xs px-1.5 py-0.5 rounded border w-12 transition-all ${temperatureError ? "border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600" : "border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"} ${temperatureShake ? "animate-shake" : ""}`}
+                                />
+                            </div>
+                        </>
+                    )}
                     {lastRunDurationMs != null && (
                         <span className="shrink-0 opacity-60">· {Math.round(lastRunDurationMs / 1000)}s</span>
                     )}
@@ -287,6 +297,17 @@ export function PipelineEditorPanel({
                     activeOperatorName={activeOperatorName}
                 />
             </div>
+            {optimizerSummary && (
+                <div className="shrink-0 border-t border-slate-200 dark:border-zinc-700 px-3 py-2 bg-slate-50 dark:bg-zinc-800/60 text-xs text-zinc-500 dark:text-zinc-400 space-y-1">
+                    <p className="font-medium text-zinc-600 dark:text-zinc-300 uppercase tracking-wider text-[10px]">Optimization results</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                        {optimizerSummary.operator && <span>operator: <span className="text-zinc-700 dark:text-zinc-200 font-medium">{optimizerSummary.operator}</span></span>}
+                        {optimizerSummary.scoring && <span>scoring: <span className="text-zinc-700 dark:text-zinc-200 font-medium">{optimizerSummary.scoring}</span></span>}
+                        {optimizerSummary.bestScore != null && <span>best: <span className="text-emerald-600 dark:text-emerald-400 font-medium">{optimizerSummary.bestScore.toFixed(3)}</span></span>}
+                        <span>trials: <span className="text-zinc-700 dark:text-zinc-200 font-medium">{optimizerSummary.trials}</span></span>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

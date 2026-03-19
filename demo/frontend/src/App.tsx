@@ -114,29 +114,8 @@ export default function App() {
             </h1>
           </div>
 
-          {/* RIGHT Section: Layout buttons (Optimizer only) */}
-          <div className="flex items-center justify-end gap-3 z-10 w-[320px]">
-            {activeTab === 'optimizer' && (
-              <div className="flex p-0.5 bg-slate-100 dark:bg-zinc-800 rounded-lg border border-slate-200 dark:border-zinc-700">
-                {[
-                  { id: 'toggled', label: 'D' },
-                  { id: 'left-split', label: 'L' },
-                ].map((mode) => (
-                  <button
-                    key={mode.id}
-                    onClick={() => setLayoutMode(mode.id as 'toggled' | 'left-split')}
-                    className={`w-8 h-7 flex items-center justify-center text-[10px] font-bold rounded transition-all ${layoutMode === mode.id
-                      ? 'bg-white dark:bg-zinc-700 text-emerald-600 dark:text-emerald-400 shadow-sm'
-                      : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
-                      }`}
-                    title={mode.label}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* RIGHT Section: reserved for future controls */}
+          <div className="w-[320px]" />
         </header>
 
         <main className="flex-1 min-h-0 flex flex-col overflow-hidden">

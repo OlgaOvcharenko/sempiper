@@ -139,7 +139,7 @@ export function NodeDetailsPanel({
     return (
       <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
         <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Operator details</h2>
+          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Code details</h2>
           {expandButton}
         </div>
         <div className="flex-1 flex items-center justify-center p-6 text-zinc-500 dark:text-zinc-400 text-sm text-center">
@@ -247,7 +247,7 @@ export function NodeDetailsPanel({
     <div className="h-full flex flex-col rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-hidden shadow-md">
       <div className="shrink-0 h-[var(--header-height)] px-3 border-b border-slate-300 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-800 flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Operator details</h2>
+          <h2 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Code details</h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
             {selectedNode.label} <span className="text-zinc-500 dark:text-zinc-400">({selectedNode.type})</span>
           </p>

@@ -91,8 +91,8 @@ export function GraphPanel({
       cyRef.current = null;
     }
 
-    const { positions, edgeWaypoints } = computeLayoutWithWaypoints(skrubGraph);
-    const { cyNodes, cyEdges } = buildCyElements(skrubGraph, positions, edgeWaypoints);
+    const { positions } = computeLayoutWithWaypoints(skrubGraph);
+    const { cyNodes, cyEdges } = buildCyElements(skrubGraph, positions);
 
     // Theme-aware colors
     const colors = isDark
@@ -373,7 +373,7 @@ export function GraphPanel({
                 {isLoading || (isExecuting && shouldShowSkrubDict)
                   ? "Running pipeline…"
                   : shouldShowSkrubDict
-                    ? "Computational graph (from code) · Click an operator to see generated code"
+                    ? "Click an operator to see generated code"
                     : "Edit code to see computational graph"}
               </p>
             </div>

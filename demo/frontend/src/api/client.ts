@@ -356,7 +356,7 @@ export interface OptimizerSearchNode {
 
 export interface OptimizerOutcome {
   search_node: OptimizerSearchNode;
-  score: number;
+  score: number | null;
   state: {
     generated_code: string | string[] | Record<string, string>;
   };
@@ -365,10 +365,23 @@ export interface OptimizerOutcome {
 export interface OptimizerTrajectory {
   run_id?: string;
   optimizer_args?: {
+    operator_name?: string;
     scoring?: string;
     [key: string]: any;
   };
+  sempipes_config?: {
+    llm_for_code_generation?: {
+      name?: string;
+      parameters?: { temperature?: number };
+    };
+  };
   outcomes: OptimizerOutcome[];
+}
+
+export interface OptimizerLlmOption {
+  llm_name: string;
+  temperature: number;
+  label: string;
 }
 
 export async function fetchOptimizerTrajectory(): Promise<OptimizerTrajectory> {
@@ -381,13 +394,40 @@ export async function fetchOptimizerTrajectory(): Promise<OptimizerTrajectory> {
   }
 }
 
-export async function fetchOptimizerTrajectoryByScript(scriptId: string): Promise<OptimizerTrajectory> {
-  const res = await fetch(`${API_BASE}/optimizer/by-script?script_id=${encodeURIComponent(scriptId)}`);
+export async function fetchOptimizerTrajectoryByScript(
+  scriptId: string,
+  llmName?: string,
+  temperature?: number,
+): Promise<OptimizerTrajectory> {
+  const params = new URLSearchParams({ script_id: scriptId });
+  if (llmName !== undefined) params.set("llm_name", llmName);
+  if (temperature !== undefined) params.set("temperature", String(temperature));
+  const res = await fetch(`${API_BASE}/optimizer/by-script?${params}`);
   if (!res.ok) throw new Error(res.statusText || "Failed to fetch optimizer trajectory by script");
   try {
     return await res.json();
   } catch (e) {
     throw new Error("Invalid response from server (optimizer trajectory by script)");
+  }
+}
+
+export async function fetchOptimizerOptions(scriptId: string): Promise<OptimizerLlmOption[]> {
+  const res = await fetch(`${API_BASE}/optimizer/options?script_id=${encodeURIComponent(scriptId)}`);
+  if (!res.ok) return [];
+  try {
+    return await res.json();
+  } catch (e) {
+    return [];
+  }
+}
+
+export async function fetchOptimizerFinalCode(scriptId: string): Promise<Record<string, string> | null> {
+  const res = await fetch(`${API_BASE}/optimizer/final-code?script_id=${encodeURIComponent(scriptId)}`);
+  if (!res.ok) return null;
+  try {
+    return await res.json();
+  } catch (e) {
+    return null;
   }
 }
 /**

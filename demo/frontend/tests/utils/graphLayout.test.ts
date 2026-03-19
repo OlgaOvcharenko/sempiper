@@ -4,7 +4,6 @@ import {
   RANK_SEP,
   NODE_HEIGHT,
   WAYPOINT_CLEARANCE,
-  MAX_ENDPOINT_OFFSET,
   PRESET_LAYOUT_CONFIG,
   EDGE_CURVE_STYLE,
   calculateNodeWidth,
@@ -53,8 +52,8 @@ describe("PRESET_LAYOUT_CONFIG", () => {
 // ---------------------------------------------------------------------------
 
 describe("EDGE_CURVE_STYLE", () => {
-  it("is 'bezier' for smooth natural curves", () => {
-    expect(EDGE_CURVE_STYLE).toBe("bezier");
+  it("is 'straight'", () => {
+    expect(EDGE_CURVE_STYLE).toBe("straight");
   });
 });
 
@@ -395,91 +394,18 @@ describe("countEdgeCrossings", () => {
 // buildCyElements — edge endpoint offsets
 // ---------------------------------------------------------------------------
 
-describe("buildCyElements — edge endpoints", () => {
-  it("MAX_ENDPOINT_OFFSET is within node boundary (< 50%)", () => {
-    expect(MAX_ENDPOINT_OFFSET).toBeLessThan(50);
-    expect(MAX_ENDPOINT_OFFSET).toBeGreaterThan(0);
-  });
-
-  it("straight-down edge (dx=0) gets center endpoints '0% 50%' / '0% -50%'", () => {
+describe("buildCyElements — edges", () => {
+  it("produces edges with id, source, target", () => {
     const g: SkrubGraphDict = {
       nodes: [{ id: "a", label: "a" }, { id: "b", label: "b" }],
       parents: { a: [], b: ["a"] },
       children: { a: ["b"], b: [] },
     };
-    const positions = computePresetPositions(g); // a and b are in the same column
-    const { cyEdges } = buildCyElements(g, positions);
-    expect(cyEdges[0].data.sourceEndpoint).toBe("0% 50%");
-    expect(cyEdges[0].data.targetEndpoint).toBe("0% -50%");
-  });
-
-  it("target to the right → positive source x%, negative target x% (exits bottom-right, enters top-left)", () => {
-    // Two roots side by side, each with a child below — but we manually check
-    // an edge where target is explicitly to the right of source
-    const g: SkrubGraphDict = {
-      nodes: [
-        { id: "left", label: "left" },
-        { id: "right", label: "right" },
-        { id: "sink", label: "sink" },
-      ],
-      parents: { left: [], right: [], sink: ["left"] },
-      children: { left: ["sink"], right: [], sink: [] },
-    };
-    // Place left at x=0 and sink at x=NODE_SEP (force positions)
-    const positions = new Map([
-      ["left", { x: 0, y: 0 }],
-      ["right", { x: NODE_SEP, y: 0 }],
-      ["sink", { x: NODE_SEP, y: 75 }], // sink is to the right of left
-    ]);
-    const { cyEdges } = buildCyElements(g, positions);
-    const edge = cyEdges.find((e) => e.data.source === "skrub_left")!;
-    const srcOffset = parseInt(edge.data.sourceEndpoint); // "15% 50%" → 15
-    const tgtOffset = parseInt(edge.data.targetEndpoint); // "-15% -50%" → -15
-    expect(srcOffset).toBeGreaterThan(0);  // exits from right side of source
-    expect(tgtOffset).toBeLessThan(0);     // enters from left side of target (mirrored)
-    expect(srcOffset).toBe(-tgtOffset);    // offsets are exact mirrors
-  });
-
-  it("target to the left → negative x% (edge exits bottom-left, enters top-left)", () => {
-    const g: SkrubGraphDict = {
-      nodes: [{ id: "src", label: "src" }, { id: "tgt", label: "tgt" }],
-      parents: { src: [], tgt: ["src"] },
-      children: { src: ["tgt"], tgt: [] },
-    };
-    const positions = new Map([
-      ["src", { x: NODE_SEP, y: 0 }],  // src is to the right
-      ["tgt", { x: 0, y: 75 }],         // tgt is to the left → dx negative
-    ]);
-    const { cyEdges } = buildCyElements(g, positions);
-    const xOffset = parseInt(cyEdges[0].data.sourceEndpoint);
-    expect(xOffset).toBeLessThan(0); // exits from left side of source
-  });
-
-  it("endpoint offset magnitude is bounded by MAX_ENDPOINT_OFFSET", () => {
-    // Even for very large dx (many nodes apart), offset should not exceed max
-    const g: SkrubGraphDict = {
-      nodes: [{ id: "src", label: "src" }, { id: "tgt", label: "tgt" }],
-      parents: { src: [], tgt: ["src"] },
-      children: { src: ["tgt"], tgt: [] },
-    };
-    const farPositions = new Map([
-      ["src", { x: 0, y: 0 }],
-      ["tgt", { x: NODE_SEP * 100, y: 75 }], // absurdly far to the right
-    ]);
-    const { cyEdges } = buildCyElements(g, farPositions);
-    const xOffset = Math.abs(parseInt(cyEdges[0].data.sourceEndpoint));
-    expect(xOffset).toBeLessThanOrEqual(MAX_ENDPOINT_OFFSET);
-  });
-
-  it("edges without positions fall back to center endpoints", () => {
-    const g: SkrubGraphDict = {
-      nodes: [{ id: "a", label: "a" }, { id: "b", label: "b" }],
-      parents: { a: [], b: ["a"] },
-      children: { a: ["b"], b: [] },
-    };
-    const { cyEdges } = buildCyElements(g); // no positions
-    expect(cyEdges[0].data.sourceEndpoint).toBe("0% 50%");
-    expect(cyEdges[0].data.targetEndpoint).toBe("0% -50%");
+    const { cyEdges } = buildCyElements(g);
+    expect(cyEdges).toHaveLength(1);
+    expect(cyEdges[0].data.source).toBe("skrub_a");
+    expect(cyEdges[0].data.target).toBe("skrub_b");
+    expect(cyEdges[0].data.id).toBe("skrub_a-skrub_b");
   });
 });
 
@@ -970,7 +896,7 @@ describe("computeLayoutWithWaypoints — no edge-node overlaps after routing", (
     }
   });
 
-  it("buildCyElements marks long edges as segmented when waypoints are provided", () => {
+  it("buildCyElements produces straight edges with no waypoint data", () => {
     const g: SkrubGraphDict = {
       nodes: [
         { id: "a", label: "a" },
@@ -981,23 +907,14 @@ describe("computeLayoutWithWaypoints — no edge-node overlaps after routing", (
       parents: { a: [], b: ["a"], c: ["b"], d: ["a", "c"] },
       children: { a: ["b", "d"], b: ["c"], c: ["d"], d: [] },
     };
-    const { positions, edgeWaypoints } = computeLayoutWithWaypoints(g);
-    const { cyEdges } = buildCyElements(g, positions, edgeWaypoints);
+    const { positions } = computeLayoutWithWaypoints(g);
+    const { cyEdges } = buildCyElements(g, positions);
 
-    // Edge a→d is long (layers 0→3) — must have waypoints (unbundled-bezier)
+    // All edges are plain straight edges — no waypoint data
     const longEdge = cyEdges.find(
       (e) => e.data.source === "skrub_a" && e.data.target === "skrub_d",
     );
     expect(longEdge).toBeDefined();
-    expect(longEdge!.data.hasWaypoints).toBe("true");
-    expect(longEdge!.data.controlPointDistances).toBeDefined();
-    expect(longEdge!.data.controlPointWeights).toBeDefined();
-
-    // Edge b→c is short (layers 1→2) — must NOT have waypoints
-    const shortEdge = cyEdges.find(
-      (e) => e.data.source === "skrub_b" && e.data.target === "skrub_c",
-    );
-    expect(shortEdge).toBeDefined();
-    expect(shortEdge!.data.hasWaypoints).toBeUndefined();
+    expect((longEdge!.data as any).hasWaypoints).toBeUndefined();
   });
 });
