@@ -80,6 +80,9 @@ _current_node_object_ref = None
 _captured_previews: dict = {}
 _preview_capture_installed: bool = False  # Guard against double-patching.
 
+# Sentinel for grouping logic in _map_captures_to_skrub_semantic_nodes.
+_CAPTURE_GROUP_SENTINEL = object()
+
 
 def _capturing_generate_code_from_messages(messages):
     """Wrapper that captures generated code and delegates to original function. Also attributes LLM cost and attempt count to this operator."""
@@ -487,11 +490,18 @@ def _map_captures_to_skrub_semantic_nodes(
     num_captures: int,
     ref_to_graph_idx: dict[int, int],
     semantic_node_ids: set[str],
+    captured_refs: list,
 ) -> dict[int, str]:
     """
     Map each LLM code-capture index to a skrub graph node id (string) for semantic operators.
-    Prefer object-identity ref match; if some captures lack a match, pair remaining captures
-    to remaining semantic nodes in numeric node-id order (matches typical pipeline order).
+    Primary: object-identity ref match via ref_to_graph_idx.
+    Default: group consecutive unresolved captures by DataOp ref identity, take the LAST
+    capture per group, assign one group per remaining semantic node in numeric order.
+    Taking the last capture handles both:
+    - Retry patterns: operator rejects first code and regenerates an improved version
+    - Multi-step patterns: operator makes an intermediate LLM call (e.g. JSON spec) then
+      a second call to produce the actual final Python code
+    Last-resort: if no refs available, fall back to simple 1:1 order pairing.
     """
     ordered_semantic = sorted(semantic_node_ids, key=lambda x: int(x)) if semantic_node_ids else []
     capture_to_skrub: dict[int, str] = {}
@@ -504,15 +514,25 @@ def _map_captures_to_skrub_semantic_nodes(
     assigned_semantic = set(capture_to_skrub.values())
     remaining_semantic = [s for s in ordered_semantic if s not in assigned_semantic]
     unresolved = [i for i in range(num_captures) if i not in capture_to_skrub]
-    # If ref matching can't resolve all captures, pair the remaining captures with the first
-    # remaining semantic nodes in numeric order. This handles cases where runtime graphs expose
-    # extra semantic slots (e.g. apply_with_sem_choose nodes) but the pipeline only emits fewer
-    # LLM code captures.
-    #
-    # We intentionally do NOT require counts to match exactly: requiring equality turns this
-    # into a hard failure mode (no code emission), which breaks node assignment for some
-    # pipelines like `simple` and `medium`.
-    if remaining_semantic:
+    if not remaining_semantic or not unresolved:
+        return capture_to_skrub
+    if captured_refs:
+        # Group consecutive unresolved captures by DataOp ref identity.
+        # All LLM calls within one operator's evaluate() share the same _current_node_object_ref.
+        # Use the LAST capture in each group (most refined/final code for that operator).
+        groups: list[int] = []  # last capture index per group
+        _prev_ref = _CAPTURE_GROUP_SENTINEL
+        for idx in sorted(unresolved):
+            ref = captured_refs[idx] if idx < len(captured_refs) else None
+            if ref is not None and _prev_ref is not _CAPTURE_GROUP_SENTINEL and ref is _prev_ref:
+                groups[-1] = idx  # same operator — advance the group's last index
+            else:
+                groups.append(idx)  # new operator — start a new group
+                _prev_ref = ref
+        for last_idx, sem_id in zip(groups, remaining_semantic):
+            capture_to_skrub[last_idx] = sem_id
+    else:
+        # No refs available — last-resort 1:1 order pairing
         for cap_idx, sem_id in zip(sorted(unresolved), remaining_semantic):
             capture_to_skrub[cap_idx] = sem_id
     return capture_to_skrub
@@ -1155,7 +1175,7 @@ def main():
     # skipped — they have no corresponding UI slot and must not poison the assignment.
     semantic_node_ids = set(graph_dict.get("sempipesNodeIds") or []) if graph_dict else set()
     capture_to_skrub = _map_captures_to_skrub_semantic_nodes(
-        len(_captured_codes), ref_to_graph_idx, semantic_node_ids
+        len(_captured_codes), ref_to_graph_idx, semantic_node_ids, _captured_code_node_refs
     )
     for i in sorted(capture_to_skrub):
         sid = capture_to_skrub[i]

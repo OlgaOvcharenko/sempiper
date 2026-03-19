@@ -46,10 +46,10 @@ def _import_runner():
 
 
 def test_map_captures_order_fallback_when_ref_empty():
-    """Fraud-style pipeline: ref match fails (learner clone); pair by capture order + numeric semantic ids."""
+    """No refs: last-resort 1:1 order pairing by capture order + numeric semantic ids."""
     runner = _import_runner()
     m = runner._map_captures_to_skrub_semantic_nodes(
-        2, {}, {"12", "19"},
+        2, {}, {"12", "19"}, [],
     )
     assert m == {0: "12", 1: "19"}
 
@@ -58,7 +58,7 @@ def test_map_captures_ref_first_then_fallback():
     """First capture resolved by ref; second by order to remaining semantic node."""
     runner = _import_runner()
     m = runner._map_captures_to_skrub_semantic_nodes(
-        2, {0: 12}, {"12", "19"},
+        2, {0: 12}, {"12", "19"}, [],
     )
     assert m == {0: "12", 1: "19"}
 
@@ -71,9 +71,28 @@ def test_map_captures_order_fallback_with_extra_semantic_slot():
     """
     runner = _import_runner()
     m = runner._map_captures_to_skrub_semantic_nodes(
-        2, {}, {"12", "19", "21"},
+        2, {}, {"12", "19", "21"}, [],
     )
     assert m == {0: "12", 1: "19"}
+
+
+def test_map_captures_groups_same_ref_last_wins():
+    """
+    When multiple consecutive captures share the same DataOp ref (same operator), only
+    the LAST capture in the group is assigned to the semantic node.
+    Handles retries (improved code replaces earlier attempt) and multi-step operators
+    (intermediate JSON spec + final Python code). Fraud pipeline: 6 captures, 4 operators.
+    """
+    runner = _import_runner()
+    ref_a = object()  # sem_fillna — 2 calls
+    ref_b = object()  # sem_extract_features — 2 calls
+    ref_c = object()  # sem_gen_features — 1 call
+    ref_d = object()  # sem_agg_features — 1 call
+    captured_refs = [ref_a, ref_a, ref_b, ref_b, ref_c, ref_d]
+    m = runner._map_captures_to_skrub_semantic_nodes(
+        6, {}, {"3", "12", "23", "30"}, captured_refs
+    )
+    assert m == {1: "3", 3: "12", 4: "23", 5: "30"}
 
 
 # --------------------------------------------------------------------------- #
