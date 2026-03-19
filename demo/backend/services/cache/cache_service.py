@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,10 @@ class CacheService:
         return key_dir / "metadata.json"
 
     def _store_metadata(self, cache_key: str, operation: str, metadata: dict[str, Any]) -> None:
-        """Store metadata (script, model, temperature) alongside cache entry."""
+        """Store metadata (script, model, temperature) alongside cache entry.
+
+        Uses write-to-temp-then-rename to avoid corrupt files from concurrent writes.
+        """
         metadata_path = self._get_metadata_path(cache_key, operation)
         try:
             # Create directory if it doesn't exist
@@ -58,8 +62,17 @@ class CacheService:
             serializable = dict(metadata)
             if isinstance(serializable.get("script"), str):
                 serializable["script"] = serializable["script"].splitlines()
-            with open(metadata_path, "w", encoding="utf-8") as f:
-                json.dump(serializable, f, indent=2)
+            # Write atomically: temp file in same directory, then os.replace()
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=metadata_path.parent,
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                json.dump(serializable, tmp, indent=2)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, metadata_path)
             logger.debug(f"Stored metadata at {metadata_path}")
         except Exception as e:
             logger.warning(f"Failed to write metadata {metadata_path}: {e}")
@@ -81,6 +94,13 @@ class CacheService:
             if isinstance(data.get("script"), list):
                 data["script"] = "\n".join(data["script"])
             return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"Corrupt metadata {metadata_path}, removing: {e}")
+            try:
+                os.remove(metadata_path)
+            except OSError:
+                pass
+            return None
         except Exception as e:
             logger.warning(f"Failed to read metadata {metadata_path}: {e}")
             return None

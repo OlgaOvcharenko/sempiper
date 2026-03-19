@@ -186,3 +186,93 @@ def test_by_label_returns_matching_file(client, traj_dir):
     data = resp.json()
     assert "outcomes" in data
     assert data["run_id"] == "optimise_museums_simulated.json"
+
+
+# ---------------------------------------------------------------------------
+# /api/optimizer/options
+# ---------------------------------------------------------------------------
+
+SAMPLE_TRAJECTORY_WITH_LLM = {
+    "sempipes_config": {
+        "llm_for_code_generation": {
+            "name": "gemini/gemini-2.5-flash-lite",
+            "parameters": {"temperature": 0.1},
+        }
+    },
+    "optimizer_args": {"operator_name": "generated_features", "scoring": "roc_auc"},
+    "outcomes": [
+        {"search_node": {"trial": 0, "parent_trial": None}, "score": 0.75, "state": {"generated_code": "x = 1"}},
+    ],
+}
+
+
+def test_options_returns_empty_when_no_trajectories(client):
+    resp = client.get("/api/optimizer/options?script_id=optimise_house")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_options_extracts_llm_from_legacy_file(client, traj_dir):
+    (traj_dir / "optimise_house_simulated.json").write_text(json.dumps(SAMPLE_TRAJECTORY_WITH_LLM))
+    resp = client.get("/api/optimizer/options?script_id=optimise_house")
+    assert resp.status_code == 200
+    opts = resp.json()
+    assert len(opts) == 1
+    assert opts[0]["llm_name"] == "gemini/gemini-2.5-flash-lite"
+    assert abs(opts[0]["temperature"] - 0.1) < 1e-6
+    assert "gemini-2.5-flash-lite" in opts[0]["label"]
+
+
+def test_options_deduplicates_same_llm_temp(client, traj_dir):
+    (traj_dir / "optimise_house_run1.json").write_text(json.dumps(SAMPLE_TRAJECTORY_WITH_LLM))
+    time.sleep(0.01)
+    (traj_dir / "optimise_house_run2.json").write_text(json.dumps(SAMPLE_TRAJECTORY_WITH_LLM))
+    resp = client.get("/api/optimizer/options?script_id=optimise_house")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1  # deduplicated
+
+
+def test_options_skips_trajectories_without_llm_config(client, traj_dir):
+    (traj_dir / "optimise_house_simulated.json").write_text(json.dumps(SAMPLE_TRAJECTORY))
+    resp = client.get("/api/optimizer/options?script_id=optimise_house")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# /api/optimizer/final-code
+# ---------------------------------------------------------------------------
+
+
+def test_final_code_returns_404_for_unknown_script(client):
+    resp = client.get("/api/optimizer/final-code?script_id=nonexistent")
+    assert resp.status_code == 404
+
+
+def test_final_code_returns_404_when_no_code_file_in_manifest(client, tmp_path, monkeypatch):
+    import routers.optimizer as opt_module
+    manifest_dir = tmp_path / "optimizer_scripts"
+    manifest_dir.mkdir()
+    manifest = [{"id": "optimise_museums", "label": "Museums", "file": "optimise_museums.py"}]
+    (manifest_dir / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(opt_module, "_OPTIMIZER_SCRIPTS_DIR", manifest_dir)
+    resp = client.get("/api/optimizer/final-code?script_id=optimise_museums")
+    assert resp.status_code == 404
+
+
+def test_final_code_returns_code_dict(client, traj_dir, tmp_path, monkeypatch):
+    import routers.optimizer as opt_module
+    manifest_dir = tmp_path / "optimizer_scripts"
+    manifest_dir.mkdir()
+    manifest = [{"id": "optimise_house", "label": "House", "file": "optimise_house.py", "code_file": "house_code.json"}]
+    (manifest_dir / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(opt_module, "_OPTIMIZER_SCRIPTS_DIR", manifest_dir)
+
+    code_data = {"generated_features": "df['x'] = 1", "sem_clean": "df = df.dropna()"}
+    (traj_dir / "house_code.json").write_text(json.dumps(code_data))
+
+    resp = client.get("/api/optimizer/final-code?script_id=optimise_house")
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["generated_features"] == "df['x'] = 1"
+    assert result["sem_clean"] == "df = df.dropna()"
