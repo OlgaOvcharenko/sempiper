@@ -8,7 +8,7 @@ import cytoscape, { type Core, type NodeSingular } from "cytoscape";
 import type { SkrubGraphDict } from "../api/client";
 import {
   buildCyElements,
-  computePresetPositions,
+  computeLayoutWithWaypoints,
   PRESET_LAYOUT_CONFIG,
   EDGE_CURVE_STYLE,
 } from "../utils/graphLayout";
@@ -91,8 +91,8 @@ export function GraphPanel({
       cyRef.current = null;
     }
 
-    const positions = computePresetPositions(skrubGraph);
-    const { cyNodes, cyEdges } = buildCyElements(skrubGraph, positions);
+    const { positions, edgeWaypoints } = computeLayoutWithWaypoints(skrubGraph);
+    const { cyNodes, cyEdges } = buildCyElements(skrubGraph, positions, edgeWaypoints);
 
     // Theme-aware colors
     const colors = isDark
@@ -247,6 +247,18 @@ export function GraphPanel({
             "source-endpoint": "data(sourceEndpoint)",
             "target-endpoint": "data(targetEndpoint)",
             "arrow-scale": 0.8,
+          },
+        },
+        // Long edges with waypoints use unbundled-bezier for smooth routing
+        // around intermediate nodes (avoids the sharp corners of segments).
+        {
+          selector: "edge[hasWaypoints = 'true']",
+          style: {
+            "curve-style": "unbundled-bezier" as const,
+            "control-point-distances": "data(controlPointDistances)",
+            "control-point-weights": "data(controlPointWeights)",
+            "source-endpoint": "data(sourceEndpoint)",
+            "target-endpoint": "data(targetEndpoint)",
           },
         },
       ],

@@ -89,7 +89,7 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
     isExecuting,
     liveNodeCode,
     liveNodeRetries,
-    liveFallbackByNode,
+    liveDebugInfoByNode,
     liveNodeCostUsd,
     inputSummaryByNode,
     nodeDataByNode,
@@ -97,6 +97,7 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
     lastRunDurationMs,
     lastRunError,
     lastRunProfile,
+    lastRunMetric,
     skrubToCompileId,
     handlePlay,
     resetLiveState,
@@ -113,7 +114,6 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
   const {
     compileNodes,
     compileEdges,
-    compileError,
     compileValidationErrors,
     compileTimingsMs,
     refreshCompileGraph,
@@ -426,14 +426,6 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
               </div>
             </div>
 
-            {compileError != null && (
-              <p
-                className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded px-2 py-1"
-                role="alert"
-              >
-                {compileError}
-              </p>
-            )}
           </div>
 
           <div className="flex-1 min-h-0">
@@ -520,6 +512,14 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
                     <span className="text-zinc-400 dark:text-zinc-500">·</span>
                     <span className="text-zinc-600 dark:text-zinc-300" title="LLM cost">
                       ${lastRunCostUsd.toFixed(6)}
+                    </span>
+                  </>
+                )}
+                {lastRunMetric != null && (
+                  <>
+                    <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                    <span className="text-zinc-600 dark:text-zinc-300" title={lastRunMetric.name}>
+                      {lastRunMetric.name}: {lastRunMetric.value.toFixed(4)}
                     </span>
                   </>
                 )}
@@ -661,7 +661,7 @@ export function CodeGenDemo({ isDark = false, isDebug = false }: CodeGenDemoProp
             generatedCode={null}
             liveGeneratedCodeByNode={liveNodeCode}
             liveRetriesByNode={liveNodeRetries}
-            liveFallbackByNode={liveFallbackByNode}
+            liveDebugInfoByNode={liveDebugInfoByNode}
             liveCostUsdByNode={liveNodeCostUsd}
             inputSummaryByNode={inputSummaryByNode}
             inputSummaryForSelectedNode={inputSummaryForSelectedNode}

@@ -37,11 +37,9 @@ export const PRESET_LAYOUT_CONFIG = {
 } as const;
 
 /**
- * Edge curve style. "bezier" produces smooth natural curves.
- * Combined with the deterministic preset layout this avoids crossings without
- * the visual noise of orthogonal (taxi) routing.
+ * Edge curve style. "straight" draws direct lines between nodes.
  */
-export const EDGE_CURVE_STYLE = "bezier" as const;
+export const EDGE_CURVE_STYLE = "straight" as const;
 
 // ---------------------------------------------------------------------------
 // Node helpers
@@ -257,16 +255,241 @@ export function countEdgeCrossings(
 }
 
 // ---------------------------------------------------------------------------
-// Element construction
+// Overlap detection
+// ---------------------------------------------------------------------------
+
+/** Pixel height of a node bounding box (matches GraphPanel height: 32). */
+export const NODE_HEIGHT = 32;
+
+/**
+ * Detect edges whose visual path (linearly approximated) passes through the
+ * bounding box of a node that is neither the edge's source nor its target.
+ *
+ * This catches "long edges" — edges spanning multiple layers — that Cytoscape
+ * draws as a bezier curve passing straight through intermediate nodes.
+ *
+ * Positions and node IDs use the **raw** (non-skrub_-prefixed) node IDs, i.e.
+ * the same keys used in SkrubGraphDict.parents.
+ *
+ * @param positions   Raw node ID → {x, y} from computePresetPositions.
+ * @param nodeWidths  Raw node ID → pixel width (from calculateNodeWidth).
+ * @param edges       Edges to check, using raw source/target IDs.
+ * @returns List of {edge, overlappingNode} pairs.
+ */
+export function detectEdgeNodeOverlaps(
+  positions: Map<string, LayoutPosition>,
+  nodeWidths: Map<string, number>,
+  edges: Array<{ source: string; target: string }>,
+): Array<{ edge: { source: string; target: string }; overlappingNode: string }> {
+  const result: Array<{
+    edge: { source: string; target: string };
+    overlappingNode: string;
+  }> = [];
+  const nodeIds = Array.from(positions.keys());
+  const HALF_H = NODE_HEIGHT / 2;
+  const SAMPLES = 30;
+
+  for (const edge of edges) {
+    const srcPos = positions.get(edge.source);
+    const tgtPos = positions.get(edge.target);
+    if (!srcPos || !tgtPos) continue;
+
+    const reported = new Set<string>();
+
+    for (let i = 1; i < SAMPLES; i++) {
+      const t = i / SAMPLES;
+      // Linear interpolation — accurate for mostly-vertical bezier curves
+      const sampleX = srcPos.x + (tgtPos.x - srcPos.x) * t;
+      const sampleY = srcPos.y + (tgtPos.y - srcPos.y) * t;
+
+      for (const nodeId of nodeIds) {
+        if (nodeId === edge.source || nodeId === edge.target) continue;
+        if (reported.has(nodeId)) continue;
+
+        const nodePos = positions.get(nodeId)!;
+        const halfW = (nodeWidths.get(nodeId) ?? 70) / 2;
+
+        if (
+          sampleX >= nodePos.x - halfW &&
+          sampleX <= nodePos.x + halfW &&
+          sampleY >= nodePos.y - HALF_H &&
+          sampleY <= nodePos.y + HALF_H
+        ) {
+          result.push({ edge, overlappingNode: nodeId });
+          reported.add(nodeId);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Post-layout waypoint routing for long edges
 // ---------------------------------------------------------------------------
 
 /**
- * Maximum horizontal endpoint offset as a percentage of node half-width.
- * tanh(dx/NODE_SEP) * MAX_ENDPOINT_OFFSET gives the x% used in
- * "x% 50%" / "x% -50%" source/target-endpoint style strings.
- * Capped at 38% so the endpoint always stays within the node boundary.
+ * Minimum pixel clearance between a waypoint x-position and any node's
+ * horizontal bounding-box edge. Keeps the routed edge visually separated
+ * from nodes it passes beside.
  */
-export const MAX_ENDPOINT_OFFSET = 38;
+export const WAYPOINT_CLEARANCE = 20;
+
+/**
+ * Find the x coordinate closest to `idealX` that is outside every padded
+ * node bounding box at a given layer.
+ *
+ * When `idealX` is already clear, it is returned unchanged (no deviation).
+ * When blocked, returns the nearest edge of the blocking merged interval
+ * (left or right, whichever is closer to `idealX`).
+ */
+function findClearXPosition(
+  idealX: number,
+  layerNodeIds: string[],
+  positions: Map<string, LayoutPosition>,
+  nodeWidths: Map<string, number>,
+): number {
+  if (layerNodeIds.length === 0) return idealX;
+
+  const obstacles: Array<[number, number]> = [];
+  for (const id of layerNodeIds) {
+    const pos = positions.get(id);
+    if (!pos) continue;
+    const halfW = (nodeWidths.get(id) ?? 70) / 2 + WAYPOINT_CLEARANCE;
+    obstacles.push([pos.x - halfW, pos.x + halfW]);
+  }
+
+  // Fast path: idealX is already clear
+  if (!obstacles.some(([l, r]) => idealX >= l && idealX <= r)) return idealX;
+
+  // Merge overlapping intervals then find the interval containing idealX
+  obstacles.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [l, r] of obstacles) {
+    if (merged.length === 0 || l > merged[merged.length - 1][1]) {
+      merged.push([l, r]);
+    } else {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], r);
+    }
+  }
+
+  for (const [l, r] of merged) {
+    if (idealX >= l && idealX <= r) {
+      // Return the nearest free edge of this merged blocked interval
+      return (idealX - l) <= (r - idealX) ? l : r;
+    }
+  }
+
+  return idealX; // fallback (shouldn't reach here)
+}
+
+/**
+ * Post-layout waypoint computation for long edges (edges spanning > 1 layer).
+ *
+ * Operates on already-computed node positions. For each intermediate layer
+ * between a long edge's source and target:
+ *   1. Computes the ideal x by linear interpolation (straight-line path).
+ *   2. If the ideal x is clear of all nodes at that layer, uses it as-is.
+ *   3. If blocked, deviates to the nearest free x (minimum lateral offset).
+ *
+ * This is strictly post-layout: real node positions are never changed.
+ * Waypoints only deviate from the straight path when an actual obstacle
+ * forces them to, so edges are as straight as possible.
+ *
+ * @returns Map of "sourceId_targetId" → waypoint positions.
+ */
+function computeWaypointsForLongEdges(
+  skrubGraph: SkrubGraphDict,
+  positions: Map<string, LayoutPosition>,
+  nodeWidths: Map<string, number>,
+  rankSep: number,
+): Map<string, LayoutPosition[]> {
+  const layers = assignLayers(skrubGraph);
+
+  // Group nodes by layer for O(1) obstacle lookup per layer
+  const nodesByLayer = new Map<number, string[]>();
+  for (const node of skrubGraph.nodes) {
+    const layer = layers.get(node.id) ?? 0;
+    if (!nodesByLayer.has(layer)) nodesByLayer.set(layer, []);
+    nodesByLayer.get(layer)!.push(node.id);
+  }
+
+  const edgeWaypoints = new Map<string, LayoutPosition[]>();
+
+  for (const [nodeId, parentIds] of Object.entries(skrubGraph.parents ?? {})) {
+    for (const parentId of parentIds) {
+      const srcLayer = layers.get(parentId) ?? 0;
+      const tgtLayer = layers.get(nodeId) ?? 0;
+      if (tgtLayer - srcLayer <= 1) continue; // short edge — no waypoints
+
+      const srcPos = positions.get(parentId);
+      const tgtPos = positions.get(nodeId);
+      if (!srcPos || !tgtPos) continue;
+
+      const waypoints: LayoutPosition[] = [];
+
+      for (let k = srcLayer + 1; k < tgtLayer; k++) {
+        const t = (k - srcLayer) / (tgtLayer - srcLayer);
+        const idealX = srcPos.x + (tgtPos.x - srcPos.x) * t;
+        // y is determined by the layer grid, not by linear interpolation
+        const layerY = k * rankSep + rankSep / 2;
+
+        const layerNodes = nodesByLayer.get(k) ?? [];
+        const clearX = findClearXPosition(idealX, layerNodes, positions, nodeWidths);
+        waypoints.push({ x: clearX, y: layerY });
+      }
+
+      edgeWaypoints.set(`${parentId}_${nodeId}`, waypoints);
+    }
+  }
+
+  return edgeWaypoints;
+}
+
+/**
+ * Compute node positions (same as computePresetPositions) plus smooth
+ * obstacle-avoiding waypoints for every long edge.
+ *
+ * Positions are computed by the standard Sugiyama pipeline (no dummy nodes).
+ * Waypoints are computed post-layout: each long edge follows the straight
+ * source→target path and deviates only when an intermediate node blocks it.
+ *
+ * @returns positions  — raw node ID → {x, y} (same as computePresetPositions)
+ * @returns edgeWaypoints — "sourceId_targetId" → waypoint positions for
+ *          long edges; used by buildCyElements to set unbundled-bezier params.
+ */
+export function computeLayoutWithWaypoints(
+  skrubGraph: SkrubGraphDict,
+  options: { nodeSep?: number; rankSep?: number } = {},
+): {
+  positions: Map<string, LayoutPosition>;
+  edgeWaypoints: Map<string, LayoutPosition[]>;
+} {
+  const nodeSep = options.nodeSep ?? NODE_SEP;
+  const rankSep = options.rankSep ?? RANK_SEP;
+
+  // Regular Sugiyama layout — no dummy nodes
+  const positions = computePresetPositions(skrubGraph, { nodeSep, rankSep });
+
+  const nodeWidths = new Map<string, number>();
+  for (const node of skrubGraph.nodes) {
+    nodeWidths.set(node.id, calculateNodeWidth(node.label));
+  }
+
+  const edgeWaypoints = computeWaypointsForLongEdges(
+    skrubGraph,
+    positions,
+    nodeWidths,
+    rankSep,
+  );
+
+  return { positions, edgeWaypoints };
+}
+
+// ---------------------------------------------------------------------------
+// Element construction
+// ---------------------------------------------------------------------------
 
 export interface CyNode {
   data: {
@@ -284,20 +507,16 @@ export interface CyEdge {
     id: string;
     source: string;
     target: string;
-    /** "x% 50%"  — exit point on the source node's bottom edge. */
-    sourceEndpoint: string;
-    /** "x% -50%" — entry point on the target node's top edge. */
-    targetEndpoint: string;
   };
 }
 
 /**
  * Build the Cytoscape element arrays (nodes + edges) from a SkrubGraphDict.
  *
- * @param skrubGraph  The graph structure.
- * @param positions   Optional map of raw node ID → {x, y}. When provided,
- *                    each CyNode receives a `position` field so that
- *                    Cytoscape's "preset" layout places nodes exactly.
+ * @param skrubGraph The graph structure.
+ * @param positions  Optional map of raw node ID → {x, y}. When provided,
+ *                   each CyNode receives a `position` field so that
+ *                   Cytoscape's "preset" layout places nodes exactly.
  */
 export function buildCyElements(
   skrubGraph: SkrubGraphDict,
@@ -340,32 +559,7 @@ export function buildCyElements(
     for (const parentId of parentIds) {
       const sourceId = toSkrubId(parentId);
 
-      // Compute directional exit/entry points so the edge leaves the source
-      // from the side closest to the target and enters the target similarly.
-      // tanh saturates smoothly: dx=0 → center, dx≫0 → near right edge.
-      let sourceEndpoint = "0% 50%";
-      let targetEndpoint = "0% -50%";
-      if (positions) {
-        const srcPos = positions.get(parentId);
-        const tgtPos = positions.get(nodeId);
-        if (srcPos && tgtPos) {
-          const offset = Math.round(
-            Math.tanh((tgtPos.x - srcPos.x) / NODE_SEP) * MAX_ENDPOINT_OFFSET,
-          );
-          sourceEndpoint = `${offset}% 50%`;
-          targetEndpoint = `${-offset}% -50%`;
-        }
-      }
-
-      cyEdges.push({
-        data: {
-          id: `${sourceId}-${targetId}`,
-          source: sourceId,
-          target: targetId,
-          sourceEndpoint,
-          targetEndpoint,
-        },
-      });
+      cyEdges.push({ data: { id: `${sourceId}-${targetId}`, source: sourceId, target: targetId } });
     }
   }
 

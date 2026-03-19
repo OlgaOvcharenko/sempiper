@@ -184,8 +184,8 @@ export type ExecuteEvent =
     generated_code: string;
     retries?: number;
     cost_usd?: number;
-    /** True when backend used placeholder (LLM unavailable or failed). */
-    is_fallback?: boolean;
+    /** Debug info from runner (match_method, ref_class, node_index). Only present when runner emits it. */
+    debug_info?: Record<string, unknown>;
   }
   | { type: "input_summary"; node_id: string; schema: InputSummary["schema"]; sample: InputSummary["sample"]; row_count: number }
   | {

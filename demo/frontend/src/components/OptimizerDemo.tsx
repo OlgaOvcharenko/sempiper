@@ -130,7 +130,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
     isExecuting,
     liveNodeCode,
     liveNodeRetries,
-    liveFallbackByNode,
+    liveDebugInfoByNode,
     liveNodeCostUsd,
     inputSummaryByNode,
     nodeDataByNode,
@@ -390,7 +390,6 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
             onFocusApplied={() => setCursorFocusNodeId(null)}
             sempipesNodeIds={displayGraph?.sempipesNodeIds ?? []}
             activeOperatorName={activeOperatorName}
-            lastRunError={lastRunError}
             lastRunDurationMs={lastRunDurationMs}
             lastRunCostUsd={lastRunCostUsd}
             lastRunProfile={lastRunProfile}
@@ -530,7 +529,7 @@ export function OptimizerDemo({ layoutMode, isDark }: OptimizerDemoProps) {
                   generatedCode={null}
                   liveGeneratedCodeByNode={liveNodeCode}
                   liveRetriesByNode={liveNodeRetries}
-                  liveFallbackByNode={liveFallbackByNode}
+                  liveDebugInfoByNode={liveDebugInfoByNode}
                   liveCostUsdByNode={liveNodeCostUsd}
                   inputSummaryByNode={inputSummaryByNode}
                   inputSummaryForSelectedNode={inputSummaryForSelectedNode}

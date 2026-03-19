@@ -10,7 +10,7 @@ export interface UseExecutionReturn {
   isExecuting: boolean;
   liveNodeCode: Record<string, string>;
   liveNodeRetries: Record<string, number>;
-  liveFallbackByNode: Record<string, boolean>;
+  liveDebugInfoByNode: Record<string, Record<string, unknown>>;
   liveNodeCostUsd: Record<string, number>;
   inputSummaryByNode: Record<string, InputSummary>;
   nodeDataByNode: Record<string, InputSummary>;
@@ -78,7 +78,7 @@ export function useExecution(opts: {
   const [isExecuting, setIsExecuting] = useState(false);
   const [liveNodeCode, setLiveNodeCode] = useState<Record<string, string>>({});
   const [liveNodeRetries, setLiveNodeRetries] = useState<Record<string, number>>({});
-  const [liveFallbackByNode, setLiveFallbackByNode] = useState<Record<string, boolean>>({});
+  const [liveDebugInfoByNode, setLiveDebugInfoByNode] = useState<Record<string, Record<string, unknown>>>({});
   const [liveNodeCostUsd, setLiveNodeCostUsd] = useState<Record<string, number>>({});
   const [inputSummaryByNode, setInputSummaryByNode] = useState<Record<string, InputSummary>>({});
   const [nodeDataByNode, setNodeDataByNode] = useState<Record<string, InputSummary>>({});
@@ -132,7 +132,6 @@ export function useExecution(opts: {
     // Clear all live state from any previous run.
     setLiveNodeCode({});
     setLiveNodeRetries({});
-    setLiveFallbackByNode({});
     setLiveNodeCostUsd({});
     setInputSummaryByNode({});
     setNodeDataByNode({});
@@ -236,20 +235,20 @@ export function useExecution(opts: {
                 [skrubId]: retries,
               }));
             }
-            if (event.is_fallback != null) {
-              const isFallback = event.is_fallback;
-              setLiveFallbackByNode((prev) => ({
-                ...prev,
-                [nodeId]: isFallback,
-                [skrubId]: isFallback,
-              }));
-            }
             if (event.cost_usd != null) {
               const cost = event.cost_usd;
               setLiveNodeCostUsd((prev) => ({
                 ...prev,
                 [nodeId]: cost,
                 [skrubId]: cost,
+              }));
+            }
+            if (event.debug_info != null) {
+              const debugInfo = event.debug_info as Record<string, unknown>;
+              setLiveDebugInfoByNode((prev) => ({
+                ...prev,
+                [nodeId]: debugInfo,
+                [skrubId]: debugInfo,
               }));
             }
           } else if (event.type === "error") {
@@ -267,7 +266,7 @@ export function useExecution(opts: {
               // (the compile graph uses compile IDs, but node_code events used runtime IDs).
               setLiveNodeCode((prev) => rekey(prev, mapping));
               setLiveNodeRetries((prev) => rekey(prev, mapping));
-              setLiveFallbackByNode((prev) => rekey(prev, mapping));
+              setLiveDebugInfoByNode((prev) => rekey(prev, mapping));
               setLiveNodeCostUsd((prev) => rekey(prev, mapping));
               setNodeDataByNode((prev) => rekey(prev, mapping));
               setInputSummaryByNode((prev) => rekey(prev, mapping));
@@ -309,7 +308,7 @@ export function useExecution(opts: {
     isExecuting,
     liveNodeCode,
     liveNodeRetries,
-    liveFallbackByNode,
+    liveDebugInfoByNode,
     liveNodeCostUsd,
     inputSummaryByNode,
     nodeDataByNode,

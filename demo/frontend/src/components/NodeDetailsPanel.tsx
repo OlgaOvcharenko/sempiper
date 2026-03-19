@@ -76,8 +76,8 @@ interface NodeDetailsPanelProps {
   liveGeneratedCodeByNode?: Record<string, string> | null;
   /** Per-node LLM attempts from last run (node_id → attempt count). */
   liveRetriesByNode?: Record<string, number> | null;
-  /** Per-node fallback flag: true when backend used placeholder (LLM unavailable or failed). */
-  liveFallbackByNode?: Record<string, boolean> | null;
+  /** Per-node debug info from runner (match_method, ref_class, node_index). */
+  liveDebugInfoByNode?: Record<string, Record<string, unknown>> | null;
   /** Per-node LLM cost in USD from last run (node_id → cost). */
   liveCostUsdByNode?: Record<string, number> | null;
   /** Per-node input summary (schema, sample, row_count) from last run (node_id → summary). */
@@ -118,7 +118,7 @@ export function NodeDetailsPanel({
   generatedCode = null,
   liveGeneratedCodeByNode,
   liveRetriesByNode,
-  liveFallbackByNode = null,
+  liveDebugInfoByNode = null,
   liveCostUsdByNode,
   inputSummaryByNode,
   inputSummaryForSelectedNode,
@@ -180,10 +180,10 @@ export function NodeDetailsPanel({
     (compileId && retriesMap[compileId]) ??
     (compileId && retriesMap[`skrub_${compileId}`]) ?? undefined;
 
-  const fallbackMap = liveFallbackByNode ?? {};
-  const nodeFallback = fallbackMap[selectedNodeId] ?? fallbackMap[rawNodeId] ??
-    (compileId && fallbackMap[compileId]) ??
-    (compileId && fallbackMap[`skrub_${compileId}`]) ?? undefined;
+  const debugInfoMap = liveDebugInfoByNode ?? {};
+  const nodeDebugInfo = debugInfoMap[selectedNodeId] ?? debugInfoMap[rawNodeId] ??
+    (compileId && debugInfoMap[compileId]) ??
+    (compileId && debugInfoMap[`skrub_${compileId}`]) ?? undefined;
 
   const costMap = liveCostUsdByNode ?? {};
   const nodeCostUsd = costMap[selectedNodeId] ?? costMap[rawNodeId] ??
@@ -295,17 +295,11 @@ export function NodeDetailsPanel({
                   <h3 className="text-xs text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
                     LLM / prompt stats
                   </h3>
-                  {nodeFallback === true && (
-                    <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-3 py-2 mb-2">
-                      Placeholder code shown above (LLM unavailable or failed). Configure sempipes with an API key for real generated code.
-                    </p>
-                  )}
                   {(nodeRetries != null || (nodeCostUsd != null && nodeCostUsd > 0)) && (
                     <div className="flex flex-wrap gap-3 text-sm text-zinc-600 dark:text-zinc-300 mb-2">
                       {nodeRetries != null && (
-                        <span title={nodeFallback ? "Attempts before falling back to placeholder" : "Number of LLM calls for this node"}>
+                        <span title="Number of LLM calls for this node">
                           Attempts: {nodeRetries}
-                          {nodeFallback && " (LLM failed, placeholder shown)"}
                         </span>
                       )}
                       {nodeCostUsd != null && nodeCostUsd > 0 && (
@@ -315,7 +309,7 @@ export function NodeDetailsPanel({
                       )}
                     </div>
                   )}
-                  {nodeFallback !== true && !isExecuting && nodeRetries == null && (nodeCostUsd == null || nodeCostUsd <= 0) && !hasCodeToShow && (
+                  {!isExecuting && nodeRetries == null && (nodeCostUsd == null || nodeCostUsd <= 0) && !hasCodeToShow && (
                     <p className="text-sm text-zinc-600 dark:text-zinc-300">
                       Prompt statistics and node-specific metadata will appear here when available.
                     </p>
@@ -324,6 +318,14 @@ export function NodeDetailsPanel({
                     <pre className="text-xs bg-slate-100 dark:bg-zinc-800 rounded p-3 mt-2 overflow-x-auto text-zinc-700 dark:text-zinc-300 font-mono border border-slate-200 dark:border-zinc-700">
                       {JSON.stringify(nodeMetadata, null, 2)}
                     </pre>
+                  )}
+                  {isDebug && nodeDebugInfo && (
+                    <div className="border-t border-slate-200 dark:border-zinc-700 pt-3 mt-2">
+                      <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mb-1">Debug info</p>
+                      <pre className="text-xs text-slate-600 dark:text-zinc-300 bg-slate-50 dark:bg-zinc-800 rounded p-2 overflow-x-auto border border-slate-200 dark:border-zinc-700">
+                        {JSON.stringify(nodeDebugInfo, null, 2)}
+                      </pre>
+                    </div>
                   )}
                 </section>
               </>

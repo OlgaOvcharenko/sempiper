@@ -32,8 +32,6 @@ interface PipelineEditorPanelProps {
     onFocusApplied: () => void;
     sempipesNodeIds: string[];
     activeOperatorName?: string;
-    lastRunError: string | null;
-    compileError?: string | null;
     lastRunDurationMs?: number | null;
     lastRunCostUsd?: number | null;
     lastRunProfile?: ExecuteProfile | null;
@@ -81,7 +79,6 @@ export function PipelineEditorPanel({
     onFocusApplied,
     sempipesNodeIds,
     activeOperatorName,
-    lastRunError,
     lastRunDurationMs,
     lastRunCostUsd,
     lastRunProfile,
@@ -188,12 +185,6 @@ export function PipelineEditorPanel({
                         </button>
                     )}
                 </div>
-
-                {lastRunError && (
-                    <p className="text-xs font-bold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded px-2 py-1" role="alert">
-                        {lastRunError}
-                    </p>
-                )}
 
                 {/* Secondary row: Settings */}
                 <div className="flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 overflow-x-auto no-scrollbar">
