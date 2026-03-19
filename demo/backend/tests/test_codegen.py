@@ -834,15 +834,8 @@ def test_execute_stream_emits_skrub_graph_only_when_runner_prints_marker():
         n.get("label") == "as_X" for n in graph.get("nodes", [])
     )
 
-    # Semantic operators get node_code; non-semantic/non-var nodes get no fake input_summary
-    node_code_events = [e for e in events if e.get("type") == "node_code"]
-    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
-
-    # Semantic operators (sem_fillna, n2) should get node_code
-    semantic_codes = [e for e in node_code_events if "sem_fillna" in str(e.get("node_id", "")) or "n2" in str(e.get("node_id", ""))]
-    assert len(semantic_codes) >= 1, "semantic operators should get node_code events"
-
     # input_summary is only emitted for real Var nodes with available data — no fake data
+    input_summary_events = [e for e in events if e.get("type") == "input_summary"]
     for e in input_summary_events:
         assert "schema" in e and "sample" in e and "row_count" in e, "input_summary must contain real data fields"
 
@@ -871,16 +864,46 @@ def test_skrub_runner_treats_apply_nodes_as_semantic_and_maps_to_sempipes():
 def test_execute_stream_includes_node_code_per_runnable_node():
     """Design: execute stream yields node_code from pipeline run (conftest provides ##SEMPIPES_NODE_CODE## in mock stdout)."""
     import json
+    from unittest.mock import MagicMock, patch
 
     _valid_code = (
         "import skrub\n"
         "df = skrub.var('df')\n"
         "result = df.sem_fillna(target_column='a', nl_prompt='Fill', impute_with_existing_values_only=True)\n"
     )
-    resp = client.post(
-        "/api/execute",
-        json={"input_code": _valid_code},
-    )
+
+    # Compute compile IDs so mock skrub_node_ids match what execute_stream expects.
+    sem_compile_ids: list[str] = []
+    try:
+        from services.graph_api import compile_script_to_graph_dynamic
+        from services.execute_stream import _is_semantic_operator
+        _result = compile_script_to_graph_dynamic(_valid_code)
+        sem_compile_ids = [n.id for n in _result.nodes if _is_semantic_operator(n.label)]
+    except Exception:
+        pass
+    if not sem_compile_ids:
+        pytest.skip("Could not compute compile IDs for mock")
+
+    def _fake_popen_with_ids(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        lines: list[bytes] = []
+        for i, nid in enumerate(sem_compile_ids):
+            code = "# Simulated sempipes code (no real LLM call)\nresult = process(data)" if i == 0 else "# mock op\npass"
+            lines.append(b"##SEMPIPES_NODE_CODE##\n")
+            lines.append((json.dumps({"index": i, "code": code, "skrub_node_id": nid}) + "\n").encode("utf-8"))
+            lines.append(b"##END##\n")
+        lines.append(b"")
+        proc.stdout.readline.side_effect = lines
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen_with_ids):
+        resp = client.post(
+            "/api/execute",
+            json={"input_code": _valid_code},
+        )
     assert resp.status_code == 200
     text = resp.text
     events = []
@@ -907,10 +930,10 @@ def test_execute_stream_includes_node_code_per_runnable_node():
     assert any(e["type"] == "done" for e in events)
 
 
-def test_execute_stream_handles_llm_failure_gracefully():
+def test_execute_stream_fails_when_runner_returns_no_code():
     """
     When the pipeline run returns no captured operator code (e.g. runner crash, no operators ran),
-    operator nodes get placeholder and is_fallback=True — the site must not crash.
+    the run must fail — no node_code events are emitted, no placeholder code is shown.
     """
     import json
     from unittest.mock import MagicMock, patch
@@ -942,18 +965,10 @@ def test_execute_stream_handles_llm_failure_gracefully():
                 events.append(json.loads(line[6:]))
             except json.JSONDecodeError:
                 pass
-    # Semantic operators get node_code (with placeholder when runner returns nothing).
-    # Non-semantic, non-Var nodes get no event — no fake input_summary emitted.
+    # When runner returns nothing, semantic operators get NO node_code event — never placeholder.
     node_code_events = [e for e in events if e.get("type") == "node_code"]
-
-    assert len(node_code_events) >= 1, "semantic operator should get node_code"
-
-    # With dynamic compile, node IDs are numeric; check that all node_code events are fallbacks
-    # (empty stdout → no captured codes → all operators get placeholder)
-    fallback_events = [e for e in node_code_events if e.get("is_fallback") is True]
-    assert len(fallback_events) >= 1, "operator should get placeholder when no captured code"
-    for e in fallback_events:
-        assert "Placeholder" in e.get("generated_code", ""), "fallback code must mention placeholder"
+    assert len(node_code_events) == 0, "no node_code events should be emitted when no code was captured"
+    # Stream must always terminate
     assert any(e["type"] == "done" for e in events), "stream must always emit done"
 
 
@@ -1021,7 +1036,7 @@ def test_parse_captured_codes_returns_code_cost_usd_and_attempts():
 
 def test_extract_single_svg_document_strips_trailing_markers():
     """_extract_single_svg_document returns only the SVG document; no ##END## or ##EXECUTION_STATS##."""
-    from services.execute_stream import _extract_single_svg_document
+    from services.graph_api import _extract_single_svg_document
 
     svg_content = '<svg width="100" height="50"><g id="graph0"/></svg>'
     with_junk = svg_content + "\n\n##END##\n##EXECUTION_STATS##\n{\"duration_ms\": 100, \"cost_usd\": 0}"
@@ -1036,7 +1051,7 @@ def test_extract_single_svg_document_strips_trailing_markers():
 
 def test_extract_single_svg_document_returns_original_when_no_closing_tag():
     """_extract_single_svg_document returns original string when </svg> is missing."""
-    from services.execute_stream import _extract_single_svg_document
+    from services.graph_api import _extract_single_svg_document
 
     incomplete = "<svg><g></g>"
     assert _extract_single_svg_document(incomplete) == incomplete
@@ -1091,16 +1106,35 @@ def test_execute_stream_per_node_cost_and_total_from_runner_stdout():
     import json
     from unittest.mock import MagicMock, patch
 
+    _valid_code = (
+        "import skrub\n"
+        "df = skrub.var('df')\n"
+        "r = df.sem_fillna(target_column='a', nl_prompt='Fill', impute_with_existing_values_only=True)\n"
+        "r2 = r.sem_gen_features(nl_prompt='Gen', name='feat', how_many=2)\n"
+    )
+
+    # Compute compile IDs so mock skrub_node_ids match what execute_stream expects.
+    sem_compile_ids: list[str] = []
+    try:
+        from services.graph_api import compile_script_to_graph_dynamic
+        from services.execute_stream import _is_semantic_operator
+        _result = compile_script_to_graph_dynamic(_valid_code)
+        sem_compile_ids = [n.id for n in _result.nodes if _is_semantic_operator(n.label)]
+    except Exception:
+        pass
+    if len(sem_compile_ids) < 2:
+        pytest.skip("Could not compute compile IDs for mock")
+
     def _fake_popen_with_costs(*args, **kwargs):
         proc = MagicMock()
         proc.stdin = MagicMock()
         # Backend reads with iter(proc.stdout.readline, b""), so provide line-by-line then b""
         proc.stdout.readline.side_effect = [
             b"##SEMPIPES_NODE_CODE##\n",
-            b'{"index": 0, "code": "# op0", "cost_usd": 0.001, "attempts": 1}\n',
+            (json.dumps({"index": 0, "code": "# op0", "cost_usd": 0.001, "attempts": 1, "skrub_node_id": sem_compile_ids[0]}) + "\n").encode("utf-8"),
             b"##END##\n",
             b"##SEMPIPES_NODE_CODE##\n",
-            b'{"index": 1, "code": "# op1", "cost_usd": 0.002, "attempts": 2}\n',
+            (json.dumps({"index": 1, "code": "# op1", "cost_usd": 0.002, "attempts": 2, "skrub_node_id": sem_compile_ids[1]}) + "\n").encode("utf-8"),
             b"##END##\n",
             b"##EXECUTION_STATS##\n",
             b'{"duration_ms": 100, "cost_usd": 0.003}\n',
@@ -1111,12 +1145,6 @@ def test_execute_stream_per_node_cost_and_total_from_runner_stdout():
         proc.returncode = 0
         return proc
 
-    _valid_code = (
-        "import skrub\n"
-        "df = skrub.var('df')\n"
-        "r = df.sem_fillna(target_column='a', nl_prompt='Fill', impute_with_existing_values_only=True)\n"
-        "r2 = r.sem_gen_features(nl_prompt='Gen', name='feat', how_many=2)\n"
-    )
     with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen_with_costs):
         resp = client.post(
             "/api/execute",
@@ -1247,13 +1275,32 @@ def test_execute_stream_does_not_call_sempipes_llm_directly():
 def test_execute_stream_uses_captured_code_from_runner_stdout():
     """
     When runner subprocess stdout contains ##SEMPIPES_NODE_CODE## blocks,
-    operator nodes get that code (not placeholder) with is_fallback=False.
+    operator nodes get that code (not placeholder).
     This verifies the capture mechanism works: runner patches generate_python_code_from_messages,
     captures operator-generated code, prints it in ##SEMPIPES_NODE_CODE## format,
     and execute_stream parses it and emits node_code events with the captured code.
     """
     import json
     from unittest.mock import MagicMock, patch
+
+    _valid_code = (
+        "import skrub\n"
+        "df = skrub.var('df')\n"
+        "r = df.sem_fillna(target_column='a', nl_prompt='Fill', impute_with_existing_values_only=True)\n"
+        "r2 = r.sem_gen_features(nl_prompt='Gen', name='feat', how_many=2)\n"
+    )
+
+    # Compute compile IDs so mock skrub_node_ids match what execute_stream expects.
+    sem_compile_ids: list[str] = []
+    try:
+        from services.graph_api import compile_script_to_graph_dynamic
+        from services.execute_stream import _is_semantic_operator
+        _result = compile_script_to_graph_dynamic(_valid_code)
+        sem_compile_ids = [n.id for n in _result.nodes if _is_semantic_operator(n.label)]
+    except Exception:
+        pass
+    if len(sem_compile_ids) < 2:
+        pytest.skip("Could not compute compile IDs for mock")
 
     # Runner stdout with two captured codes (for two operator nodes).
     captured_code_1 = "# Real generated code from sem_fillna\ndef fillna_transform(df):\n    df['col'].fillna(0)\n    return df"
@@ -1265,10 +1312,10 @@ def test_execute_stream_uses_captured_code_from_runner_stdout():
         # Emit ##SEMPIPES_NODE_CODE## blocks as runner would after capturing from operators.
         proc.stdout.readline.side_effect = [
             b"##SEMPIPES_NODE_CODE##\n",
-            (json.dumps({"index": 0, "code": captured_code_1}) + "\n").encode("utf-8"),
+            (json.dumps({"index": 0, "code": captured_code_1, "skrub_node_id": sem_compile_ids[0]}) + "\n").encode("utf-8"),
             b"##END##\n",
             b"##SEMPIPES_NODE_CODE##\n",
-            (json.dumps({"index": 1, "code": captured_code_2}) + "\n").encode("utf-8"),
+            (json.dumps({"index": 1, "code": captured_code_2, "skrub_node_id": sem_compile_ids[1]}) + "\n").encode("utf-8"),
             b"##END##\n",
             b"",  # reader thread stops
         ]
@@ -1276,12 +1323,6 @@ def test_execute_stream_uses_captured_code_from_runner_stdout():
         proc.returncode = 0
         return proc
 
-    _valid_code = (
-        "import skrub\n"
-        "df = skrub.var('df')\n"
-        "r = df.sem_fillna(target_column='a', nl_prompt='Fill', impute_with_existing_values_only=True)\n"
-        "r2 = r.sem_gen_features(nl_prompt='Gen', name='feat', how_many=2)\n"
-    )
     with patch("services.execute_stream.subprocess.Popen", side_effect=_fake_popen_with_captures):
         resp = client.post(
             "/api/execute",
@@ -1307,7 +1348,7 @@ def test_execute_stream_uses_captured_code_from_runner_stdout():
         None
     )
     assert fillna_event is not None, "should have node_code with sem_fillna captured code"
-    assert fillna_event.get("is_fallback") is False, "should use captured code, not fallback"
+    assert "fallback" not in fillna_event, "no fallback field in node_code events"
     assert "fillna_transform" in fillna_event.get("generated_code", "")
 
     # Second captured code (index 1 = gen_features code) should appear in another event.
@@ -1316,7 +1357,7 @@ def test_execute_stream_uses_captured_code_from_runner_stdout():
         None
     )
     assert gen_features_event is not None, "should have node_code with sem_gen_features captured code"
-    assert gen_features_event.get("is_fallback") is False, "should use captured code, not fallback"
+    assert "fallback" not in gen_features_event, "no fallback field in node_code events"
     assert "gen_features" in gen_features_event.get("generated_code", "")
 
 

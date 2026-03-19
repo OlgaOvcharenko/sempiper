@@ -1399,7 +1399,7 @@ def save_svg_to_cache_async(svg: str | None, cache_key: str | None) -> None:
             if not clean_svg.startswith("<svg") or "</svg>" not in clean_svg:
                 return
             cache_service.set(cache_key, "svg", clean_svg, format=CacheFormat.SVG)
-            _svg_save_logger.info(f"Saved SVG to cache (key: {cache_key[:8]}...)")
+            _svg_save_logger.info(f"Saved SVG to cache (key: {cache_key})")
         except Exception as e:
             _svg_save_logger.warning(f"Could not save SVG to cache: {e}")
 

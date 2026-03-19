@@ -1,4 +1,6 @@
 """Demo backend: load .env before any app code so sempipes/LiteLLM see API keys."""
+import logging
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,11 +11,29 @@ _repo_root = Path(__file__).resolve().parent.parent.parent
 load_dotenv(_repo_root / ".env")
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from routers import codegen_router, optimizer_router
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="VLDB Code Gen Demo", version="0.1.0")
+
+
+@app.middleware("http")
+async def log_responses(request: Request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    duration_ms = (time.monotonic() - start) * 1000
+    logger.info(
+        "SEMPIPES> %s %s → %d (%.0f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,

@@ -130,6 +130,7 @@ class CacheService:
 
             # Store in memory cache (this may clear if cache_key changed)
             self.memory_cache.set(cache_key, mem_op, value)
+            logger.info(f"Cache hit (file) key={cache_key} op={operation}")
             return value
         except Exception as e:
             logger.warning(f"Failed to read cache {cache_path}: {e}")
@@ -171,7 +172,7 @@ class CacheService:
             else:
                 with open(cache_path, "wb") as f:
                     f.write(value if isinstance(value, bytes) else str(value).encode())
-            logger.debug(f"Cached {operation} result at {cache_path}")
+            logger.info(f"Cache set key={cache_key} op={operation} path={cache_path}")
 
             # Always ensure metadata.json exists for the key directory.
             # If metadata was provided, write it (full info).
@@ -187,6 +188,7 @@ class CacheService:
 
     def delete(self, cache_key: str, operation: str, format: CacheFormat = CacheFormat.JSON) -> None:
         """Delete from cache (including metadata)."""
+        logger.info(f"Cache delete key={cache_key} op={operation}")
         # Delete from memory
         mem_op = self._mem_operation(operation, format)
         self.memory_cache.invalidate(cache_key, mem_op)
@@ -249,12 +251,14 @@ class CacheService:
 
     def clear_key(self, cache_key: str) -> None:
         """Clear all cache entries for a specific key — moves files to archive."""
+        logger.info(f"Cache clear_key key={cache_key}")
         if self.memory_cache.current_key == cache_key:
             self.memory_cache.clear()
         self._archive_key_contents(cache_key)
 
     def clear(self) -> None:
         """Clear all caches (memory and file) — moves files to archive per key."""
+        logger.info("Cache clear (all keys)")
         self.memory_cache.clear()
         if not self.cache_dir.exists():
             return
