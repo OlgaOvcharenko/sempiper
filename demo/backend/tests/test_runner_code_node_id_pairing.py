@@ -63,6 +63,19 @@ def test_map_captures_ref_first_then_fallback():
     assert m == {0: "12", 1: "19"}
 
 
+def test_map_captures_order_fallback_with_extra_semantic_slot():
+    """
+    When there are extra semantic slots in the runtime graph but fewer captures,
+    fallback should still assign the available captures to the first remaining
+    semantic node IDs.
+    """
+    runner = _import_runner()
+    m = runner._map_captures_to_skrub_semantic_nodes(
+        2, {}, {"12", "19", "21"},
+    )
+    assert m == {0: "12", 1: "19"}
+
+
 # --------------------------------------------------------------------------- #
 # Test 1: _capturing_generate_code_from_messages records _current_node_object_id and ref
 # --------------------------------------------------------------------------- #
