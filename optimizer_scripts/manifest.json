@@ -1,17 +1,21 @@
 [
   {
-    "id": "optimise_house",
-    "label": "Optimizer (1 house)",
-    "file": "optimise_house.py"
+    "id": "optimise_fraud",
+    "label": "Fraud detection",
+    "file": "optimise_fraud.py",
+    "code_file": "fraud_generated_code_opt.json",
+    "trajectory_file": "fraud_20260318_032855_b6cdbc6c.json"
   },
   {
-    "id": "optimise_fraud",
-    "label": "Optimizer (2 fraud)",
-    "file": "optimise_fraud.py"
+    "id": "optimise_house",
+    "label": "House prices",
+    "file": "optimise_house.py",
+    "code_file": "house_prices_generated_code_opt.json",
+    "trajectory_file": "house_prices_optimizable_20260318_095513_19dac35d.json"
   },
   {
     "id": "optimise_museums",
-    "label": "Optimizer (3 museums)",
+    "label": "Museum artworks",
     "file": "optimise_museums.py"
   }
 ]
