@@ -137,26 +137,7 @@ def test_semantic_operators_get_unique_code(monkeypatch):
     # Override mock to return 2 code blocks for 2 semantic operators
     from unittest.mock import MagicMock
     import json
-
-    def _fake_popen_with_2_codes(*args, **kwargs):
-        proc = MagicMock()
-        proc.stdin = MagicMock()
-        # Return 2 different code blocks
-        lines = [
-            b"##SEMPIPES_NODE_CODE##\n",
-            (json.dumps({"index": 0, "code": "# Code for sem_fillna\ndf = fill_missing(df)\nreturn df"}) + "\n").encode("utf-8"),
-            b"##END##\n",
-            b"##SEMPIPES_NODE_CODE##\n",
-            (json.dumps({"index": 1, "code": "# Code for sem_gen_features\ndf = generate_features(df)\nreturn df"}) + "\n").encode("utf-8"),
-            b"##END##\n",
-            b""
-        ]
-        proc.stdout.readline.side_effect = lines
-        proc.wait.return_value = None
-        proc.returncode = 0
-        return proc
-
-    monkeypatch.setattr("services.execute_stream.subprocess.Popen", _fake_popen_with_2_codes)
+    import pytest
 
     code = """import skrub
 import sempipes
@@ -166,6 +147,38 @@ products = products.sem_fillna(nl_prompt="Fill missing values intelligently.", t
 products = products.sem_gen_features(nl_prompt="Generate useful features.", name="new_features", how_many=2)
 result = products.skb.eval()
 """
+
+    # Compute compile IDs so mock skrub_node_ids match what execute_stream expects.
+    sem_compile_ids: list[str] = []
+    try:
+        from services.graph_api import compile_script_to_graph_dynamic
+        from services.execute_stream import _is_semantic_operator
+        _result = compile_script_to_graph_dynamic(code)
+        sem_compile_ids = [n.id for n in _result.nodes if _is_semantic_operator(n.label)]
+    except Exception:
+        pass
+    if len(sem_compile_ids) < 2:
+        pytest.skip("Could not compute compile IDs for mock")
+
+    def _fake_popen_with_2_codes(*args, **kwargs):
+        proc = MagicMock()
+        proc.stdin = MagicMock()
+        # Return 2 different code blocks with correct skrub_node_ids
+        lines = [
+            b"##SEMPIPES_NODE_CODE##\n",
+            (json.dumps({"index": 0, "code": "# Code for sem_fillna\ndf = fill_missing(df)\nreturn df", "skrub_node_id": sem_compile_ids[0]}) + "\n").encode("utf-8"),
+            b"##END##\n",
+            b"##SEMPIPES_NODE_CODE##\n",
+            (json.dumps({"index": 1, "code": "# Code for sem_gen_features\ndf = generate_features(df)\nreturn df", "skrub_node_id": sem_compile_ids[1]}) + "\n").encode("utf-8"),
+            b"##END##\n",
+            b""
+        ]
+        proc.stdout.readline.side_effect = lines
+        proc.wait.return_value = None
+        proc.returncode = 0
+        return proc
+
+    monkeypatch.setattr("services.execute_stream.subprocess.Popen", _fake_popen_with_2_codes)
 
     # Execute and collect events
     exec_resp = client.post("/api/execute", json={"input_code": code})

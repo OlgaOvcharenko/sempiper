@@ -21,10 +21,12 @@ import json
 import re
 import sys
 import time
+import traceback
 import types
 import importlib.machinery
 import importlib.util
-from contextlib import contextmanager
+import io
+from contextlib import contextmanager, redirect_stdout
 
 # Stub out heavy optional imports before sempipes tries to import them
 # This allows sempipes to load even when these packages cause conflicts or are slow
@@ -64,6 +66,15 @@ _per_operator_costs: list[float] = []
 # Per-operator LLM attempt count (number of completion calls per operator).
 _per_operator_attempts: list[int] = []
 
+# Per-code object-identity tracking: records id(data_op) at the time each LLM call happens,
+# so main() can resolve the correct skrub node index without relying on execution order.
+_captured_code_node_ids: list[int | None] = []
+_current_node_object_id: int | None = None
+# Ref-based tracking: stores the actual DataOp reference (not just id()) so GC cannot
+# reuse the memory address and cause a false identity match in the post-exec graph walk.
+_captured_code_node_refs: list = []
+_current_node_object_ref = None
+
 # Node preview capture: populated by _setup_preview_capture_patch during exec.
 # Maps id(data_op) -> {schema, sample, row_count} captured during evaluate callback.
 _captured_previews: dict = {}
@@ -81,6 +92,12 @@ def _capturing_generate_code_from_messages(messages):
         # Unwrap to get clean Python code (remove markdown fences, etc.)
         clean_result = _unwrap_python_func(raw_result) if _unwrap_python_func else raw_result
         _captured_codes.append(clean_result)
+        # Record which DataOp object is currently being evaluated so main() can
+        # resolve the correct skrub node index for this code block via obj_to_idx.
+        _captured_code_node_ids.append(_current_node_object_id)
+        # Also store the actual reference — prevents GC from reusing the address before
+        # the post-exec _G().run() walk, allowing reliable `is` identity comparison.
+        _captured_code_node_refs.append(_current_node_object_ref)
         return raw_result  # Return raw result so generate_python_code_from_messages can unwrap it again
     finally:
         _current_operator_costs = None
@@ -128,20 +145,29 @@ def _setup_preview_capture_patch():
     original_evaluate = _eval_mod.evaluate
 
     def _capturing_evaluate(data_op, mode="preview", environment=None, clear=False, callbacks=()):
-        if clear and mode == "fit_transform":
-            def _capture(da, result):
-                try:
-                    df = _to_dataframe(result)
-                    if df is not None:
-                        d = _dataframe_to_preview_dict(df, "")
-                        if d:
-                            d.pop("node_id", None)
-                            _captured_previews[id(da)] = d
-                except Exception:
-                    pass
-            callbacks = (*callbacks, _capture)
-        return original_evaluate(data_op, mode=mode, environment=environment,
-                                 clear=clear, callbacks=callbacks)
+        global _current_node_object_id, _current_node_object_ref
+        prev_node_obj_id  = _current_node_object_id
+        prev_node_obj_ref = _current_node_object_ref
+        _current_node_object_id  = id(data_op)
+        _current_node_object_ref = data_op  # keep alive so its id() cannot be reused
+        try:
+            if clear and mode in ("fit", "fit_transform"):
+                def _capture(da, result):
+                    try:
+                        df = _to_dataframe(result)
+                        if df is not None:
+                            d = _dataframe_to_preview_dict(df, "")
+                            if d:
+                                d.pop("node_id", None)
+                                _captured_previews[id(da)] = d
+                    except Exception:
+                        pass
+                callbacks = (*callbacks, _capture)
+            return original_evaluate(data_op, mode=mode, environment=environment,
+                                     clear=clear, callbacks=callbacks)
+        finally:
+            _current_node_object_id  = prev_node_obj_id
+            _current_node_object_ref = prev_node_obj_ref
 
     _eval_mod.evaluate = _capturing_evaluate
     # Also patch local bindings in modules that imported evaluate via
@@ -412,6 +438,33 @@ def _apply_label_to_sempipes_operator(label):
     return stripped
 
 
+def _map_captures_to_skrub_semantic_nodes(
+    num_captures: int,
+    ref_to_graph_idx: dict[int, int],
+    semantic_node_ids: set[str],
+) -> dict[int, str]:
+    """
+    Map each LLM code-capture index to a skrub graph node id (string) for semantic operators.
+    Prefer object-identity ref match; if some captures lack a match, pair remaining captures
+    to remaining semantic nodes in numeric node-id order (matches typical pipeline order).
+    """
+    ordered_semantic = sorted(semantic_node_ids, key=lambda x: int(x)) if semantic_node_ids else []
+    capture_to_skrub: dict[int, str] = {}
+    for i in range(num_captures):
+        gi = ref_to_graph_idx.get(i)
+        if gi is not None:
+            sid = str(gi)
+            if sid in semantic_node_ids:
+                capture_to_skrub[i] = sid
+    assigned_semantic = set(capture_to_skrub.values())
+    remaining_semantic = [s for s in ordered_semantic if s not in assigned_semantic]
+    unresolved = [i for i in range(num_captures) if i not in capture_to_skrub]
+    if len(unresolved) == len(remaining_semantic) and remaining_semantic:
+        for cap_idx, sem_id in zip(sorted(unresolved), remaining_semantic):
+            capture_to_skrub[cap_idx] = sem_id
+    return capture_to_skrub
+
+
 def _topological_order(node_ids, parents_map):
     """Return node_ids in topological order (roots first, then nodes whose parents are done)."""
     done = set()
@@ -454,21 +507,31 @@ def _find_env_dict(g: dict) -> dict | None:
 
 
 def _find_learner_dataop(globals_dict: dict):
-    """Return the fitted SkrubLearner's internal DataOp from globals, or None.
+    """Return the SkrubLearner's internal DataOp from globals, or None.
 
     make_learner() clones the pipeline DataOp before fitting, so the captured
     node IDs in _captured_previews come from clone nodes, not the original.
     Using the learner's data_op as the source for _Graph().run() gives us a
     raw_graph whose node objects match the captured IDs.
+
+    Prefers a fully fitted learner, but falls back to any SkrubLearner found
+    in globals. This handles the case where exec() failed mid-fit (so the
+    learner is not fully fitted) but captures still came from the clone.
     """
     try:
         from skrub._data_ops._estimator import SkrubLearner
     except ImportError:
         return None
+    fitted = None
+    any_learner = None
     for val in globals_dict.values():
-        if isinstance(val, SkrubLearner) and getattr(val, "_is_fitted", False):
-            return val.data_op
-    return None
+        if isinstance(val, SkrubLearner):
+            if getattr(val, "_is_fitted", False):
+                fitted = val.data_op
+                break
+            elif any_learner is None:
+                any_learner = val.data_op
+    return fitted if fitted is not None else any_learner
 
 
 def _graph_to_serializable(raw):
@@ -477,7 +540,7 @@ def _graph_to_serializable(raw):
     raw has "nodes", "parents", "children". Nodes may be objects; we use index as id.
     Replaces skrub Apply primitives (e.g. "Apply ImputedLearner") with sempipes operator names
     (e.g. "sem_fillna") so the graph shows sempipes operators; user can click them to see generated code.
-    Tags sempipes semantic operators and emits sempipesNodeIds in execution (topo) order.
+    Tags sempipes semantic operators; sempipesNodeIds sorted by numeric node index (stable vs graph cycles).
     """
     nodes_raw = raw.get("nodes") or []
     parents_raw = raw.get("parents") or {}
@@ -563,10 +626,13 @@ def _graph_to_serializable(raw):
         parents[si] = to_id_list(p, n)
         children[si] = to_id_list(c, n)
 
-    # Sempipes semantic nodes in topological (execution) order → index matches _captured_codes order
-    all_ids = [no["id"] for no in nodes]
-    topo = _topological_order(all_ids, parents)
-    sempipes_node_ids = [nid for nid in topo if next((no for no in nodes if no["id"] == nid), {}).get("is_sempipes_semantic")]
+    # Semantic skrub node ids in stable pipeline order. Full-graph topo is unreliable (e.g. cycles
+    # between Apply and Value dict nodes; sinks with empty parents). Numeric index order matches
+    # typical left-to-right pipeline layout and pairs with LLM capture order when ref-matching fails.
+    sempipes_node_ids = sorted(
+        (no["id"] for no in nodes if no.get("is_sempipes_semantic")),
+        key=lambda x: int(x),
+    )
 
     return {
         "nodes": nodes,
@@ -771,30 +837,41 @@ def _get_skrub_dag_dict(code, globals_dict):
             graph_dict = _graph_to_serializable(raw_graph)
         except Exception:
             pass
-        if _captured_previews:
-            # Fast path: previews were captured during exec's evaluate() callback.
-            # make_learner() clones the DataOp before fitting, so captured node IDs
-            # belong to the clone, not the original result. Build a graph from the
-            # learner's cloned DataOp so node ids match.
-            learner_dataop = _find_learner_dataop(globals_dict)
-            capture_graph = raw_graph
-            if learner_dataop is not None:
-                try:
-                    capture_graph = _Graph().run(learner_dataop)
-                except Exception:
-                    capture_graph = raw_graph
+        # Previews MUST come from the single pipeline execution.
+        # Do NOT call skrub.evaluate() here as a fallback: it can re-run the pipeline.
+        # If previews can't be extracted from the one run, we fail the run and surface
+        # an error to the user (so they can retry), instead of silently executing twice.
+        if not _captured_previews:
+            raise RuntimeError(
+                "Node previews were not captured during execution (no capture data). "
+                "Run is required to execute exactly once; refusing to evaluate again."
+            )
+        # Fast path: previews were captured during exec's evaluate() callback.
+        # make_learner() clones the DataOp before fitting, so captured node IDs
+        # belong to the clone, not the original result. Build a graph from the
+        # learner's cloned DataOp so node ids match.
+        learner_dataop = _find_learner_dataop(globals_dict)
+        capture_graph = raw_graph
+        if learner_dataop is not None:
             try:
-                previews = _extract_previews_from_capture(capture_graph)
+                capture_graph = _Graph().run(learner_dataop)
             except Exception:
-                previews = []
-        if not previews:
-            # Fallback: either exec didn't trigger a fit_transform evaluate (e.g. fitted=False),
-            # or capture returned nothing (e.g. node ID mismatch after sem_choose resolution).
-            _evaluate_and_cache_all_nodes(result, env)
-            try:
-                previews = _extract_all_previews(raw_graph)
-            except Exception:
-                pass
+                capture_graph = raw_graph
+        try:
+            previews = _extract_previews_from_capture(capture_graph)
+        except Exception:
+            previews = []
+
+        # Partial capture is normal: classifier/y/state nodes don't produce
+        # DataFrames so they won't appear in _captured_previews. But if ZERO
+        # DataFrame-producing nodes matched (captures exist but IDs don't align
+        # with any graph node), the clone/original mismatch survived the learner
+        # lookup — fail so the user can retry.
+        if not previews and _captured_previews:
+            raise RuntimeError(
+                "Node preview IDs from execution don't match graph nodes. "
+                "Execution may have failed mid-run. Please retry."
+            )
 
     # Always try draw_graph() for native skrub SVG (for saving to disk)
     try:
@@ -961,6 +1038,7 @@ def main():
     _per_operator_costs.clear()
     _per_operator_attempts.clear()
     _captured_previews.clear()
+    _captured_code_node_refs.clear()
 
     # Patch evaluate() to capture node previews during exec's pipeline evaluation.
     # This avoids a second evaluate() pass in post-exec for preview extraction.
@@ -968,12 +1046,17 @@ def main():
     _setup_preview_capture_patch()
 
     # Track execution time and LLM costs
+    # Redirect stdout during exec to suppress noisy sempipes operator output (raw code strings
+    # printed directly by operators). All protocol blocks (##SEMPIPES_NODE_CODE##, etc.) are
+    # printed after exec completes, so they are unaffected.
     exec_start = time.perf_counter()
     with _track_litellm_costs() as costs:
         try:
-            exec(code, g)
+            with redirect_stdout(io.StringIO()):
+                exec(code, g)
         except Exception:
             exec_failed = True
+            traceback.print_exc()  # stderr → merged into runner log
     exec_duration_ms = (time.perf_counter() - exec_start) * 1000
     total_cost_usd = sum(_per_operator_costs)
     t_post_start = time.perf_counter()
@@ -989,16 +1072,82 @@ def main():
 
     # Extract skrub DAG first so we can emit skrub_node_id with each code block (fixes code-to-node mapping).
     graph_dict, svg_str, previews = _get_skrub_dag_dict(code, g)
-    sempipes_node_ids = list(graph_dict.get("sempipesNodeIds", [])) if graph_dict else []
 
-    # Emit captured operator-generated code so backend can emit node_code (no bypass). Include skrub_node_id
-    # so backend can map code to the correct node regardless of execution vs document order.
+    # Build capture-idx → graph-node-idx mapping using object references (not id()).
+    # Storing actual references (_captured_code_node_refs) prevents GC from freeing the
+    # DataOp objects and allowing Python to reuse their memory addresses for new objects,
+    # which would cause false id() matches in the graph walk.  The `is` operator gives
+    # exact identity — if it matches, the reference is the same object.
+    ref_to_graph_idx: dict[int, int] = {}  # capture index → graph node index
+    if _captured_code_node_refs:
+        try:
+            from skrub._data_ops._evaluation import _Graph as _G
+            src = _find_learner_dataop(g) or _get_pipeline_result_dataop(code, g)
+            if src is not None:
+                _raw_for_codes = _G().run(src)
+                node_list = _nodes_to_list(_raw_for_codes.get("nodes") or []) if isinstance(_raw_for_codes, dict) else []
+                for capture_idx, ref in enumerate(_captured_code_node_refs):
+                    if ref is None:
+                        continue  # code was generated outside evaluate() — no node context
+                    for graph_idx, node in enumerate(node_list):
+                        if node is ref:
+                            ref_to_graph_idx[capture_idx] = graph_idx
+                            break
+        except Exception:
+            pass
+
+    # Emit captured operator-generated code so backend can emit node_code (no bypass).
+    # Only emit codes attributed to semantic display nodes (sempipesNodeIds).  Codes from
+    # internal operators (e.g. apply_with_sem_choose's choose_from logic) are silently
+    # skipped — they have no corresponding UI slot and must not poison the assignment.
+    semantic_node_ids = set(graph_dict.get("sempipesNodeIds") or []) if graph_dict else set()
+    capture_to_skrub = _map_captures_to_skrub_semantic_nodes(
+        len(_captured_codes), ref_to_graph_idx, semantic_node_ids
+    )
+    for i in sorted(capture_to_skrub):
+        sid = capture_to_skrub[i]
+        gi = ref_to_graph_idx.get(i)
+        if gi is None or str(gi) != sid:
+            print(
+                f"SEMPIPES> Code block {i} → skrub node {sid} (order fallback; ref match failed)",
+                file=sys.stderr,
+            )
+    n_dropped = len(_captured_codes) - len(capture_to_skrub)
+    if n_dropped > 0 and semantic_node_ids:
+        print(
+            f"SEMPIPES> Warning: {n_dropped} code capture(s) omitted (could not map to a semantic node)",
+            file=sys.stderr,
+        )
+
     for i, code_str in enumerate(_captured_codes):
+        ref = _captured_code_node_refs[i] if i < len(_captured_code_node_refs) else None
+        skrub_node_id = capture_to_skrub.get(i)
+        if skrub_node_id is None:
+            continue
+        if skrub_node_id not in semantic_node_ids:
+            continue
+
+        graph_idx = ref_to_graph_idx.get(i)
+        match_method = (
+            "ref_is"
+            if graph_idx is not None and str(graph_idx) == skrub_node_id
+            else "order_fallback"
+        )
+        debug_info = {
+            "match_method": match_method,
+            "ref_class": ref.__class__.__name__ if ref is not None else None,
+            "node_index": graph_idx,
+        }
         cost_usd = _per_operator_costs[i] if i < len(_per_operator_costs) else 0.0
         attempts = _per_operator_attempts[i] if i < len(_per_operator_attempts) else 1
-        payload = {"index": i, "code": code_str, "cost_usd": cost_usd, "attempts": attempts}
-        if i < len(sempipes_node_ids):
-            payload["skrub_node_id"] = sempipes_node_ids[i]
+        payload = {
+            "index": i,
+            "code": code_str,
+            "cost_usd": cost_usd,
+            "attempts": attempts,
+            "debug_info": debug_info,
+            "skrub_node_id": skrub_node_id,
+        }
         print("##SEMPIPES_NODE_CODE##")
         print(json.dumps(payload))
         print("##END##")
@@ -1006,11 +1155,6 @@ def main():
         print(_SKRUB_GRAPH_MARKER)
         print(json.dumps(graph_dict))
         print(_SKRUB_GRAPH_END)
-    if svg_str:
-        # Emit native skrub SVG for saving to disk (backend replaces by script name)
-        print(_SKRUB_GRAPH_SVG_MARKER)
-        print(svg_str, end="")
-        print("\n" + _SKRUB_GRAPH_END)
     # Emit node previews (intermediate data for each node)
     for preview in previews:
         print(_NODE_PREVIEW_MARKER)
