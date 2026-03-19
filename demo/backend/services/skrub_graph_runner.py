@@ -379,6 +379,25 @@ def _is_sempipes_semantic_label(label):
         return True
     if low in ("apply_with_sem_choose", "sem_choose"):
         return True
+
+    # apply_with_sem_choose is represented by a plain sklearn estimator apply node.
+    # Example label: "<Apply HistGradientBoostingClassifier>"
+    # (sem_choose hyperparameters are decided via the sem_choose LLM code path).
+    _APPLY_WITH_SEM_CHOOSE_ESTIMATORS = (
+        "histgradientboostingclassifier",
+        "histgradientboostingregressor",
+        "randomforestclassifier",
+        "randomforestregressor",
+        "gradientboostingclassifier",
+        "gradientboostingregressor",
+        "xgbclassifier",
+        "xgbregressor",
+        "lgbmclassifier",
+        "lgbmregressor",
+    )
+    if any(e in low for e in _APPLY_WITH_SEM_CHOOSE_ESTIMATORS):
+        return True
+
     # Specific sempipes estimator class names (from "Apply <Estimator>" runtime labels).
     # Only the classes that ARE sempipes semantic operators; standard ML estimators like
     # HistGradientBoostingClassifier are NOT semantic (they come from plain skb.apply()).
@@ -420,14 +439,40 @@ def _apply_label_to_sempipes_operator(label):
     """
     if not label or not isinstance(label, str):
         return label
+
     stripped = label.strip()
     low = stripped.lower()
-    if not low.startswith("apply "):
+
+    # Map "<Apply HistGradientBoostingClassifier>" -> "apply_with_sem_choose".
+    _APPLY_WITH_SEM_CHOOSE_ESTIMATORS = (
+        "histgradientboostingclassifier",
+        "histgradientboostingregressor",
+        "randomforestclassifier",
+        "randomforestregressor",
+        "gradientboostingclassifier",
+        "gradientboostingregressor",
+        "xgbclassifier",
+        "xgbregressor",
+        "lgbmclassifier",
+        "lgbmregressor",
+    )
+    if any(e in low for e in _APPLY_WITH_SEM_CHOOSE_ESTIMATORS):
+        return "apply_with_sem_choose"
+
+    # Handle skrub "<Apply X>" labels (lower() starts with "<apply ").
+    # Normalize to "apply ..." before parsing the suffix.
+    low_norm = low.lstrip("<").strip()
+    if not low_norm.startswith("apply "):
         return stripped
+
     # "Apply ImputedLearner" -> key "imputedlearner"
-    suffix = low[6:].strip()  # after "apply "
+    suffix = low_norm[6:].strip()  # after "apply "
+    # Strip trailing decorators like ">" from "<Apply ...>"
+    suffix = suffix.rstrip(">").strip()
+
     if not suffix:
         return stripped
+
     # Normalize: remove spaces (e.g. "Apply ImputedLearner" -> "imputedlearner")
     key = "".join(suffix.split()).lower()[:80]
     if key in _APPLY_TO_SEMPIPES:
@@ -459,7 +504,15 @@ def _map_captures_to_skrub_semantic_nodes(
     assigned_semantic = set(capture_to_skrub.values())
     remaining_semantic = [s for s in ordered_semantic if s not in assigned_semantic]
     unresolved = [i for i in range(num_captures) if i not in capture_to_skrub]
-    if len(unresolved) == len(remaining_semantic) and remaining_semantic:
+    # If ref matching can't resolve all captures, pair the remaining captures with the first
+    # remaining semantic nodes in numeric order. This handles cases where runtime graphs expose
+    # extra semantic slots (e.g. apply_with_sem_choose nodes) but the pipeline only emits fewer
+    # LLM code captures.
+    #
+    # We intentionally do NOT require counts to match exactly: requiring equality turns this
+    # into a hard failure mode (no code emission), which breaks node assignment for some
+    # pipelines like `simple` and `medium`.
+    if remaining_semantic:
         for cap_idx, sem_id in zip(sorted(unresolved), remaining_semantic):
             capture_to_skrub[cap_idx] = sem_id
     return capture_to_skrub
