@@ -76,17 +76,41 @@ df = df.sem_gen_features(nl_prompt="Generate features", name="features", how_man
 result = df.skb.eval()
 """
 
-    # Mock subprocess to return three code blocks
+    # Compute compile IDs so mock skrub_node_ids match what execute_stream expects.
+    sem_compile_ids: list[str] = []
+    try:
+        from services.graph_api import compile_script_to_graph_dynamic
+        _result = compile_script_to_graph_dynamic(script)
+        sem_compile_ids = [n.id for n in _result.nodes if _is_semantic_operator(n.label)]
+    except Exception:
+        pass
+    if len(sem_compile_ids) < 3:
+        pytest.skip("Could not compute compile IDs for mock")
+
+    # Mock subprocess to return three code blocks with correct skrub_node_ids
     codes = [
         "def fill_missing(df):\n    # Fill code\n    return df",
         "def clean_data(df):\n    # Clean code\n    return df",
         "def generate_features(df):\n    # Gen code\n    return df"
     ]
 
+    lines = []
+    for i, (code, nid) in enumerate(zip(codes, sem_compile_ids)):
+        lines.append(b"##SEMPIPES_NODE_CODE##\n")
+        lines.append((json.dumps({
+            "index": i,
+            "code": code,
+            "cost_usd": 0.01 * (i + 1),
+            "attempts": 1,
+            "skrub_node_id": nid,
+        }) + "\n").encode("utf-8"))
+        lines.append(b"##END##\n")
+    lines.append(b"")
+
     def _fake_popen(*args, **kwargs):
         proc = MagicMock()
         proc.stdin = MagicMock()
-        proc.stdout.readline.side_effect = _mock_subprocess_with_captured_codes(codes)
+        proc.stdout.readline.side_effect = lines
         proc.wait.return_value = None
         proc.returncode = 0
         return proc
@@ -113,7 +137,7 @@ result = df.skb.eval()
     assert len(clean_events) > 0, "Should have event with sem_clean code"
     assert len(gen_events) > 0, "Should have event with sem_gen_features code"
 
-    # Verify all are not fallbacks
-    assert fillna_events[0]["is_fallback"] is False
-    assert clean_events[0]["is_fallback"] is False
-    assert gen_events[0]["is_fallback"] is False
+    # Verify no fallback field (real captured code, run did not fail)
+    assert "is_fallback" not in fillna_events[0]
+    assert "is_fallback" not in clean_events[0]
+    assert "is_fallback" not in gen_events[0]

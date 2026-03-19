@@ -30,8 +30,6 @@ def _sse(data: dict) -> bytes:
 
 # Backend root (demo/backend) so -m services.skrub_graph_runner resolves when cwd is set.
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Directory for saved skrub native SVG graphs (demo/graph_svgs/), keyed by script id.
-_GRAPH_SVGS_DIR = os.path.join(os.path.dirname(_BACKEND_ROOT), "graph_svgs")
 # Directory for per-run subprocess logs (repo_root/logs/runners/).
 _RUNNERS_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(_BACKEND_ROOT)), "logs", "runners")
 
@@ -40,7 +38,6 @@ _SEMPIPES_NODE_CODE_MARKER = "##SEMPIPES_NODE_CODE##"
 _SEMPIPES_NODE_CODE_END = "##END##"
 _SKRUB_GRAPH_MARKER = "##SKRUB_GRAPH##"
 _SKRUB_GRAPH_END = "##END##"
-_SKRUB_GRAPH_SVG_MARKER = "##SKRUB_GRAPH_SVG##"
 _NODE_PREVIEW_MARKER = "##NODE_PREVIEW##"
 _VAR_PREVIEW_MARKER = "##VAR_PREVIEW##"
 _EXECUTION_STATS_MARKER = "##EXECUTION_STATS##"
@@ -69,6 +66,9 @@ def _parse_captured_codes_from_stdout(stdout_str: str) -> list[dict]:
             skrub_id = obj.get("skrub_node_id")
             if skrub_id is not None and isinstance(skrub_id, str) and skrub_id.strip():
                 entry["skrub_node_id"] = str(skrub_id).strip()
+            debug_info = obj.get("debug_info")
+            if debug_info is not None:
+                entry["debug_info"] = debug_info
             by_index[idx] = entry
         except (json.JSONDecodeError, TypeError):
             continue
@@ -97,23 +97,6 @@ def _parse_skrub_graph_from_stdout(stdout_str: str) -> dict | None:
         pass
     return None
 
-
-def _parse_skrub_svg_from_stdout(stdout_str: str) -> str | None:
-    """
-    Parse ##SKRUB_GRAPH_SVG##\\n{svg}\\n##END## block from runner stdout.
-    Returns the native skrub SVG string, or None.
-    """
-    pattern = re.compile(
-        re.escape(_SKRUB_GRAPH_SVG_MARKER) + r"\s*\n(.*?)\n" + re.escape(_SKRUB_GRAPH_END),
-        re.DOTALL,
-    )
-    m = pattern.search(stdout_str)
-    if not m:
-        return None
-    svg = m.group(1).strip()
-    if svg.startswith("<svg") and "</svg>" in svg:
-        return svg
-    return None
 
 
 def _parse_node_previews_from_stdout(stdout_str: str) -> list[dict]:
@@ -512,6 +495,57 @@ def _build_skrub_to_compile_id(graph: dict, runnable: list) -> dict[str, str]:
     return result
 
 
+def _remap_skrub_graph_ids_to_compile(graph: dict, skrub_to_compile: dict[str, str]) -> dict:
+    """
+    Return a copy of `graph` where all node ids (nodes/parents/children/sempipesNodeIds)
+    are remapped from runtime skrub ids to compile ids using `skrub_to_compile`.
+
+    This keeps IDs consistent across SSE events: `node_code.node_id` uses compile IDs,
+    and the streamed `skrub_graph` uses the same IDs.
+    """
+    if not graph or not skrub_to_compile:
+        return graph
+    nodes = list(graph.get("nodes") or [])
+    parents = dict(graph.get("parents") or {})
+    children = dict(graph.get("children") or {})
+    sem_ids = list(graph.get("sempipesNodeIds") or [])
+
+    def remap(nid: str) -> str:
+        return skrub_to_compile.get(str(nid), str(nid))
+
+    remapped_nodes = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("id")
+        if nid is None:
+            remapped_nodes.append(n)
+            continue
+        nn = dict(n)
+        nn["id"] = remap(nid)
+        remapped_nodes.append(nn)
+
+    remapped_parents: dict[str, list[str]] = {}
+    for k, vs in parents.items():
+        rk = remap(k)
+        remapped_parents[rk] = [remap(v) for v in (vs or [])]
+
+    remapped_children: dict[str, list[str]] = {}
+    for k, vs in children.items():
+        rk = remap(k)
+        remapped_children[rk] = [remap(v) for v in (vs or [])]
+
+    remapped_sem_ids = [remap(x) for x in sem_ids]
+
+    return {
+        **graph,
+        "nodes": remapped_nodes,
+        "parents": remapped_parents,
+        "children": remapped_children,
+        "sempipesNodeIds": remapped_sem_ids,
+    }
+
+
 def _extend_skrub_to_compile_id(
     graph: dict, base_mapping: dict[str, str], runnable: list
 ) -> dict[str, str]:
@@ -587,57 +621,6 @@ def _is_semantic_operator(label: str) -> bool:
     return False
 
 
-def _mock_generated_code_for_node(node_id: str, label: str, node_type: str) -> str:
-    """Return placeholder code when no captured code from pipeline run (demo fallback)."""
-    if node_type == "input":
-        return f"# Input: {label}\n# node_id = {node_id}\ndata = load_input()"
-    return (
-        "# [Placeholder — no code captured from pipeline run; run with sempipes + API key for real code]\n"
-        f"# Node: {label} ({node_id})\n"
-        "def step(data):\n"
-        "    # Replace with actual generated code when pipeline runs and operators call LLM.\n"
-        "    return data"
-    )
-
-
-def _sanitize_svg_for_save(svg: str) -> str:
-    """Remove any trailing ##END## or runner markers that may have been captured."""
-    s = svg.strip()
-    if s.endswith("##END##"):
-        s = s[: -len("##END##")].strip()
-    if s.endswith("\n##END##"):
-        s = s[: -len("\n##END##")].strip()
-    return s
-
-
-def _extract_single_svg_document(s: str) -> str:
-    """Return the first complete SVG document (first <svg to last </svg> inclusive), or original if not found."""
-    start = s.find("<svg")
-    if start < 0:
-        return s
-    end_tag = "</svg>"
-    end = s.rfind(end_tag)
-    if end < 0 or end < start:
-        return s
-    return s[start : end + len(end_tag)]
-
-
-def _save_skrub_svg_to_cache(svg: str, cache_key: str | None) -> None:
-    """Save native skrub SVG to cache."""
-    if not cache_key or not svg:
-        return
-    svg = _sanitize_svg_for_save(svg)
-    svg = _extract_single_svg_document(svg)
-    if not svg.startswith("<svg") or "</svg>" not in svg:
-        return
-    try:
-        from services.cache import cache_service, CacheFormat
-        cache_service.set(cache_key, "svg", {"svg": svg}, format=CacheFormat.SVG)
-        logger.info(f"Saved skrub SVG to cache (key: {cache_key[:8]}...)")
-    except Exception as e:
-        logger.warning(f"Could not save SVG to cache: {e}")
-
-
 def stream_execute_events(
     input_code: str,
     script_id: str | None = None,
@@ -660,6 +643,7 @@ def stream_execute_events(
     total_cost_usd = 0.0
     duration_ms = 0.0
     exec_failed = False
+    exec_failed_message: str | None = None
     prepare_ms = 0.0
     subprocess_wall_ms = 0.0
     emit_start_time: float | None = None  # set when subprocess stdout is fully read
@@ -699,14 +683,10 @@ def stream_execute_events(
         operator_nodes = [n for n in runnable if n.type == "operator"]
         runnable_ids = {n.id for n in runnable}
 
-        # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##), or SVG.
+        # Run pipeline subprocess: captured operator code, skrub graph dict (##SKRUB_GRAPH##).
         # When DEMO_E2E=1, skip real subprocess (no sempipes/LLM) for full-stack E2E tests.
         captured: list[dict] = []
-        captured_codes: list[str] = []
-        captured_costs: list[float] = []
-        captured_attempts: list[int] = []
         graph_from_run: dict | None = None
-        svg_from_run: str | None = None
         node_previews: list[dict] = []
         var_previews: list[dict] = []
         runner_input_summaries: dict[str, dict] = {}
@@ -751,20 +731,29 @@ def stream_execute_events(
                     env=subprocess_env,  # Pass environment with sempipes config
                     text=False,
                 )
-                os.makedirs(_RUNNERS_LOG_DIR, exist_ok=True)
-                runner_log_path = os.path.join(
-                    _RUNNERS_LOG_DIR,
-                    f"runner-{time.strftime('%Y%m%d_%H%M%S')}-{proc.pid}.log",
-                )
-                logger.info(f"Subprocess started, PID: {proc.pid}, log: {runner_log_path}")
+                _is_testing = "PYTEST_CURRENT_TEST" in os.environ
+                if _is_testing:
+                    runner_log_path = None
+                    logger.info(f"Subprocess started, PID: {proc.pid} (test mode, no log file)")
+                else:
+                    os.makedirs(_RUNNERS_LOG_DIR, exist_ok=True)
+                    runner_log_path = os.path.join(
+                        _RUNNERS_LOG_DIR,
+                        f"runner-{time.strftime('%Y%m%d_%H%M%S')}-{proc.pid}.log",
+                    )
+                    logger.info(f"Subprocess started, PID: {proc.pid}, log: {runner_log_path}")
                 stdout_chunks: list[bytes] = []
 
                 def read_stdout():
-                    with open(runner_log_path, "wb") as log_fh:
+                    if runner_log_path is not None:
+                        with open(runner_log_path, "wb") as log_fh:
+                            for chunk in iter(proc.stdout.readline, b""):
+                                stdout_chunks.append(chunk)
+                                log_fh.write(chunk)
+                                log_fh.flush()
+                    else:
                         for chunk in iter(proc.stdout.readline, b""):
                             stdout_chunks.append(chunk)
-                            log_fh.write(chunk)
-                            log_fh.flush()
 
                 reader = threading.Thread(target=read_stdout, daemon=True)
                 reader.start()
@@ -793,22 +782,29 @@ def stream_execute_events(
                 emit_start_time = t_subprocess_end
                 decoded = b"".join(stdout_chunks).decode("utf-8", errors="replace")
                 captured = _parse_captured_codes_from_stdout(decoded)
-                captured_codes = [x["code"] for x in captured]
-                captured_costs = [x["cost_usd"] for x in captured]
-                captured_attempts = [x["attempts"] for x in captured]
                 status = "OK" if proc.returncode == 0 else f"FAILED (rc={proc.returncode})"
+                log_info = f"log: {runner_log_path}" if runner_log_path else "no log (test mode)"
                 logger.info(
                     f"Subprocess PID {proc.pid} {status} — "
-                    f"{len(captured_codes)} code blocks captured, "
-                    f"{len(decoded)} chars — log: {runner_log_path}"
+                    f"{len(captured)} code blocks captured, "
+                    f"{len(decoded)} chars — {log_info}"
                 )
                 # Check for subprocess failure
                 exec_failed = (proc.returncode != 0)
+                exec_failed_message = None
+                if exec_failed:
+                    # Surface the most useful debugging hint to the UI without dumping stdout.
+                    if runner_log_path:
+                        exec_failed_message = (
+                            "Pipeline execution failed (runner exited non-zero). "
+                            f"See `{runner_log_path}` for details."
+                        )
+                    else:
+                        exec_failed_message = "Pipeline execution failed (runner exited non-zero)."
                 # Data statistics for node details come from the runner (single pipeline execution).
                 # Parse: ##SKRUB_GRAPH##, ##NODE_PREVIEW##, ##VAR_PREVIEW##, ##NODE_INPUT_SUMMARY##, ##EXECUTION_STATS##.
                 if decoded:
                     graph_from_run = _parse_skrub_graph_from_stdout(decoded)
-                    svg_from_run = _parse_skrub_svg_from_stdout(decoded)
                     node_previews = _parse_node_previews_from_stdout(decoded)
                     var_previews = _parse_var_previews_from_stdout(decoded)
                     runner_input_summaries = _parse_node_input_summaries_from_stdout(decoded)
@@ -826,16 +822,8 @@ def stream_execute_events(
                         f"Parsed from runner: {len(runner_input_summaries)} input summaries, "
                         f"{len(node_previews)} node previews, {len(var_previews)} var previews"
                     )
-                    if not svg_from_run:
-                        idx = decoded.find("<svg")
-                        if idx >= 0:
-                            extracted = _extract_single_svg_document(decoded[idx:].strip())
-                            svg_from_run = extracted if (extracted and extracted.startswith("<svg")) else None
                     if not graph_from_run:
                         graph_from_run = _build_fallback_graph_from_compile(nodes, compile_edges)
-                    # Save native skrub SVG to cache
-                    if svg_from_run and cache_key:
-                        _save_skrub_svg_to_cache(svg_from_run, cache_key)
             except (FileNotFoundError, Exception) as e:
                 logger.error(f"Subprocess exception: {type(e).__name__}: {e}")
                 exec_failed = True
@@ -855,7 +843,12 @@ def stream_execute_events(
         for x in captured:
             sid = x.get("skrub_node_id")
             if sid:
-                code_by_skrub[sid] = {"code": x["code"], "cost_usd": x["cost_usd"], "attempts": x["attempts"]}
+                code_by_skrub[sid] = {
+                    "code": x["code"],
+                    "cost_usd": x["cost_usd"],
+                    "attempts": x["attempts"],
+                    "debug_info": x.get("debug_info"),
+                }
         skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
         compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
 
@@ -865,25 +858,15 @@ def stream_execute_events(
         time.sleep(0.05)
 
         # Code assignment logic:
-        # 1. Primary: Use skrub_node_id from runner (when available)
-        # 2. Fallback: Use semantic_op_index to match code to semantic operators only
-        #    - semantic_op_index only increments for operators that generate code (sem_*, apply, etc.)
-        #    - Non-semantic operators (subsample, eval, etc.) receive mock code
-        # 3. Mock: If no code available or non-semantic operator, use placeholder
-        #
-        # ID CONSISTENCY: When skrub graph is available AND we have valid compile graph, use skrub IDs (from runtime)
-        #                 When NO skrub graph OR we fell back to static parse, use compile IDs
-        # Check if nodes came from dynamic compile (have numeric IDs like "0", "1") or static parse (have semantic IDs like "as_X_1")
-        has_dynamic_compile = nodes and all(n.id.isdigit() for n in nodes if n.id)
-        use_skrub_ids = graph_from_run is not None and has_dynamic_compile
+        # 1. Primary: Use code_by_skrub keyed by compile ID (runner emits skrub_node_id matching compile ID)
+        # 2. Secondary: Use code_by_skrub keyed by runtime skrub ID (via compile_to_skrub mapping)
+        # 3. Explicit failure: no index fallback — log error, mark run failed, skip emission.
+        # Node IDs are always compile IDs (node.id) — no runtime ID substitution.
 
         # Track which node IDs have already received node_code events to prevent duplicates
         emitted_node_code_ids: set[str] = set()
-
-        semantic_op_index = 0
         for node in runnable:
-            # Use skrub ID when runtime graph is available, compile ID otherwise
-            display_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
+            display_id = node.id
             yield _sse({'type': 'terminal', 'line': f'Running {node.label} ({display_id})...'})
             time.sleep(0.05)
 
@@ -929,122 +912,57 @@ def stream_execute_events(
                 # Their output data is captured as node_data via ##NODE_PREVIEW## blocks.
                 pass
             else:
-                # Semantic operators: emit generated code
-                skid = compile_to_skrub.get(node.id) if compile_to_skrub else None
-                if skid is not None and skid in code_by_skrub:
-                    # Primary path: use skrub_node_id mapping
-                    code = code_by_skrub[skid]["code"]
-                    node_cost = code_by_skrub[skid]["cost_usd"]
-                    node_retries = code_by_skrub[skid]["attempts"]
-                    is_fallback = False
-                elif semantic_op_index < len(captured_codes):
-                    # Fallback: use semantic operator index
-                    code = captured_codes[semantic_op_index]
-                    node_cost = captured_costs[semantic_op_index] if semantic_op_index < len(captured_costs) else 0.0
-                    node_retries = captured_attempts[semantic_op_index] if semantic_op_index < len(captured_attempts) else 1
-                    is_fallback = False
-                    semantic_op_index += 1  # Only increment when we consume a captured code
+                # Semantic operators: emit generated code.
+                # Priority: (1) code_by_skrub keyed by compile ID (runner emits skrub_node_id matching compile ID),
+                #           (2) code_by_skrub keyed by skrub runtime ID (via compile_to_skrub mapping).
+                # No index fallback — if no code captured, fail the run and skip emission.
+                node_info = code_by_skrub.get(node.id)
+                if node_info is None and compile_to_skrub:
+                    skid = compile_to_skrub.get(node.id)
+                    node_info = code_by_skrub.get(skid) if skid else None
+                if node_info is not None:
+                    code = node_info["code"]
+                    node_cost = node_info["cost_usd"]
+                    node_retries = node_info["attempts"]
+                    debug_info = node_info.get("debug_info")
                 else:
-                    # Out of bounds: use mock code
-                    code = _mock_generated_code_for_node(display_id, node.label, node.type)
-                    node_cost = 0.0
-                    node_retries = 1
-                    is_fallback = True
+                    logger.error(
+                        f"No generated code captured for semantic node {display_id} — failing run"
+                    )
+                    exec_failed = True
+                    exec_failed_message = (
+                        f"No generated code captured for semantic node '{display_id}'. "
+                        "Run the pipeline again; if the problem persists, check the runner log."
+                    )
+                    continue  # skip node_code emission — do not emit placeholder
 
-                # CRITICAL: Use consistent ID system with terminal/input_summary events
-                emit_node_id = compile_to_skrub.get(node.id, node.id) if (use_skrub_ids and compile_to_skrub) else node.id
                 payload = {
                     "type": "node_code",
-                    "node_id": emit_node_id,
+                    "node_id": node.id,
                     "generated_code": code,
                     "retries": node_retries,
                     "cost_usd": node_cost,
-                    "is_fallback": is_fallback,
+                    "debug_info": debug_info,
                 }
                 yield _sse(payload)
-                emitted_node_code_ids.add(emit_node_id)  # Track to prevent duplicate emissions
+                emitted_node_code_ids.add(node.id)  # Track to prevent duplicate emissions
                 time.sleep(0.05)
 
-        # Build skrub_to_compile mapping for the skrub_graph SSE event (skrubToCompileId).
-        # The compile graph (from /api/compile) is ALWAYS the display graph — it never changes
-        # during execution. The skrub_graph SSE event only carries this mapping so the frontend
-        # can resolve which compile node to show details for when a graph node is clicked.
-        skrub_to_compile = _build_skrub_to_compile_id(graph_from_run, runnable) if graph_from_run and runnable else {}
-        compile_to_skrub = {v: k for k, v in skrub_to_compile.items()}
-
-        # Emit node_code for skrub semantic nodes so clicking them in the graph shows generated code.
-        # When runner sent skrub_node_id with each block, use code_by_skrub; else fall back to label/occurrence.
-        sempipes_node_ids = graph_from_run.get("sempipesNodeIds", []) if graph_from_run else []
         runner_nodes = (graph_from_run or {}).get("nodes") or []
-
-        if code_by_skrub:
-            for skid in sempipes_node_ids:
-                if skid in code_by_skrub and skid not in emitted_node_code_ids:
-                    info = code_by_skrub[skid]
-                    # Emit skrub node ID directly (runtime ID from graph_from_run)
-                    # This matches the graph node IDs in the skrub_graph event sent to frontend
-                    payload = {
-                        "type": "node_code",
-                        "node_id": skid,
-                        "generated_code": info["code"],
-                        "retries": info["attempts"],
-                        "cost_usd": info["cost_usd"],
-                        "is_fallback": False,
-                    }
-                    yield _sse(payload)
-                    emitted_node_code_ids.add(skid)  # Track to prevent duplicates
-                    time.sleep(0.02)
-        else:
-            # Fallback: match by label and occurrence (document vs topo order may differ).
-            # Only count semantic operators since captured_codes only contains semantic operator code.
-            label_to_semantic_op_index: dict[str, list[int]] = {}
-            semantic_op_idx = 0
-            for node in runnable:
-                if (node.type or "").lower() != "input":
-                    if _is_semantic_operator(node.label):  # Only count semantic operators
-                        label = (node.label or "").lower()
-                        if label not in label_to_semantic_op_index:
-                            label_to_semantic_op_index[label] = []
-                        label_to_semantic_op_index[label].append(semantic_op_idx)
-                        semantic_op_idx += 1
-            label_usage: dict[str, int] = {}
-            for skid in sempipes_node_ids:
-                # Skip if already emitted in main loop
-                if skid in emitted_node_code_ids:
-                    continue
-                skrub_node = next((sn for sn in runner_nodes if sn.get("id") == skid), None)
-                if not skrub_node:
-                    continue
-                label = (skrub_node.get("label", "") or "").lower()
-                occurrence = label_usage.get(label, 0)
-                op_indices = label_to_semantic_op_index.get(label, [])
-                if occurrence < len(op_indices):
-                    code_idx = op_indices[occurrence]
-                    label_usage[label] = occurrence + 1
-                    if code_idx < len(captured_codes):
-                        code_str = captured_codes[code_idx]
-                        cost_usd = captured_costs[code_idx] if code_idx < len(captured_costs) else 0.0
-                        retries = captured_attempts[code_idx] if code_idx < len(captured_attempts) else 1
-                        # Emit skrub node ID directly (matches the graph node IDs from dynamic compilation)
-                        payload = {
-                            "type": "node_code",
-                            "node_id": skid,
-                            "generated_code": code_str,
-                            "retries": retries,
-                            "cost_usd": cost_usd,
-                            "is_fallback": False,
-                        }
-                        yield _sse(payload)
-                        emitted_node_code_ids.add(skid)  # Track to prevent duplicates
-                        time.sleep(0.02)
-
-        # Note: input_summary events for non-semantic nodes already emitted during main loop (lines 700-704)
-        # Semantic nodes get node_code events above; non-semantic nodes only get input_summary (not node_code)
 
         # Emit graph when we have nodes (from runner ##SKRUB_GRAPH## or fallback from compile)
         if graph_from_run and len(runner_nodes) > 0:
-            # skrub_to_compile already built earlier for node_code events
-            yield _sse({'type': 'skrub_graph', 'graph': graph_from_run, 'skrubToCompileId': skrub_to_compile})
+            graph_for_events = _remap_skrub_graph_ids_to_compile(graph_from_run, skrub_to_compile)
+            # Keep `skrubToCompileId` consistent with the emitted graph IDs. If the graph node IDs
+            # are remapped to compile IDs, the mapping keys must be remapped as well.
+            skrub_to_compile_for_events = {v: v for v in (skrub_to_compile.values() or [])} if skrub_to_compile else {}
+            yield _sse(
+                {
+                    'type': 'skrub_graph',
+                    'graph': graph_for_events,
+                    'skrubToCompileId': skrub_to_compile_for_events,
+                }
+            )
             # Note: input_summary events already emitted during node processing loop (lines 700-704)
             # No need to emit them again here
 
@@ -1102,7 +1020,7 @@ def stream_execute_events(
 
         # Emit error if subprocess failed
         if exec_failed:
-            yield _sse({'type': 'error', 'message': 'Pipeline execution failed. Check terminal for details.'})
+            yield _sse({'type': 'error', 'message': exec_failed_message or 'Pipeline execution failed.'})
             yield _sse({'type': 'terminal', 'line': 'Pipeline execution failed.'})
         else:
             yield _sse({'type': 'terminal', 'line': 'Done.'})
