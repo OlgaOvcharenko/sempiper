@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   NODE_SEP,
   RANK_SEP,
+  NODE_HEIGHT,
+  WAYPOINT_CLEARANCE,
   MAX_ENDPOINT_OFFSET,
   PRESET_LAYOUT_CONFIG,
   EDGE_CURVE_STYLE,
@@ -12,6 +14,8 @@ import {
   computePresetPositions,
   countEdgeCrossings,
   buildCyElements,
+  detectEdgeNodeOverlaps,
+  computeLayoutWithWaypoints,
 } from "../../src/utils/graphLayout";
 import type { SkrubGraphDict, } from "../../src/api/client";
 import type { LayoutPosition } from "../../src/utils/graphLayout";
@@ -744,5 +748,256 @@ describe("computePresetPositions — no overlapping node positions", () => {
     const positions = computePresetPositions(g);
     const layer1Xs = (["a", "b", "c"] as const).map((id) => positions.get(id)!.x);
     expect(new Set(layer1Xs).size).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NODE_HEIGHT constant
+// ---------------------------------------------------------------------------
+
+describe("NODE_HEIGHT", () => {
+  it("equals 32 (matches GraphPanel node height style)", () => {
+    expect(NODE_HEIGHT).toBe(32);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectEdgeNodeOverlaps
+// ---------------------------------------------------------------------------
+
+describe("detectEdgeNodeOverlaps", () => {
+  it("returns empty for a short edge (adjacent layers, no intermediate nodes)", () => {
+    // Two nodes stacked vertically, one edge — no other nodes to overlap
+    const positions = new Map<string, LayoutPosition>([
+      ["a", { x: 120, y: 30 }],
+      ["b", { x: 120, y: 90 }],
+    ]);
+    const widths = new Map([["a", 70], ["b", 70]]);
+    const edges = [{ source: "a", target: "b" }];
+    expect(detectEdgeNodeOverlaps(positions, widths, edges)).toHaveLength(0);
+  });
+
+  it("returns empty when the long edge passes to the side of intermediate nodes", () => {
+    // Edge goes straight down the left column; middle node is far to the right
+    const positions = new Map<string, LayoutPosition>([
+      ["src", { x: 120, y: 30 }],
+      ["mid", { x: 600, y: 90 }],   // far right — not in the path
+      ["tgt", { x: 120, y: 150 }],
+    ]);
+    const widths = new Map([["src", 70], ["mid", 70], ["tgt", 70]]);
+    const edges = [{ source: "src", target: "tgt" }];
+    expect(detectEdgeNodeOverlaps(positions, widths, edges)).toHaveLength(0);
+  });
+
+  it("detects overlap when a long edge passes directly through an intermediate node", () => {
+    // src at layer 0 (x=120,y=30), tgt at layer 2 (x=120,y=150),
+    // intermediate node exactly on the straight-line path (x=120, y=90)
+    const positions = new Map<string, LayoutPosition>([
+      ["src", { x: 120, y: 30 }],
+      ["mid", { x: 120, y: 90 }],
+      ["tgt", { x: 120, y: 150 }],
+    ]);
+    const widths = new Map([["src", 70], ["mid", 70], ["tgt", 70]]);
+    const edges = [{ source: "src", target: "tgt" }];
+    const overlaps = detectEdgeNodeOverlaps(positions, widths, edges);
+    expect(overlaps).toHaveLength(1);
+    expect(overlaps[0].overlappingNode).toBe("mid");
+    expect(overlaps[0].edge).toEqual({ source: "src", target: "tgt" });
+  });
+
+  it("does not report the edge source or target as overlapping nodes", () => {
+    const positions = new Map<string, LayoutPosition>([
+      ["a", { x: 120, y: 30 }],
+      ["b", { x: 120, y: 90 }],
+    ]);
+    const widths = new Map([["a", 70], ["b", 70]]);
+    // Edge from a to b — neither endpoint should appear as an overlap
+    const overlaps = detectEdgeNodeOverlaps(
+      positions,
+      widths,
+      [{ source: "a", target: "b" }],
+    );
+    expect(overlaps.every((o) => o.overlappingNode !== "a")).toBe(true);
+    expect(overlaps.every((o) => o.overlappingNode !== "b")).toBe(true);
+  });
+
+  it("reports at most one entry per (edge, node) pair", () => {
+    // Long edge passing through the same node multiple times (wide node)
+    const positions = new Map<string, LayoutPosition>([
+      ["src", { x: 120, y: 30 }],
+      ["mid", { x: 120, y: 90 }],
+      ["tgt", { x: 120, y: 330 }], // spans 5 layers
+    ]);
+    const widths = new Map([["src", 70], ["mid", 200], ["tgt", 70]]);
+    const overlaps = detectEdgeNodeOverlaps(
+      positions,
+      widths,
+      [{ source: "src", target: "tgt" }],
+    );
+    const mid_reports = overlaps.filter((o) => o.overlappingNode === "mid");
+    expect(mid_reports).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeLayoutWithWaypoints — basic contract
+// ---------------------------------------------------------------------------
+
+describe("computeLayoutWithWaypoints — basic contract", () => {
+  it("returns positions for all nodes in the graph", () => {
+    const g: SkrubGraphDict = {
+      nodes: [{ id: "a", label: "a" }, { id: "b", label: "b" }, { id: "c", label: "c" }],
+      parents: { a: [], b: ["a"], c: ["b"] },
+      children: { a: ["b"], b: ["c"], c: [] },
+    };
+    const { positions } = computeLayoutWithWaypoints(g);
+    for (const node of g.nodes) {
+      expect(positions.has(node.id)).toBe(true);
+    }
+  });
+
+  it("returns no waypoints for a linear chain (no long edges)", () => {
+    const g: SkrubGraphDict = {
+      nodes: [{ id: "a", label: "a" }, { id: "b", label: "b" }, { id: "c", label: "c" }],
+      parents: { a: [], b: ["a"], c: ["b"] },
+      children: { a: ["b"], b: ["c"], c: [] },
+    };
+    const { edgeWaypoints } = computeLayoutWithWaypoints(g);
+    expect(edgeWaypoints.size).toBe(0);
+  });
+
+  it("returns waypoints for an edge that spans multiple layers", () => {
+    // a (layer 0) → d (layer 3) is a long edge spanning 3 layers
+    // b (layer 1) → c (layer 2) → d is the chain that forces d to layer 3
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+        { id: "d", label: "d" },
+      ],
+      parents: { a: [], b: ["a"], c: ["b"], d: ["a", "c"] },
+      children: { a: ["b", "d"], b: ["c"], c: ["d"], d: [] },
+    };
+    const { edgeWaypoints } = computeLayoutWithWaypoints(g);
+    // Edge a→d spans layers 0→3: should have 2 dummy waypoints (layers 1, 2)
+    expect(edgeWaypoints.has("a_d")).toBe(true);
+    expect(edgeWaypoints.get("a_d")!).toHaveLength(2);
+  });
+
+  it("child nodes still have greater y than parents after waypoint layout", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+        { id: "d", label: "d" },
+      ],
+      parents: { a: [], b: ["a"], c: ["b"], d: ["a", "c"] },
+      children: { a: ["b", "d"], b: ["c"], c: ["d"], d: [] },
+    };
+    const { positions } = computeLayoutWithWaypoints(g);
+    expect(positions.get("b")!.y).toBeGreaterThan(positions.get("a")!.y);
+    expect(positions.get("c")!.y).toBeGreaterThan(positions.get("b")!.y);
+    expect(positions.get("d")!.y).toBeGreaterThan(positions.get("c")!.y);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeLayoutWithWaypoints — no edge-node overlaps after routing
+// ---------------------------------------------------------------------------
+
+describe("computeLayoutWithWaypoints — no edge-node overlaps after routing", () => {
+  /** Build a nodeWidths map from a SkrubGraphDict (uses calculateNodeWidth). */
+  function buildNodeWidths(g: SkrubGraphDict): Map<string, number> {
+    const m = new Map<string, number>();
+    for (const node of g.nodes) {
+      m.set(node.id, calculateNodeWidth(node.label));
+    }
+    return m;
+  }
+
+  it("fraud-like topology: long getItem edge gets waypoints that avoid intermediate nodes", () => {
+    // Mirrors the simple fraud pipeline:
+    //   var_data (layer 0)
+    //   ├── getItem_fraud_flag (layer 1) ──────────────────────────────► skb_apply (layer 4)
+    //   └── as_X (layer 1) → sem_fillna (layer 2) → sem_gen (layer 3) → skb_apply (layer 4)
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "var_data", label: "var_data" },
+        { id: "getItem_fraud_flag", label: "getItem('fraud_flag')" },
+        { id: "as_X", label: "as_X" },
+        { id: "sem_fillna", label: "sem_fillna" },
+        { id: "sem_gen", label: "sem_gen_features" },
+        { id: "skb_apply", label: "skb.apply" },
+      ],
+      parents: {
+        var_data: [],
+        getItem_fraud_flag: ["var_data"],
+        as_X: ["var_data"],
+        sem_fillna: ["as_X"],
+        sem_gen: ["as_X", "sem_fillna"],
+        skb_apply: ["getItem_fraud_flag", "sem_gen"],
+      },
+      children: {
+        var_data: ["getItem_fraud_flag", "as_X"],
+        getItem_fraud_flag: ["skb_apply"],
+        as_X: ["sem_fillna", "sem_gen"],
+        sem_fillna: ["sem_gen"],
+        sem_gen: ["skb_apply"],
+        skb_apply: [],
+      },
+    };
+
+    const { positions, edgeWaypoints } = computeLayoutWithWaypoints(g);
+    const nodeWidths = buildNodeWidths(g);
+
+    // The long edge (spanning layers 1 → 4) must have waypoints
+    expect(edgeWaypoints.has("getItem_fraud_flag_skb_apply")).toBe(true);
+    const waypoints = edgeWaypoints.get("getItem_fraud_flag_skb_apply")!;
+    expect(waypoints).toHaveLength(2); // intermediate layers 2 and 3
+
+    // Each waypoint must not overlap (with clearance) any node at the same y
+    for (const wp of waypoints) {
+      for (const node of g.nodes) {
+        const nodePos = positions.get(node.id);
+        if (!nodePos) continue;
+        if (Math.abs(nodePos.y - wp.y) > 1) continue; // different layer — skip
+        const halfW = (nodeWidths.get(node.id) ?? 70) / 2 + WAYPOINT_CLEARANCE;
+        // Waypoint x must be outside the node's padded bounding box
+        expect(Math.abs(wp.x - nodePos.x)).toBeGreaterThan(halfW - 1);
+      }
+    }
+  });
+
+  it("buildCyElements marks long edges as segmented when waypoints are provided", () => {
+    const g: SkrubGraphDict = {
+      nodes: [
+        { id: "a", label: "a" },
+        { id: "b", label: "b" },
+        { id: "c", label: "c" },
+        { id: "d", label: "d" },
+      ],
+      parents: { a: [], b: ["a"], c: ["b"], d: ["a", "c"] },
+      children: { a: ["b", "d"], b: ["c"], c: ["d"], d: [] },
+    };
+    const { positions, edgeWaypoints } = computeLayoutWithWaypoints(g);
+    const { cyEdges } = buildCyElements(g, positions, edgeWaypoints);
+
+    // Edge a→d is long (layers 0→3) — must have waypoints (unbundled-bezier)
+    const longEdge = cyEdges.find(
+      (e) => e.data.source === "skrub_a" && e.data.target === "skrub_d",
+    );
+    expect(longEdge).toBeDefined();
+    expect(longEdge!.data.hasWaypoints).toBe("true");
+    expect(longEdge!.data.controlPointDistances).toBeDefined();
+    expect(longEdge!.data.controlPointWeights).toBeDefined();
+
+    // Edge b→c is short (layers 1→2) — must NOT have waypoints
+    const shortEdge = cyEdges.find(
+      (e) => e.data.source === "skrub_b" && e.data.target === "skrub_c",
+    );
+    expect(shortEdge).toBeDefined();
+    expect(shortEdge!.data.hasWaypoints).toBeUndefined();
   });
 });

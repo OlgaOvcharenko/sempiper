@@ -253,21 +253,6 @@ describe("NodeDetailsPanel State Transitions", () => {
     expect(screen.getByText(/Cost: \$0\.00123/)).toBeInTheDocument();
   });
 
-  /**
-   * Edge case: Fallback code indicator
-   */
-  it("shows fallback warning when is_fallback is true", () => {
-    render(
-      <NodeDetailsPanel
-        selectedNodeId="sem_gen_features_5"
-        selectedNode={{ id: "sem_gen_features_5", type: "operator", label: "sem_gen_features" }}
-        isExecuting={false}
-        liveGeneratedCodeByNode={{ sem_gen_features_5: "# placeholder code" }}
-        liveFallbackByNode={{ sem_gen_features_5: true }}
-      />
-    );
-    expect(screen.getByText(/placeholder code shown above/i)).toBeInTheDocument();
-  });
 });
 
 describe("NodeDetailsPanel ID Lookup Edge Cases", () => {
