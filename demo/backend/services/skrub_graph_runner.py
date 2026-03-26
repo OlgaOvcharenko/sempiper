@@ -224,7 +224,8 @@ def _prepare_globals():
     import os
     import sys
 
-    g = {"__builtins__": __builtins__, "os": os}
+    script_path = os.environ.get("SEMPIPES_SCRIPT_PATH", "")
+    g = {"__builtins__": __builtins__, "os": os, "__file__": script_path}
     try:
         import skrub
         g["skrub"] = skrub

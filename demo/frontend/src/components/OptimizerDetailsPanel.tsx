@@ -18,6 +18,48 @@ interface OptimizerDetailsPanelProps {
 
 type OperatorKind = "optimized" | "pipeline";
 
+type TrialLike = OptimizerOutcome & {
+    state?: { generated_code?: unknown };
+    states?: { states_per_operator?: Record<string, { generated_code?: unknown }> };
+    search_node?: {
+        fixed_states?: { states_per_operator?: Record<string, { generated_code?: unknown }> };
+    };
+};
+
+function toCodeString(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (value == null) return "# No code generated";
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+function extractTrialGeneratedCode(trial: TrialLike | null): string | string[] | Record<string, string> | null {
+    if (!trial) return null;
+
+    const direct = trial.state?.generated_code;
+    if (typeof direct === "string") return direct;
+    if (Array.isArray(direct)) return direct.map(toCodeString);
+    if (direct && typeof direct === "object") {
+        const obj = direct as Record<string, unknown>;
+        return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, toCodeString(v)]));
+    }
+
+    const perOperator =
+        trial.states?.states_per_operator ?? trial.search_node?.fixed_states?.states_per_operator;
+    if (perOperator && typeof perOperator === "object") {
+        const entries = Object.entries(perOperator).map(([name, state]) => [
+            name,
+            toCodeString(state?.generated_code),
+        ]);
+        return Object.fromEntries(entries);
+    }
+
+    return null;
+}
+
 function AccordionItem({
     title,
     children,
@@ -122,6 +164,7 @@ export function OptimizerDetailsPanel({
     hasRun = false,
     isBestTrial = false,
 }: OptimizerDetailsPanelProps) {
+    const selectedTrialLike = selectedTrial as TrialLike | null;
     const hasFinalCode = finalCode && Object.keys(finalCode).length > 0;
 
     const emptyContent = !hasRun ? (
@@ -147,31 +190,35 @@ export function OptimizerDetailsPanel({
         // substitute the optimized operator's code with that trial's specific output.
         codeBlocks = Object.entries(finalCode).map(([name, code]) => {
             let displayCode = code;
-            if (selectedTrial && name === optimizedOperatorName) {
-                const tc = selectedTrial.state.generated_code;
+            if (selectedTrialLike && name === optimizedOperatorName) {
+                const tc = extractTrialGeneratedCode(selectedTrialLike);
                 if (typeof tc === "string") displayCode = tc;
-                else if (Array.isArray(tc) && tc.length > 0) displayCode = tc[tc.length - 1];
+                else if (Array.isArray(tc) && tc.length > 0) displayCode = toCodeString(tc[tc.length - 1]);
+                else if (tc && typeof tc === "object" && name in tc) displayCode = toCodeString(tc[name]);
             }
             return { name, code: displayCode, kind: name === optimizedOperatorName ? "optimized" : "pipeline" };
         });
-    } else if (selectedTrial) {
-        const { state } = selectedTrial;
-        if (typeof state.generated_code === "string") {
-            codeBlocks = [{ name: operatorName || "Generated Code", code: state.generated_code }];
-        } else if (Array.isArray(state.generated_code)) {
-            if (state.generated_code.length === 1) {
-                codeBlocks = [{ name: operatorName || "Generated Code", code: state.generated_code[0] }];
+    } else if (selectedTrialLike) {
+        const trialCode = extractTrialGeneratedCode(selectedTrialLike);
+        if (typeof trialCode === "string") {
+            codeBlocks = [{ name: operatorName || "Generated Code", code: trialCode }];
+        } else if (Array.isArray(trialCode)) {
+            if (trialCode.length === 1) {
+                codeBlocks = [{ name: operatorName || "Generated Code", code: toCodeString(trialCode[0]) }];
             } else if (operatorName) {
-                const lastCode = state.generated_code[state.generated_code.length - 1];
-                codeBlocks = [{ name: operatorName, code: lastCode }];
+                const lastCode = trialCode[trialCode.length - 1];
+                codeBlocks = [{ name: operatorName, code: toCodeString(lastCode) }];
             } else {
-                codeBlocks = state.generated_code.map((code, index) => ({
+                codeBlocks = trialCode.map((code, index) => ({
                     name: `Operator ${index + 1}`,
-                    code,
+                    code: toCodeString(code),
                 }));
             }
-        } else if (typeof state.generated_code === "object" && state.generated_code !== null) {
-            codeBlocks = Object.entries(state.generated_code).map(([name, code]) => ({ name, code }));
+        } else if (trialCode && typeof trialCode === "object") {
+            codeBlocks = Object.entries(trialCode).map(([name, code]) => ({
+                name,
+                code: toCodeString(code),
+            }));
         } else {
             codeBlocks = [{ name: "Generated Code", code: "# No code generated" }];
         }

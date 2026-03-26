@@ -241,7 +241,7 @@ def sempipes_pipeline():
 
 
 # Get data
-data_path = "demo_scripts/met_10k.csv"
+data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "met_10k.csv")
 n_samples = 100
 
 museum_objects = pd.read_csv(data_path)

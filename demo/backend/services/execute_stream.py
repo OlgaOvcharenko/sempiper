@@ -698,6 +698,25 @@ def stream_execute_events(
             logger.info(f"Starting subprocess for {len(operator_nodes)} operators (no timeout)")
         subprocess_env = os.environ.copy()
         if not e2e_mode:
+            # Pass script file path so runner can set __file__ for scripts that reference data relative to their location
+            if script_id:
+                repo_root = os.path.dirname(os.path.dirname(_BACKEND_ROOT))
+                for scripts_dir_name in ("pipeline_scripts", "optimizer_scripts"):
+                    scripts_dir = os.path.join(repo_root, scripts_dir_name)
+                    manifest_path = os.path.join(scripts_dir, "manifest.json")
+                    try:
+                        import json as _json
+                        with open(manifest_path) as _mf:
+                            _manifest = _json.load(_mf)
+                        _entry = next((e for e in _manifest if e.get("id") == script_id), None)
+                        if _entry:
+                            candidate = os.path.join(scripts_dir, _entry["file"])
+                            if os.path.isfile(candidate):
+                                subprocess_env["SEMPIPES_SCRIPT_PATH"] = candidate
+                                break
+                    except Exception:
+                        pass
+
             # Prepare environment: pass sempipes config to subprocess
             # Priority: explicit llm_name/temperature params > global sempipes config
             if llm_name is not None and temperature is not None:

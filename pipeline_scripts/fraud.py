@@ -100,9 +100,7 @@ def sempipes_pipeline():
         left_on="ID",
         right_on="basket_ID",
         nl_prompt="""
-        Aggregate the product features by basket ID. For numeric columns use mean,
-        sum, and count. For categorical columns use mode. Use simple pandas groupby
-        with a dict of aggregation functions — do not use tuple-kwargs syntax.
+        Aggregate the product features, take into account that price-related features and statistics per basket should be aggregated too.
         """,
         name="basket_features",
         how_many=1,

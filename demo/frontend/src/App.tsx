@@ -39,7 +39,7 @@ export default function App() {
                   : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200'
                   }`}
               >
-                Normal
+                Pipeline
               </button>
               <button
                 onClick={() => setActiveTab('optimizer')}
@@ -108,8 +108,8 @@ export default function App() {
                 aria-hidden
               />
               <span className="inline-flex items-baseline">
-                <span className="text-rose-400">Sem</span>
-                <span className="text-slate-500 dark:text-slate-400">Pipes</span>
+                <span className="text-slate-400 dark:text-slate-400">Sem</span>
+                <span className="text-slate-600 dark:text-slate-300">Piper</span>
               </span>
             </h1>
           </div>

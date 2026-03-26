@@ -1,8 +1,8 @@
 [
   { "id": "simple", "label": "Fraud (simple)", "file": "simple.py" },
   { "id": "medium", "label": "Fraud (medium)", "file": "medium.py" },
-  { "id": "fraud", "label": "Fraud", "file": "fraud.py" },
-  { "id": "house", "label": "House Prices", "file": "house_prices.py" },
-  { "id": "museum", "label": "Museum Artworks", "file": "museums.py" },
+  { "id": "fraud", "label": "Fraud detection", "file": "fraud.py" },
+  { "id": "house", "label": "House prices", "file": "house_prices.py" },
+  { "id": "museum", "label": "Museum artworks", "file": "museums.py" },
   { "id": "new", "label": "New", "file": "new.py" }
 ]
