@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Bash(python -c:*)",
+      "Bash(python3 -c:*)",
+      "Bash(poetry run python3 -c:*)",
+      "Read(//Users/olgaovcharenko/Library/Caches/pypoetry/**)",
+      "Read(//Library/Frameworks/Python.framework/**)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(git stash)"
+    ],
+    "additionalDirectories": [
+      "/tmp",
+      "/Users/olgaovcharenko/Documents/TUB/WS25/sempipes_demo/logs/runners"
+    ]
+  }
+}

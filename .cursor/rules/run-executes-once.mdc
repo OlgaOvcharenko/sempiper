@@ -1,0 +1,12 @@
+---
+description: Run must execute the pipeline exactly once; never re-run to fill node details.
+alwaysApply: true
+---
+
+# Run executes exactly once
+
+When calling **Run** (`/api/execute`), the backend must execute the pipeline **exactly one time**.
+
+- **Never** add a fallback that re-evaluates the skrub graph (e.g. `skrub.evaluate(...)`) to populate missing node previews/details.
+- If required node information can’t be produced from the single execution, **fail the run** and surface an error to the user (no retries, no second execution).
+

@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --header-height: 5rem;
+}
+
+/* Bright / light theme — readable, bright UI */
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: #fafafa; /* zinc-50 */
+  color: #18181b; /* zinc-900 */
+}
+
+::selection {
+  background-color: rgba(16, 185, 129, 0.3); /* emerald-500 */
+}
+
+/* Dark mode overrides */
+html.dark body {
+  background-color: #09090b; /* zinc-950 */
+  color: #f4f4f5; /* zinc-100 */
+}
+
+html.dark ::selection {
+  background-color: rgba(16, 185, 129, 0.4); /* emerald-500, slightly more opaque */
+}
+
+html.dark .skrub-graph-container svg polygon[fill="white"] {
+  fill: #27272a !important; /* zinc-800 for node backgrounds */
+}
+
+html.dark .skrub-graph-container svg text {
+  fill: #f4f4f5 !important; /* zinc-100 for text */
+}
+
+html.dark .skrub-graph-container svg path,
+html.dark .skrub-graph-container svg line {
+  stroke: #a1a1aa !important; /* zinc-400 for edges */
+}
+
+html.dark .skrub-graph-container svg polygon[fill="black"] {
+  fill: #a1a1aa !important; /* zinc-400 for arrows */
+}
+
+/* Skrub native graph styling — match light theme */
+.skrub-graph-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Override skrub's graphviz colors for light theme */
+.skrub-graph-container svg polygon[fill="white"] {
+  fill: #ffffff !important;
+}
+
+.skrub-graph-container svg text {
+  fill: #18181b !important; /* zinc-900 for text */
+}
+
+/* Make nodes clickable with hover effect */
+.skrub-graph-container svg g.node {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.skrub-graph-container svg g.node:hover {
+  opacity: 0.8;
+}
+
+/* Ensure edges are visible */
+.skrub-graph-container svg path,
+.skrub-graph-container svg line {
+  stroke: #18181b !important; /* zinc-900 for edges */
+}
+
+.skrub-graph-container svg polygon[fill="black"] {
+  fill: #18181b !important; /* zinc-900 for arrows */
+}

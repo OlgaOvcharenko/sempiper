@@ -1,0 +1,63 @@
+# Symbolic link folder
+sempipes
+
+# Python
+venv/
+.venv/
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+*.egg
+dist/
+
+# Node / frontend
+node_modules/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE / editor
+.idea/
+.vscode/
+.history
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+
+# Build / artifacts
+target/
+build/
+demo/graph_svgs/
+**/graph_svgs*/
+*.log
+.demo.pids
+
+demo/backend/AutogluonModels**
+
+
+demo/backend/autogluon**
+
+
+autogluon**
+AutogluonModels**
+
+
+demo/backend/catboost_info
+
+.cache/
+logs/
+
+.sempipes_trajectories/
