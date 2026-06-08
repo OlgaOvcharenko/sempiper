@@ -1,17 +1,14 @@
 # sempipes-demo
 
-![Demo: three-panel layout — pipeline editor, graph, node details](image.png)
+<p align="center">
+  <img src="doc/sempipesnew.png" alt="SemPipes" style="height: 100px; width: 100px;" />
+</p>
 
-Repository for the sempipes demo (VLDB-style web demo: declarative Python pipelines → compiled graph → generated code and insights). Dependencies are managed with **Poetry**; there is no `requirements.txt` — use **`pyproject.toml`** only. Sempipes is loaded as a local path dependency.
 
-**Inspiration:** The web demo is inspired by the **sempipes notebook demos** (e.g. `sempipes/demo.ipynb`, `demo__sem_fillna.ipynb`), which run real pipelines with `as_X`/`as_y`, `sem_fillna`, `sem_gen_features`, `apply_with_sem_choose`, `sem_choose`, and show a computational graph and result on a subsample. The web UI mirrors that flow: pipeline code → compiled graph → node details.
-
-## Demo design (high level)
-
-The demo UI is a **three-panel layout**:
+**SemPiper** consists of a **three-panel layout**:
 
 1. **Left — Pipeline editor**  
-   Editor for writing Python code as declarative pipelines using sempipes. The code is the source of truth; changes drive compilation and graph updates.
+   Editor for writing Python code as declarative pipelines using SemPipes. The code is the source of truth; changes drive compilation and graph updates.
 
 2. **Middle — Interactive graph**  
    Visualisation of the **scrub-compiled graph** (pipeline DAG). Nodes are clickable; selecting a node drives the content shown in the right panel.
@@ -19,109 +16,157 @@ The demo UI is a **three-panel layout**:
 3. **Right — Node details / results**  
    Contextual content for the **selected graph node**:
    - **Input nodes**: data summary (schema, sample, stats).
-   - **Sempipes / operator nodes**: generated code, LLM prompt statistics, or other node-specific metadata (e.g. timings, options).
+   - **SemPipes / operator nodes**: generated code, LLM prompt statistics, or other node-specific metadata.
 
-The design is also documented in **`.cursor/rules/demo-three-panel-design.mdc`** for consistent implementation and AI-assisted development.
+SemPiper is a demo for [SemPipes](https://github.com/deem-data/sempipes/tree/main): FastAPI backend + React frontend. Dependencies: **Poetry** (`pyproject.toml` only; no `requirements.txt`). SemPipes is a local path dependency via `sempipes/` symlink.
+
+ <img src="doc/overview.png" alt="Demo" style="height: auto; width: auto;" />
+
+## Repository layout
+
+```
+sempiper/
+├── demo/
+│   ├── backend/           # FastAPI (main:app), port 8000
+│   └── frontend/          # React + Vite, port 5173
+├── pipeline_scripts/      # Example pipelines (manifest.json)
+├── optimizer_scripts/     # Optimizer example scripts
+├── sempipes/              # Symlink → external sempipes repo (read-only here)
+├── pyproject.toml         # Python dependencies (root)
+├── Makefile               # run, stop, test
+└── logs/                  # Runtime logs (created by make run)
+```
+
+API and demo app details: [`demo/README.md`](demo/README.md).
+
+## Requirements
+
+- Python 3.11–3.12
+- [Poetry](https://python-poetry.org/)
+- Node.js + npm
+- Clone of [sempipes](https://github.com/deem-data/sempipes/tree/main)
 
 ## Setup
 
-### 1. Symbolic link to sempipes
-
-This project expects a `sempipes/` folder that is a **symbolic link** to the external sempipes repository:
-
-1. **Clone this repository** (sempipes-demo).
-2. **Clone sempipes** into a separate folder (e.g. a sibling of this repo):
-   ```bash
-   cd /path/to/parent
-   git clone <sempipes-repo-url> sempipes
-   ```
-3. **Create the symbolic link** from inside the sempipes-demo directory:
-   ```bash
-   cd /path/to/sempipes_demo
-   ln -s ../sempipes sempipes
-   ```
-   If you cloned sempipes elsewhere, use that path (e.g. `ln -s /absolute/path/to/sempipes sempipes`).
-
-Do not edit files under `sempipes/` from this project; make changes in the actual sempipes repository.
-
-### 2. Install dependencies (Poetry only)
-
-From the **repository root**:
+### 1. Symlink SemPipes
 
 ```bash
+cd /path/to/parent
+git clone https://github.com/deem-data/sempipes.git sempipes
+
+cd /path/to/sempiper
+ln -s ../sempipes sempipes   # or ln -s /absolute/path/to/sempipes sempipes
+```
+
+Do not edit files under `sempipes/` in this repo.
+
+### 2. Install dependencies
+
+```bash
+# Repo root — Python (includes sempipes from symlink)
 poetry install
+
+# Frontend
+cd demo/frontend && npm install
 ```
 
-This installs all dependencies (including sempipes from the `sempipes/` path) from `pyproject.toml`. There is no `requirements.txt`; the single source of truth is `pyproject.toml`.
+### 3. Environment (for pipeline execution with LLM operators)
 
-### 3. Run the demo
+Create `.env` at the repo root with your provider keys, e.g. `OPENAI_API_KEY`, `GEMINI_API_KEY`. The backend loads it on startup.
 
-**One command** (from repo root; starts backend and frontend in the background):
-
-```bash
-make run
-```
-
-Then open **http://localhost:5173**. To stop the demo:
+## Run
 
 ```bash
+make run    # backend :8000, frontend :5173 (background)
 make stop
 ```
 
-**Or run backend and frontend manually** in two terminals:
+Open **http://localhost:5173**.
 
-- **Backend** (FastAPI, port 8000): `cd demo/backend` then `uvicorn main:app --reload` (or from root: `poetry run uvicorn main:app --reload --app-dir demo/backend`). The backend calls sempipes when it is importable; if sempipes or its dependencies fail to load, the demo still runs with mock-only behaviour and reports `sempipes_available: false` in responses.
-- **Frontend** (React + Vite, port 5173): `cd demo/frontend`, `npm install`, then `npm run dev`. The frontend proxies `/api` to the backend.
+Manual:
 
-**Tests**
-
-- Backend: from repo root or `demo/backend` run `pytest` (after `poetry install` at root).
-- Frontend: from `demo/frontend` run `npm test`.
-
-**Code style**
-
-- **Python** (like sempipes): Ruff (lint + format) and mypy. From repo root after `poetry install`:  
-  `poetry run ruff check demo/`  
-  `poetry run ruff format --check demo/`  
-  `poetry run mypy demo/backend`  
-  Or install pre-commit and run on staged files:  
-  `poetry run pre-commit install`  
-  then `poetry run pre-commit run --all-files` to check everything.  
-  Only `demo/` is checked; `sempipes/` is excluded (read-only symlink).
-- **Frontend** (TypeScript/React): ESLint and Prettier. From `demo/frontend`:  
-  `npm run lint`  
-  `npm run lint:fix`  
-  `npm run format`  
-  `npm run format:check`
-
-**Logging**
-
-Each `make run` produces timestamped log files in `logs/`:
-
-| File | Contents |
-|------|----------|
-| `logs/backend-YYYYMMDD_HHMMSS.log` | Uvicorn / FastAPI process log (HTTP requests, compile/execute lifecycle, errors) |
-| `logs/frontend-YYYYMMDD_HHMMSS.log` | Vite / Node dev-server log |
-| `logs/runners/runner-YYYYMMDD_HHMMSS-<PID>.log` | Full stdout+stderr of each pipeline subprocess (LiteLLM verbose output, generated code, `##SEMPIPES_NODE_CODE##` blocks, `##NODE_PREVIEW##` JSON, pandas warnings) |
-
-The **main backend log** stays concise: it records the subprocess PID, a success/failure status, and the path to the runner log, e.g.:
-```
-INFO - Subprocess started, PID: 12345, log: logs/runners/runner-20260318_120000-12345.log
-INFO - Subprocess PID 12345 OK — 3 code blocks captured, 8432 chars — log: logs/runners/runner-...log
+```bash
+cd demo/backend && poetry run uvicorn main:app --reload
+cd demo/frontend && npm run dev
 ```
 
-To **debug a failed or unexpected run**, open the corresponding `logs/runners/runner-*.log` file — it contains the complete subprocess output including LiteLLM calls, generated Python, and any Python tracebacks.
-
-**Docker (optional)**
-
-From the **repository root**:
+Docker (from repo root):
 
 ```bash
 docker compose -f demo/docker-compose.yml up --build
 ```
 
-Backend: :8000, frontend: :5173. The backend image is built from the root `pyproject.toml`.
+## Tests
 
----
+| Command | Location | Description |
+|---------|----------|-------------|
+| `make test` | repo root | Backend + frontend (parallel), then E2E |
+| `make test-backend` | repo root | `pytest` in `demo/backend` |
+| `make test-frontend` | repo root | Vitest in `demo/frontend` |
+| `make test-e2e` | repo root | Playwright |
+| `make verify-compile` | repo root | Live compile edge check (requires `make run`) |
 
-More detail (API, tech stack, replacing the mock engine): see **`demo/README.md`**.
+Backend only: `cd demo/backend && poetry run pytest tests/ -v`
+
+## Lint and format
+
+**Python** (from repo root; `demo/` only, `sempipes/` excluded):
+
+```bash
+poetry run ruff check demo/
+poetry run ruff format --check demo/
+poetry run mypy demo/backend
+poetry run pre-commit install
+poetry run pre-commit run --all-files
+```
+
+**Frontend** (`demo/frontend`):
+
+```bash
+npm run lint
+npm run lint:fix
+npm run format
+npm run format:check
+```
+
+## Logging
+
+`make run` writes timestamped logs under `logs/`:
+
+| File | Contents |
+|------|----------|
+| `logs/backend-*.log` | Uvicorn/FastAPI: HTTP, compile/execute lifecycle |
+| `logs/frontend-*.log` | Vite dev server |
+| `logs/runners/runner-*-<PID>.log` | Full subprocess stdout/stderr per `/api/execute` run |
+
+The backend log records one line per subprocess (PID, status, path to runner log). Use `logs/runners/runner-*.log` to debug failed pipeline runs.
+
+## Citation
+
+If you use **SemPiper** or **SemPipes**, please cite the corresponding paper.
+
+**SemPiper** (VLDB demonstration):
+
+```bibtex
+@article{ovcharenko2026sempiper,
+  title   = {{SemPiper}: Interactive Code Synthesis for Semantic Operators in ML Pipelines},
+  author  = {Ovcharenko, Olga and Duarte, Luciano and Schelter, Sebastian},
+  journal = {Proceedings of the VLDB Endowment},
+  year    = {2026},
+  url     = {https://github.com/OlgaOvcharenko/sempipes-demo},
+}
+```
+
+**SemPipes** (arXiv):
+
+```bibtex
+@misc{ovcharenko2026sempipesoptimizablesemantic,
+  title         = {SemPipes -- Optimizable Semantic Data Operators for Tabular Machine Learning Pipelines},
+  author        = {Olga Ovcharenko and Matthias Boehm and Sebastian Schelter},
+  year          = {2026},
+  eprint        = {2602.05134},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2602.05134},
+}
+```

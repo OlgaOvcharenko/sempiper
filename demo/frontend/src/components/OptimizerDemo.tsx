@@ -60,6 +60,7 @@ outcomes = optimise_colopro(
 const SIMULATED_SCRIPT_PREFIXES = [
   "optimise_house",
   "optimise_fraud",
+  "optimise_fraudbaskets",
   "optimise_museums",
   "optimise_medium",
   "optimise_simple",

@@ -1,101 +1,148 @@
-# VLDB Code Gen Demo
+# SemPiper Web Demo
 
-Web demo for a VLDB paper: input DSL/SQL in a code editor, backend generates code (e.g. C++, Rust, LLVM IR), frontend shows result with syntax highlighting and metadata.
+Interactive web UI for writing, compiling, and running [SemPipes](https://github.com/deem-data/sempipes/tree/main) pipelines. Edit declarative Python in a code editor, see the compiled data-flow graph, and inspect per-node results (generated code, data summaries, LLM cost).
 
-## Pipeline code and data
+The app has two modes:
 
-The pipeline code in the editor is **real, runnable Python**. You can copy it and run it as a script (e.g. `python pipeline.py`) or in a Jupyter notebook, as long as you have `skrub`, `sempipes`, and `sklearn` installed.
+- **Pipeline** — three-panel editor: pipeline code (left), interactive DAG (center), node details (right).
+- **Optimizer** — browse optimization trajectories for semantic operator search.
 
-- **Data**: When run as a script, the data comes from **`skrub.datasets.fetch_credit_fraud()`** (credit fraud demo dataset). The scripts then use `skrub.var("products", ...)` and `skrub.var("baskets", ...)` and optionally subsample.
-- **In the web demo**: The app does **not** execute the Python; it parses the code to build the graph and simulates execution (mock generated code and input summaries). To actually run the pipeline with real data and LLMs, run the code in a notebook or script.
+## Pipeline mode
 
-The three loadable scripts (Simple, Medium, Full) are self-contained and runnable: they all load the same skrub dataset and differ only in how many pipeline steps they include.
+1. **Edit** — Write SemPipes pipeline code (`as_X`, `as_y`, `sem_fillna`, `sem_gen_features`, `skb.apply`, etc.). Example scripts load from `pipeline_scripts/` at the repo root.
+2. **Compile** — Parses the code and builds a data-flow DAG with source ranges that link code positions to graph nodes.
+3. **Run** — Executes the pipeline once via a subprocess. The backend streams per-node updates (generated code, previews, LLM cost) over SSE; the right panel updates live for the selected node.
 
-## Tech stack
+Pipeline code in the editor is **real, runnable Python**. You can copy a script and run it outside the demo (notebook or `poetry run python script.py`) with the same dependencies (`skrub`, `sempipes`, `sklearn`). Example scripts use skrub datasets (e.g. `fetch_credit_fraud()` for fraud pipelines).
 
-- **Backend**: FastAPI + Pydantic + Python 3.11+
-- **Frontend**: React 18 + TypeScript + Vite
-- **Editor**: Monaco Editor (@monaco-editor/react)
-- **Output highlighting**: Shiki
-- **Data**: TanStack Query · **Styling**: Tailwind CSS
-- **Tests**: pytest (backend), Vitest + React Testing Library (frontend)
+**LLM calls:** Running a pipeline with semantic operators requires API keys (e.g. `OPENAI_API_KEY` or `GEMINI_*` in a `.env` file at the repo root). Without SemPipes or keys, compile still works; execution of semantic operators will fail.
 
-## Setup
+## Example scripts
 
-### Backend
+Scripts live in `pipeline_scripts/` and are listed in `pipeline_scripts/manifest.json`:
 
-Install dependencies from the **repository root** (single source of truth: `pyproject.toml`):
+| ID | Label |
+|----|-------|
+| `simple` | Fraud (simple) |
+| `medium` | Fraud (medium) |
+| `fraud` | Fraud detection |
+| `house` | House prices |
+| `museum` | Museum artworks |
+| `new` | New |
 
-```bash
-# From repo root
-poetry install
-cd demo/backend
-uvicorn main:app --reload
+Optimizer examples live in `optimizer_scripts/`.
+
+## Project layout
+
+```
+demo/
+├── backend/          # FastAPI app (main:app)
+│   ├── routers/      # /api/compile, /api/execute, /api/optimizer/...
+│   ├── services/     # compile, execute stream, cache, graph
+│   └── tests/
+├── frontend/         # React + Vite UI
+│   ├── src/
+│   └── tests/
+└── docker-compose.yml
 ```
 
-Backend runs at **http://localhost:8000**.
+## Prerequisites
 
-### Frontend
+From the **repository root**:
+
+1. **SemPipes** — Create a symlink: `ln -s /path/to/sempipes sempipes` (see root `README.md`).
+2. **Python** — `poetry install`
+3. **Node** — `cd demo/frontend && npm install`
+4. **API keys** (for Run with semantic operators) — `.env` at repo root with your LLM provider keys.
+
+## Run
+
+**Quick start** (from repo root):
 
 ```bash
+make run      # starts backend (:8000) and frontend (:5173)
+```
+
+Open **http://localhost:5173**. Stop with `make stop`.
+
+**Manual start:**
+
+```bash
+# Terminal 1 — backend
+cd demo/backend
+poetry run uvicorn main:app --reload
+
+# Terminal 2 — frontend
 cd demo/frontend
-npm install
 npm run dev
 ```
 
-Frontend runs at **http://localhost:5173** and proxies `/api` to the backend.
+The frontend proxies `/api` to the backend.
 
-### Docker (optional)
-
-Backend image uses the root `pyproject.toml` (build context = repo root). From the **repository root**:
+**Docker** (from repo root):
 
 ```bash
 docker compose -f demo/docker-compose.yml up --build
 ```
 
-Backend: :8000, frontend: :5173.
-
-## Commands
+## Tests
 
 | Command | Where | Description |
-|--------|--------|-------------|
-| `uvicorn main:app --reload` | `demo/backend` | Start backend on :8000 |
-| `npm run dev` | `demo/frontend` | Start frontend on :5173 |
-| `pytest` | repo root or `demo/backend` | Run backend tests (after `poetry install` at root) |
-| `npm test` | `demo/frontend` | Run frontend tests |
+|---------|-------|-------------|
+| `poetry run pytest tests/ -v` | `demo/backend` | Backend tests |
+| `npm test` | `demo/frontend` | Frontend tests (Vitest) |
+| `make test` | repo root | Backend + frontend + E2E |
 
 ## API
 
-**POST /api/generate**
+Base path: `/api`. Interactive docs: **http://localhost:8000/docs**.
 
-Request:
+### Pipeline
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/scripts` | List example scripts (`?mode=normal` or `optimizer`) |
+| `GET` | `/scripts/{id}` | Script source by id |
+| `POST` | `/compile` | Compile pipeline → graph nodes, edges, source ranges |
+| `POST` | `/execute` | Run pipeline → SSE stream of node events |
+| `POST` | `/update-config` | Set LLM model and temperature |
+| `GET` | `/sempipes-info` | Whether sempipes is available and current config |
+| `DELETE` | `/cache` | Clear cache for a script + model + temperature |
+
+**Compile** request body:
 
 ```json
 {
-  "input_code": "SELECT * FROM table...",
-  "options": { "optimization_level": 2, "target": "cpp" }
+  "input_code": "import skrub\n...",
+  "script_id": "simple",
+  "llm_name": "gpt-4o-mini",
+  "temperature": 0.0,
+  "use_cache": true
 }
 ```
 
-Response:
+**Execute** streams Server-Sent Events. Event types include `node_code` (generated code per node), `node_data` (previews/summaries), and `done` (total LLM cost and duration).
 
-```json
-{
-  "generated_code": "int main() { ... }",
-  "language": "cpp",
-  "compilation_time_ms": 12.5,
-  "metadata": {
-    "optimizations_applied": ["inlining", "vectorization"],
-    "ir_size_bytes": 4096,
-    "stages": [
-      { "name": "parse", "time_ms": 1.2 },
-      { "name": "optimize", "time_ms": 8.1 },
-      { "name": "codegen", "time_ms": 3.2 }
-    ]
-  }
-}
-```
+### Optimizer
 
-## Replacing the mock engine
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/optimizer/options` | Available optimizer scripts and trajectories |
+| `GET` | `/optimizer/by-script` | Trajectory for a script id |
+| `GET` | `/optimizer/latest` | Most recent trajectory |
+| `GET` | `/optimizer/final-code` | Final optimized code for a run |
 
-The backend uses a mock in `backend/services/engine.py`. Replace the `CodeGenerator.generate()` implementation with your real system; keep the same return shape (dict with `generated_code`, `language`, `compilation_time_ms`, `metadata`).
+## Logging
+
+Each `make run` writes logs under `logs/` at the repo root:
+
+- `logs/backend-*.log` — HTTP and lifecycle (concise)
+- `logs/frontend-*.log` — Vite dev server
+- `logs/runners/runner-*-<PID>.log` — full subprocess output per pipeline run (use this to debug failed runs)
+
+## Tech stack
+
+- **Backend:** FastAPI, Pydantic, Python 3.11+
+- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS
+- **Editor:** Monaco (`@monaco-editor/react`)
+- **Tests:** pytest (backend), Vitest + React Testing Library (frontend), Playwright (E2E)

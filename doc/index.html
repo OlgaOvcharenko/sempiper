@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SemPiper — Interactive Code Synthesis for Semantic Operators</title>
+  <meta name="description" content="SemPiper is an interactive demo for SemPipes: declarative LLM-powered semantic data operators in tabular ML pipelines." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="sempipesnew.png" type="image/png" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="#">
+        <img src="sempipesnew.png" alt="SemPiper logo" />
+        <span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span>
+      </a>
+      <div class="nav-links">
+        <a href="#overview">Overview</a>
+        <a class="link-sempipes" href="#system">SemPipes</a>
+        <a href="#interface">Interface</a>
+        <a href="#operators">Operators</a>
+        <a href="#scenarios">Scenarios</a>
+        <a href="#run">Run</a>
+        <a href="#cite">Cite</a>
+        <a class="link-sempiper" href="https://github.com/OlgaOvcharenko/sempipes-demo" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <img class="hero-logo" src="sempipesnew.png" alt="SemPiper" />
+      <h1><span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span>: Interactive Code Synthesis for Semantic Operators in ML Pipelines</h1>
+      <p class="subtitle">
+        A web-based demonstration of <strong class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></strong> — a programming model that extends tabular ML pipelines
+        with declarative, LLM-powered semantic data operators, synthesized at training time and optimizable via
+        evolutionary search.
+      </p>
+
+      <!-- <div class="stats">
+        <div class="stat">
+          <span class="stat-value">3</span>
+          <span class="stat-label">End-to-end scenarios</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">9</span>
+          <span class="stat-label">Semantic operators</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">2</span>
+          <span class="stat-label">Interactive tabs</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value">0</span>
+          <span class="stat-label">LLM calls at inference</span>
+        </div>
+      </div> -->
+
+      <div class="hero-actions">
+        <a class="btn btn-sempiper" href="https://github.com/OlgaOvcharenko/sempipes-demo" target="_blank" rel="noopener">
+          Demo repository
+        </a>
+        <a class="btn btn-sempipes" href="https://github.com/deem-data/sempipes/tree/main" target="_blank" rel="noopener">
+          SemPipes library
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" id="overview">
+      <h2 class="section-label">What is <span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span>?</h2>
+      <p>
+        Machine learning pipelines require extensive data preparation, feature engineering, and integration across
+        heterogeneous sources. Chat-based LLM assistants provide limited control over pipeline behavior and often
+        produce code that is difficult to optimize or integrate into production systems.
+        <strong class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></strong> extends Python ML pipelines with declarative, LLM-powered <em>semantic data operators</em>
+        (SemOps). Developers specify high-level natural language instructions for selected data-centric operations;
+        the system synthesizes specialized implementations at <strong>training time</strong>, conditioned on dataset
+        characteristics and pipeline context. During inference, generated operator code runs without further LLM calls.
+        <strong class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></strong> is the interactive demo that exposes this process: pipeline code, computational graphs,
+        synthesized operator implementations, and optimization trajectories from evolutionary search — all in a single
+        web interface.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="system">
+      <h2 class="section-label">How Does <span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span> Work?</h2>
+      <p>
+        SemPipes builds on <a class="link-sempipes" href="https://skrub-data.org/stable/data_ops.html" target="_blank" rel="noopener">skrub DataOps</a>
+        pipelines. Pipelines are written in Python with standard libraries (pandas, scikit-learn, etc.) and extended
+        with semantic operators that delegate selected tasks to LLMs.
+      </p>
+
+      <div class="steps sempipes">
+        <div class="step">
+          <span class="step-num">1</span>
+          <h3>Define</h3>
+          <p>Write ML pipelines in Python, mixing arbitrary library code with declarative SemOps and natural language instructions.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <h3>Synthesize</h3>
+          <p>At training time, SemPipes generates custom operator implementations from data samples, prompts, and pipeline context.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <h3>Optimize</h3>
+          <p>Operator code is refined via LLM-based mutation and tree-structured evolutionary search (e.g. MCTS), using downstream validation performance as fitness.</p>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="interface">
+      <h2 class="section-label">Web-Based User Interface</h2>
+      <p>
+        <span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span> provides two tabs — <strong>Pipeline</strong> and <strong>Optimizer</strong> — for exploring code
+        synthesis and evolutionary optimization end to end.
+      </p>
+
+      <figure class="figure">
+        <img src="overview.png" alt="SemPiper interface showing pipeline editor, computational graph, synthesized code, and optimization trajectory" />
+      </figure>
+
+      <div class="steps steps-interface">
+        <div class="step">
+          <span class="step-num">1</span>
+          <h3>Pipeline code</h3>
+          <p>Implementation of the ML pipeline mixing semantic operators and any Python libraries.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <h3>LLM &amp; run</h3>
+          <p>Select LLM, temperature, and run the pipeline.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <h3>Computational graph</h3>
+          <p>Explore the computational graph during pipeline execution.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">4</span>
+          <h3>Synthesized code</h3>
+          <p>Check the synthesized code, data intermediates, cost, and number of LLM retries.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">5</span>
+          <h3>Optimization trajectory</h3>
+          <p>Optimize the pipeline via evolutionary tree search and inspect the trajectory with downstream scores.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">6</span>
+          <h3>Evolved operators</h3>
+          <p>Explore how synthesized code for semantic operators evolved during optimization.</p>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="operators">
+      <h2 class="section-label">Semantic Data Operators</h2>
+      <p>
+        <span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span> integrates semantic operators as scikit-learn-style estimators within the skrub computational graph.
+        Synthesized code varies by operator type — from CPU-based pandas transformations to GPU-backed HuggingFace models.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Semantic operators</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Data cleaning</td>
+              <td><code>sem_fillna</code>, <code>sem_clean</code>, <code>sem_refine</code></td>
+            </tr>
+            <tr>
+              <td>Feature extraction &amp; generation</td>
+              <td><code>sem_extract_features</code>, <code>sem_gen_features</code>, <code>sem_agg_features</code></td>
+            </tr>
+            <tr>
+              <td>Data augmentation</td>
+              <td><code>sem_augment</code></td>
+            </tr>
+            <tr>
+              <td>Parameterization</td>
+              <td><code>sem_select</code>, <code>sem_choose</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="scenarios">
+      <h2 class="section-label">Demonstration Scenarios</h2>
+      <p>
+        <span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span> demonstrates three end-to-end ML pipelines, each highlighting different semantic operators and data modalities.
+      </p>
+
+      <div class="cards">
+        <article class="card">
+          <span class="tag">Classification</span>
+          <h3>Fraud detection</h3>
+          <p>
+            Binary classifier on multi-table retail data: shopping baskets with fraud labels and per-basket product records.
+            Combines NLTK, SciPy, and tree-based models with semantic preprocessing.
+          </p>
+          <ul>
+            <li><code>sem_fillna</code> — impute missing manufacturers</li>
+            <li><code>sem_extract_features</code> — brand risk signals</li>
+            <li><code>sem_gen_features</code> — derived price features</li>
+            <li><code>sem_agg_features</code> — basket-level aggregates</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <span class="tag">Classification</span>
+          <h3>Cultural origin prediction</h3>
+          <p>
+            Multimodal museum catalog pipeline on Metropolitan Museum of Art records. Enriches tabular metadata with
+            spaCy NLP features, then trains an FT-Transformer classifier.
+          </p>
+          <ul>
+            <li><code>sem_extract_features</code> — structured dates from text</li>
+            <li><code>sem_gen_features</code> — temporal and text features</li>
+            <li><code>sem_refine</code> — standardize object names</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <span class="tag">Regression</span>
+          <h3>House price prediction</h3>
+          <p>
+            California real-estate regression combining tabular house attributes, city data, and exterior images.
+            Uses TableVectorizer and TabPFN, with DuckDB for post-hoc city-level analysis.
+          </p>
+          <ul>
+            <li><code>sem_clean</code> — anomaly correction in sqft</li>
+            <li><code>sem_extract_features</code> — image-based housing attributes</li>
+            <li><code>sem_gen_features</code> — property and city features</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="run">
+      <h2 class="section-label">Get Started</h2>
+      <p>
+        Clone the demo repository, link the
+        <a class="link-sempipes" href="https://github.com/deem-data/sempipes/tree/main" target="_blank" rel="noopener"><span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span></a> library,
+        install dependencies, and start the web UI locally.
+      </p>
+
+      <div class="access-grid">
+        <div class="access-card sempiper">
+          <h3><span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span> demo</h3>
+          <p>Web UI, example pipelines, optimizer trajectories, and backend/frontend code.</p>
+          <a class="link-sempiper" href="https://github.com/OlgaOvcharenko/sempipes-demo" target="_blank" rel="noopener">github.com/OlgaOvcharenko/sempipes-demo</a>
+        </div>
+        <div class="access-card sempipes">
+          <h3><span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span> library</h3>
+          <p>Programming model, semantic operators, code synthesis, and evolutionary optimizer.</p>
+          <a class="link-sempipes" href="https://github.com/deem-data/sempipes/tree/main" target="_blank" rel="noopener">github.com/deem-data/sempipes</a>
+        </div>
+      </div>
+
+      <div class="code-block">
+        <button class="copy-btn" type="button" data-copy="setup">Copy</button>
+        <pre id="setup"># From a parent directory — clone both repos as siblings
+git clone https://github.com/OlgaOvcharenko/sempipes-demo.git
+git clone https://github.com/deem-data/sempipes.git
+
+cd sempipes-demo
+ln -s ../sempipes sempipes
+
+# Install dependencies
+poetry install
+cd demo/frontend && npm install && cd ../..
+
+# Start backend (:8000) and frontend (:5173)
+make run
+# Open http://localhost:5173</pre>
+      </div>
+
+      <p style="margin-top: 1.25rem;">
+        Set LLM API keys in a <code>.env</code> file at the repo root (e.g.,
+        <code>GEMINI_API_KEY</code>) before running pipelines with semantic operators.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="cite">
+      <h2 class="section-label">Citation</h2>
+      <p>If you use <span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span> or <span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span> in your research, please cite the corresponding paper:</p>
+
+      <h3 class="cite-heading"><span class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></span> (VLDB demonstration)</h3>
+      <div class="code-block cite-block">
+        <button class="copy-btn" type="button" data-copy="cite-sempiper">Copy</button>
+        <pre id="cite-sempiper">@article{ovcharenko2026sempiper,
+  title   = {{SemPiper}: Interactive Code Synthesis for Semantic Operators in ML Pipelines},
+  author  = {Ovcharenko, Olga and Duarte, Luciano and Schelter, Sebastian},
+  journal = {Proceedings of the VLDB Endowment},
+  year    = {2026},
+  url     = {https://github.com/OlgaOvcharenko/sempipes-demo},
+}</pre>
+      </div>
+
+      <h3 class="cite-heading"><span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span> (arXiv)</h3>
+      <div class="code-block cite-block">
+        <button class="copy-btn" type="button" data-copy="cite-sempipes">Copy</button>
+        <pre id="cite-sempipes">@misc{ovcharenko2026sempipesoptimizablesemantic,
+  title         = {SemPipes -- Optimizable Semantic Data Operators for Tabular Machine Learning Pipelines},
+  author        = {Olga Ovcharenko and Matthias Boehm and Sebastian Schelter},
+  year          = {2026},
+  eprint        = {2602.05134},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2602.05134},
+}</pre>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <section class="section" id="team">
+      <h2 class="section-label">Authors</h2>
+
+      <div class="team">
+        <div class="team-member">
+          <h3>Olga Ovcharenko</h3>
+          <p class="affiliation">BIFOLD &amp; TU Berlin</p>
+          <a href="mailto:ovcharenko@tu-berlin.de">ovcharenko@tu-berlin.de</a>
+        </div>
+        <div class="team-member">
+          <h3>Luciano Duarte</h3>
+          <p class="affiliation">BIFOLD &amp; TU Berlin</p>
+          <a href="mailto:duarte.castineira@tu-berlin.de">duarte.castineira@tu-berlin.de</a>
+        </div>
+        <div class="team-member">
+          <h3>Sebastian Schelter</h3>
+          <p class="affiliation">BIFOLD &amp; TU Berlin</p>
+          <a href="mailto:schelter@tu-berlin.de">schelter@tu-berlin.de</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p>
+      <a class="link-sempiper" href="https://github.com/OlgaOvcharenko/sempipes-demo" target="_blank" rel="noopener"><strong class="brand-sempiper"><span class="sem">Sem</span><span class="piper">Piper</span></strong> </a> ·
+      <a class="link-sempipes" href="https://github.com/deem-data/sempipes" target="_blank" rel="noopener"><span class="brand-sempipes"><span class="sem">Sem</span><span class="pipes">Pipes</span></span></a>
+    </p>
+    <p>© 2026 Olga Ovcharenko, Luciano Duarte, Sebastian Schelter — BIFOLD &amp; TU Berlin</p>
+  </footer>
+
+  <script>
+    document.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-copy");
+        const text = document.getElementById(id).innerText;
+        navigator.clipboard.writeText(text).then(() => {
+          const original = btn.textContent;
+          btn.textContent = "Copied!";
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        });
+      });
+    });
+  </script>
+
+</body>
+</html>

@@ -61,3 +61,7 @@ demo/backend/catboost_info
 logs/
 
 .sempipes_trajectories/
+
+.claude/
+.cursor/
+CLAUDE.MD

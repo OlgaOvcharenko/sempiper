@@ -17,5 +17,35 @@
     "id": "optimise_museums",
     "label": "Museum artworks",
     "file": "optimise_museums.py"
+  },
+  {
+    "id": "optimise_fraudbaskets_seed_1",
+    "label": "Fraud baskets (seed 1)",
+    "file": "optimise_fraudbaskets.py",
+    "trajectory_file": "fraudbaskets_20260326_005706_b3233752.json"
+  },
+  {
+    "id": "optimise_fraudbaskets_seed_2",
+    "label": "Fraud baskets (seed 2)",
+    "file": "optimise_fraudbaskets.py",
+    "trajectory_file": "fraudbaskets_20260326_013303_fe00f2ab.json"
+  },
+  {
+    "id": "optimise_fraudbaskets_seed_3",
+    "label": "Fraud baskets (seed 3)",
+    "file": "optimise_fraudbaskets.py",
+    "trajectory_file": "fraudbaskets_20260326_013445_26df8976.json"
+  },
+  {
+    "id": "optimise_fraudbaskets_seed_4",
+    "label": "Fraud baskets (seed 4)",
+    "file": "optimise_fraudbaskets.py",
+    "trajectory_file": "fraudbaskets_20260326_013600_804e6bf0.json"
+  },
+  {
+    "id": "optimise_fraudbaskets_seed_5",
+    "label": "Fraud baskets (seed 5)",
+    "file": "optimise_fraudbaskets.py",
+    "trajectory_file": "fraudbaskets_20260326_014147_083d259f.json"
   }
 ]
