@@ -1,7 +1,5 @@
-# sempipes-demo
-
 <p align="center">
-  <img src="doc/sempipesnew.png" alt="SemPipes" style="height: 100px; width: 100px;" />
+  <img src="docs/sempipesnew.png" alt="SemPipes" style="height: 100px; width: 100px;" />
 </p>
 
 
@@ -20,7 +18,7 @@
 
 SemPiper is a demo for [SemPipes](https://github.com/deem-data/sempipes/tree/main): FastAPI backend + React frontend. Dependencies: **Poetry** (`pyproject.toml` only; no `requirements.txt`). SemPipes is a local path dependency via `sempipes/` symlink.
 
- <img src="doc/overview.png" alt="Demo" style="height: auto; width: auto;" />
+ <img src="docs/overview.png" alt="Demo" style="height: auto; width: auto;" />
 
 ## Repository layout
 
